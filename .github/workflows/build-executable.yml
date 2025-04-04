@@ -35,7 +35,7 @@ jobs:
       - name: Build Executable
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="v${{ github.ref_name }}"
+            VERSION="${{ github.ref_name }}"
           else
             VERSION="sha-${{ github.sha }}"
           fi
@@ -47,12 +47,60 @@ jobs:
             --exclude-module _cffi_backend \
             --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
             --clean \
-            2.py
+            main.py
       
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
+          path: dist/TomatoNovelDownloader-*
+
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm  # 使用ARM64架构的运行器
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Executable
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${{ github.sha }}"
+          fi
+
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
+            --clean \
+            main.py
+      
+      - name: Upload Linux ARM64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
   build-windows:
@@ -95,7 +143,7 @@ jobs:
           }
 
           if ("${{ github.ref_type }}" -eq "tag") {
-            $version = "v${{ github.ref_name }}"
+            $version = "${{ github.ref_name }}"
           } else {
             $version = "sha-${{ github.sha }}"
           }
@@ -104,7 +152,7 @@ jobs:
             --upx-dir "$upxDir" `
             --name=TomatoNovelDownloader-Win64-$version `
             --clean `
-            2.py
+            main.py
       
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
@@ -140,7 +188,7 @@ jobs:
       - name: Build Executable
         run: |         
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="v${{ github.ref_name }}"
+            VERSION="${{ github.ref_name }}"
           else
             VERSION="sha-${{ github.sha }}"
           fi
@@ -152,7 +200,7 @@ jobs:
             --exclude-module _cffi_backend \
             --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
             --clean \
-            2.py
+            main.py
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
@@ -174,11 +222,6 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Copy Source File
-        run: |
-          mkdir -p release-artifacts/source
-          cp 2.py release-artifacts/source/
-
       - name: List Artifacts
         run: ls -R release-artifacts
 
@@ -188,6 +231,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
+            release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
-            release-artifacts/source/2.py
