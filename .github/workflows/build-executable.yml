@@ -45,7 +45,7 @@ jobs:
             --strip \
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
-            --add-data "$(python -c 'import fake_useragent; print(fake_useragent.__path__[0])')/data/*.json:fake_useragent/data" \
+            --collect-data fake_useragent \
             --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
             --clean \
             main.py
@@ -94,7 +94,7 @@ jobs:
             --strip \
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
-            --add-data "$(python -c 'import fake_useragent; print(fake_useragent.__path__[0])')/data/*.json:fake_useragent/data" \
+            --collect-data fake_useragent \
             --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
             --clean \
             main.py
@@ -152,7 +152,7 @@ jobs:
         
           pyinstaller --onefile `
             --upx-dir "$upxDir" `
-            --add-data "$(python -c 'import fake_useragent; print(fake_useragent.__path__[0])')/data/*.json;fake_useragent/data" `
+            --collect-data fake_useragent `
             --name=TomatoNovelDownloader-Win64-$version `
             --clean `
             main.py
@@ -201,7 +201,7 @@ jobs:
             --strip \
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
-            --add-data "$(python -c 'import fake_useragent; print(fake_useragent.__path__[0])')/data/*.json:fake_useragent/data" \
+            --collect-data fake_useragent \
             --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
             --clean \
             main.py
