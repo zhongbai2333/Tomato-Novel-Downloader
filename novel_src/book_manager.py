@@ -77,6 +77,11 @@ class BookManager:
         self.downloaded[chapter["id"]] = [title, content]
         self.logger.debug(f"章节 {chapter['id']} 缓存成功")
 
+    def save_error_chapter(self, chapter_id):
+        """保存下载错误章节"""
+        self.downloaded[chapter_id] = ["Error", "Error"]
+        self.logger.debug(f"章节 {chapter_id} 下载错误记录缓存成功")
+
     def finalize_spawn(self, result):
         """生成最终文件"""
         output_file = self.save_dir / f"{self.book_name}.{self.config.novel_format}"
@@ -113,4 +118,3 @@ class BookManager:
             if cover_path.exists():
                 os.remove(cover_path)
                 self.logger.debug(f"封面文件已清理！{cover_path}")
-        

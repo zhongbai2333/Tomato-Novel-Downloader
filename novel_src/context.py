@@ -15,7 +15,7 @@ class Config(BaseConfig):
     """Config 配置文件"""
 
     # 网络配置
-    max_workers: int = Field(default=4, description="最大并发线程数")
+    max_workers: int = Field(default=1, description="最大并发线程数")
     request_timeout: int = Field(default=15, description="请求超时时间（秒）")
     max_retries: int = Field(default=3, description="最大重试次数")
     max_wait_time: int = Field(default=1200, description="最大冷却时间, 单位ms")

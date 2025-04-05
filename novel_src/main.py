@@ -219,8 +219,16 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 
                 # 显示章节统计
                 total = len(chapters)
-                downloaded_count = len(manager.downloaded)
-                logger.info(f"共发现 {total} 章，已下载 {downloaded_count} 章")
+                keys = [
+                    key
+                    for key, value in manager.downloaded.items()
+                    if value == ["Error", "Error"]
+                ]
+                downloaded_failed = len(keys)
+                downloaded_count = len(manager.downloaded) - len(keys)
+                logger.info(
+                    f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
+                )
 
                 # 检查已有下载
                 if downloaded_count > 0:
@@ -245,7 +253,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                 logger.info(f"失败: {result['failed']} 章")
                 logger.info(f"取消: {result['canceled']} 章")
                 if result["failed"] > 0:
-                    logger.warning("失败章节已保存到 failed_chapters.txt")
+                    logger.warning("失败章节已保存到缓存文件")
 
             except Exception as e:
                 logger.error(f"处理过程中发生错误: {str(e)}")

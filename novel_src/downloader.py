@@ -104,7 +104,10 @@ class ChapterDownloader:
                 futures = {
                     executor.submit(self._download_single, ch): ch
                     for ch in chapters
-                    if ch["id"] not in book_manager.downloaded
+                    if (
+                        ch["id"] not in book_manager.downloaded
+                        or book_manager.downloaded.get(ch["id"]) == ["Error", "Error"]
+                    )
                 }
 
                 # 使用可中断的进度条
@@ -119,8 +122,12 @@ class ChapterDownloader:
                         ch = futures[future]
                         try:
                             content, title = future.result()
-                            book_manager.save_chapter(ch, title, content)  # 统一保存入口
-                            results["success"] += 1
+                            if content == "Error":
+                                book_manager.save_error_chapter(title)
+                                results["failed"] += 1
+                            else:
+                                book_manager.save_chapter(ch, title, content)  # 统一保存入口
+                                results["success"] += 1
                         except KeyboardInterrupt:
                             book_manager.save_download_status()
                             raise
@@ -128,7 +135,7 @@ class ChapterDownloader:
                             results["failed"] += 1
                         progress.update()
                     book_manager.save_download_status()
-                    book_manager.finalize_spawn(len(futures) - results["success"] - results["failed"])
+                    book_manager.finalize_spawn(len(futures) - results["success"])
 
         except KeyboardInterrupt:
             self.logger.warning("用户主动中断下载")
@@ -327,6 +334,8 @@ class ChapterDownloader:
                             f"[{request_id}] 触发限流，冷却{cool_down}秒"
                         )
                         time.sleep(cool_down)
+
+                    return "Error", chapter_id
 
                 except Exception as e:
                     error_type = type(e).__name__
