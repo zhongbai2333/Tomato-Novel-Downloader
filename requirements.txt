@@ -13,5 +13,5 @@ requests==2.32.3
 six==1.17.0
 soupsieve==2.6
 tqdm==4.67.1
-typing_extensions==4.13.0
+typing_extensions==4.13.1
 urllib3==2.3.0

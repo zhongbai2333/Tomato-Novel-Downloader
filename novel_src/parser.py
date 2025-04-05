@@ -6,7 +6,7 @@ import os
 import re
 import json
 import requests
-from bs4 import BeautifulSoup, Doctype
+from bs4 import BeautifulSoup
 from typing import Tuple
 
 from .context import GlobalContext

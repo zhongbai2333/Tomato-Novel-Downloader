@@ -4,7 +4,7 @@
 import os
 import json
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict
 
 from .context import GlobalContext
 from .epub_generator import EpubGenerator

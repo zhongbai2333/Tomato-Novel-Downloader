@@ -2,11 +2,9 @@
 # main.py - 主程序模块
 # -------------------------------
 import os
-import io
 import time
 import requests
 from ascii_magic import AsciiArt
-from PIL import Image
 
 from .context import GlobalContext
 from .network import NetworkClient

@@ -10,7 +10,6 @@ import random
 import traceback
 import threading
 import signal
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
