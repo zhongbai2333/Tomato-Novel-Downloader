@@ -181,7 +181,7 @@ class ChapterDownloader:
         while retry_count < self.config.max_retries:
             if self._stop_event.is_set():
                 self.logger.debug("检测到停止信号，中止下载")
-                raise KeyboardInterrupt()
+                return "Error", chapter_id
             # 智能选择API端点
             sorted_endpoints = sorted(
                 self.config.api_endpoints,
@@ -256,7 +256,7 @@ class ChapterDownloader:
                             self.logger.warning(
                                 f"[{request_id}] 重定向到: {new_location[:50]}..."
                             )
-                            raise requests.exceptions.TooManyRedirects()
+                            return "Error", chapter_id
 
                         response.raise_for_status()
 
@@ -269,7 +269,7 @@ class ChapterDownloader:
                                 f"响应头: {dict(response.headers)} | "
                                 f"内容摘要: {response.text[:200]}..."
                             )
-                            raise
+                            return "Error", chapter_id
 
                         # 调试日志（采样记录完整响应）
                         if random.random() < 0.05:  # 1%采样率
@@ -288,7 +288,7 @@ class ChapterDownloader:
 
                         if not content:
                             self.logger.warning(f"[{request_id}] 空内容警告")
-                            raise ValueError("API返回空内容")
+                            return "Error", chapter_id
 
                         # 成功时更新状态
                         self.network._api_status[endpoint]["failure_count"] = 0
@@ -303,7 +303,7 @@ class ChapterDownloader:
                         return content, title
                     except requests.exceptions.Timeout:
                         if self._stop_event.is_set():
-                            raise KeyboardInterrupt("用户中断导致的超时")
+                            return "Error", chapter_id
 
                 except requests.exceptions.RequestException as e:
                     error_type = type(e).__name__
@@ -322,7 +322,9 @@ class ChapterDownloader:
                         f"错误类型: {error_type} | "
                         f"消息: {str(e)}\n"
                     )
-                    self.logger.debug(f"数据包：{response.text} | 堆栈跟踪:\n{tb_str}")
+                    if isinstance(e, requests.exceptions.HTTPError):
+                        self.logger.debug(f"数据包：{response.text}")
+                    self.logger.debug(f"堆栈跟踪:\n{tb_str}")
 
                     # 特殊处理429错误
                     if (
@@ -334,8 +336,6 @@ class ChapterDownloader:
                             f"[{request_id}] 触发限流，冷却{cool_down}秒"
                         )
                         time.sleep(cool_down)
-
-                    return "Error", chapter_id
 
                 except Exception as e:
                     error_type = type(e).__name__
@@ -357,7 +357,7 @@ class ChapterDownloader:
             self.logger.warning(f"[{request_id}] 第{retry_count}次重试...")
 
         if self._stop_event.is_set():
-            raise KeyboardInterrupt()
+            return "Error", chapter_id
 
         # 所有尝试失败后抛出异常
         final_error = (
@@ -366,4 +366,4 @@ class ChapterDownloader:
             f"最后错误: {error_log[-1] if error_log else '未知错误'}"
         )
         self.logger.error(final_error)
-        raise Exception(final_error)
+        return "Error", chapter_id

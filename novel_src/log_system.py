@@ -163,7 +163,7 @@ class LogSystem(object):
         self.logger.addHandler(self.file_handler)
         self.logger.addHandler(console_handler)
 
-    def add_safe_exit_func(self, func: function):
+    def add_safe_exit_func(self, func):
         self._func_list.append(func)
 
     def safe_exit(self):
