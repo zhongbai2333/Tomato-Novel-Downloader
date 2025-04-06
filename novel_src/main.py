@@ -24,9 +24,17 @@ def show_config_menu(config):
         "4": {"name": "最大重试次数", "field": "max_retries", "type": int},
         "5": {"name": "最小等待时间(ms)", "field": "min_wait_time", "type": int},
         "6": {"name": "最大等待时间(ms)", "field": "max_wait_time", "type": int},
-        "7": {"name": "优雅退出模式[True/False]", "field": "graceful_exit", "type": bool},
+        "7": {
+            "name": "优雅退出模式[True/False]",
+            "field": "graceful_exit",
+            "type": bool,
+        },
         "8": {"name": "小说保存格式[txt/epub]", "field": "novel_format", "type": str},
-        "9": {"name": "是否自动清理缓存文件[True/False]", "field": "auto_clear_dump", "type": bool},
+        "9": {
+            "name": "是否自动清理缓存文件[True/False]",
+            "field": "auto_clear_dump",
+            "type": bool,
+        },
         "0": {"name": "返回主菜单"},
     }
 
@@ -110,6 +118,7 @@ def main():
     """命令行入口函数"""
     logger = GlobalContext.get_logger()
     config = GlobalContext.get_config()
+    log_system = GlobalContext.get_log_system()
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}
@@ -198,6 +207,8 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                     tags,
                     description,
                 )  # 添加book_name参数
+
+                log_system.add_safe_exit_func(manager.save_download_status)
 
                 # 用户确认
                 confirm = input("\n是否开始下载？(Y/n): ").strip().lower()

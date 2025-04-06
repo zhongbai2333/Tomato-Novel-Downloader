@@ -3,7 +3,11 @@ import zipfile
 import datetime
 import atexit
 import time
+import sys
 import shutil
+import signal
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from logging import Formatter
@@ -75,9 +79,54 @@ class LogSystem(object):
         self.logs_dir = Path("logs")
         self.latest_log = self.logs_dir / "latest.log"
         self.debug = debug
+        # 新增信号处理初始化
+        self._exit_flag = False  # 防止重复退出
+        self._func_list = []
+        self._setup_signal_handlers()
         self._setup_directories()
         self._configure_logging()
         atexit.register(self.safe_exit)
+
+    def _setup_signal_handlers(self):
+        """设置跨平台信号/事件处理"""
+        # 通用处理
+        atexit.register(self.safe_exit)
+
+        # Windows控制台事件
+        if sys.platform == 'win32':
+            self._setup_windows_handlers()
+        # Unix信号处理
+        else:
+            self._setup_unix_handlers()
+
+    def _setup_windows_handlers(self):
+        """Windows控制台事件处理"""
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        PHANDLER_ROUTINE = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+        @PHANDLER_ROUTINE
+        def _win_handler(event):
+            if event == 5:  # CTRL_CLOSE_EVENT
+                self.safe_exit()
+                sys.exit(0)
+            return False
+
+        if not kernel32.SetConsoleCtrlHandler(_win_handler, True):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        # 保持handler引用防止GC
+        self._win_handler = _win_handler
+
+    def _setup_unix_handlers(self):
+        """Unix信号处理"""
+        signals = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        for sig in signals:
+            signal.signal(sig, self._unix_signal_handler)
+
+    def _unix_signal_handler(self, signum, frame):
+        """Unix信号处理回调"""
+        self.safe_exit()
+        sys.exit(128 + signum)
 
     def _setup_directories(self):
         """创建日志目录并清理空文件"""
@@ -114,13 +163,25 @@ class LogSystem(object):
         self.logger.addHandler(self.file_handler)
         self.logger.addHandler(console_handler)
 
+    def add_safe_exit_func(self, func: function):
+        self._func_list.append(func)
+
     def safe_exit(self):
-        """安全退出处理"""
+        """安全退出处理（增加防重入机制）"""
+        if self._exit_flag:
+            return
+        self._exit_flag = True
+
         try:
+            for func in self._func_list:
+                func()
             # 关闭所有日志处理器
             self._close_handlers()
-            # 等待文件句柄释放
-            time.sleep(0.5)
+
+            # 等待文件句柄释放（Windows需要更长时间）
+            wait_time = 1.0 if sys.platform == "win32" else 0.3
+            time.sleep(wait_time)
+
             # 执行归档
             self.archive_logs()
         except Exception as e:
