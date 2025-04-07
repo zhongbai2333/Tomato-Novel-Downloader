@@ -59,18 +59,19 @@ class BookManager:
 
     def save_download_status(self):
         """保存完整下载状态"""
-        data = {
-            "book_name": self.book_name,
-            "author": self.author,
-            "tags": self.tags,
-            "description": self.description,
-            "downloaded": self.downloaded,
-        }
-        try:
-            with self.status_file.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.logger.error(f"状态文件保存失败: {e}")
+        if self.downloaded:
+            data = {
+                "book_name": self.book_name,
+                "author": self.author,
+                "tags": self.tags,
+                "description": self.description,
+                "downloaded": self.downloaded,
+            }
+            try:
+                with self.status_file.open("w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                self.logger.error(f"状态文件保存失败: {e}")
 
     def save_chapter(self, chapter: Dict, title: str, content: str):
         """保存章节内容（统一入口）"""

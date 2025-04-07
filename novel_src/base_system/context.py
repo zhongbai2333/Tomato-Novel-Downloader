@@ -42,11 +42,10 @@ class Config(BaseConfig):
     # API配置
     api_endpoints: list = Field(
         default=[
-            "http://rehaofan.jingluo.love/content?item_id={chapter_id}",
-            "http://yuefanqie.jingluo.love/content?item_id={chapter_id}",
-            "http://apifq.jingluo.love/content?item_id={chapter_id}",
-            "http://fan.jingluo.love/content?item_id={chapter_id}",
-            "",
+            "http://rehaofan.jingluo.love",
+            "http://yuefanqie.jingluo.love",
+            "http://apifq.jingluo.love",
+            "http://fan.jingluo.love",
         ],
         description="API列表",
     )

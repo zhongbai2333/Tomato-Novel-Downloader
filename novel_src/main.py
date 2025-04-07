@@ -103,6 +103,8 @@ def show_config_menu(config):
             if converted not in ["txt", "epub"]:
                 print("格式应为txt或epub")
                 continue
+        elif field == "save_path":
+            converted = converted.rstrip("/")
 
         # 更新配置
         setattr(config, field, converted)
@@ -116,9 +118,35 @@ def show_config_menu(config):
             print(f"保存配置失败: {str(e)}")
 
 
-def search_book(book_name: str) -> str:
-    api = f"http://rehaofan.jingluo.love/search?query={book_name}&offset=0"
-    
+def search_book(book_name: str, network: NetworkClient, config, logger) -> str:
+    for endpoint in config.api_endpoints:
+        api = endpoint + f"/search?query={book_name}&offset=0"
+        try:
+            response = requests.get(
+                url=api, headers=network.get_headers(), timeout=config.request_timeout
+            )
+            response.raise_for_status()
+        except requests.RequestException as e:
+            logger.error(f"通过端点 {endpoint} 搜索失败: {str(e)}")
+            continue
+        data = response.json()
+        search_datas = data["search_tabs"][5]["data"]
+        book_id_list = []
+        for num, search_res in enumerate(search_datas):
+            book_info = search_res["book_data"][0]
+            logger.info(
+                f"{num + 1}. 书名: {book_info['book_name']} | 初始书名: {book_info['original_book_name']} | ID: {book_info['book_id']} | 作者: {book_info['author']}"
+            )
+            book_id_list.append(book_info["book_id"])
+        while True:
+            num = input("请输入序号 (输入q返回重新搜索)：")
+            if num == "q":
+                return "0000"
+            if 1 <= int(num) <= len(book_id_list):
+                return book_id_list[int(num) - 1]
+            else:
+                logger.warning("输入错误!")
+    return None
 
 
 def main():
@@ -188,11 +216,13 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             else:
                 book_name = user_input
                 # 调用你自己的搜索函数
-                found_id = search_book(book_name)
-                if found_id:
+                found_id = search_book(book_name, network, config, logger)
+                if found_id and found_id == "0000":
+                    continue
+                elif found_id:
                     book_id = found_id
                 else:
-                    logger.info(f"未找到书名“{book_name}”对应的小说，请检查名称或使用 ID/链接重试")
+                    logger.error(f"API获取信息异常!")
                     continue
 
             # 获取保存路径

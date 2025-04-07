@@ -202,12 +202,9 @@ class ChapterDownloader:
                     continue
 
                 try:
+                    endpoint = endpoint + "/content?item_id={chapter_id}"
                     # 格式化请求URL（隐藏敏感参数）
-                    formatted_url = (
-                        endpoint.format(chapter_id=chapter_id, book_id=self.book_id)
-                        if "{book_id}" in endpoint
-                        else endpoint.format(chapter_id=chapter_id)
-                    )
+                    formatted_url = endpoint.format(chapter_id=chapter_id)
                     # 过滤敏感信息
                     safe_url = re.sub(r"(key=)[^&]+", r"\1***", formatted_url)
                     self.logger.debug(f"[{request_id}] 构造请求URL: {safe_url}")
