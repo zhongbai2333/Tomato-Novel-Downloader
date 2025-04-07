@@ -1,7 +1,9 @@
 # 番茄小说下载器~~精简版~~
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
+
 我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
+
 本项目完全基于第三方API，未使用官方API，由于官方API地址一直在变动，我也无精力一直适配官方API，如有需要可以查看Dlmily的项目
 
 ---
