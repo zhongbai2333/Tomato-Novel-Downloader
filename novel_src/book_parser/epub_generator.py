@@ -1,6 +1,6 @@
 from ebooklib import epub
 
-from .context import GlobalContext
+from ..base_system.context import GlobalContext
 
 class EpubGenerator:
     def __init__(self, identifier, title, language="en", author=None, description=None, publisher=None):

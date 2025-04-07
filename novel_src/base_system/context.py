@@ -46,7 +46,7 @@ class Config(BaseConfig):
             "http://yuefanqie.jingluo.love/content?item_id={chapter_id}",
             "http://apifq.jingluo.love/content?item_id={chapter_id}",
             "http://fan.jingluo.love/content?item_id={chapter_id}",
-            "https://lsjk.zyii.xyz:3666/content?item_id={chapter_id}",
+            "",
         ],
         description="API列表",
     )
@@ -65,22 +65,26 @@ class Config(BaseConfig):
 
 
 class GlobalContext(object):
-    def __init__(self, debug: bool):
+    def __init__(self, debug: bool, config: BaseConfig = Config):
+        """创建公用Context"""
         global _log_system, _config
         _log_system = LogSystem(debug=debug)
         try:
-            _config = Config.load()
+            _config = config.load()
         except ConfigError as e:
             _log_system.logger.error(f"配置操作失败: {str(e)}")
 
     @staticmethod
     def get_logger() -> Logger:
+        """获取logger"""
         return _log_system.logger
-    
+
     @staticmethod
     def get_log_system() -> LogSystem:
+        """获取log_system"""
         return _log_system
 
     @staticmethod
     def get_config() -> Config:
+        """获取Config"""
         return _config

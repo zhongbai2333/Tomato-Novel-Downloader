@@ -15,10 +15,10 @@ from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
 
 from .network import NetworkClient
-from .book_manager import BookManager
-from .parser import ContentParser
-from .context import GlobalContext
-from .log_system import TqdmLoggingHandler
+from ..book_parser.book_manager import BookManager
+from ..book_parser.parser import ContentParser
+from ..base_system.context import GlobalContext
+from ..base_system.log_system import TqdmLoggingHandler
 
 
 class ChapterDownloader:

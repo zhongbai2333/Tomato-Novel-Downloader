@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from novel_src.constants import VERSION
-from novel_src.context import GlobalContext
+from novel_src.base_system.context import GlobalContext
 from novel_src.main import main as n_main
 
 

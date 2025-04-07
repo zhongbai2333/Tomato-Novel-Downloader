@@ -9,7 +9,7 @@ import requests
 from bs4 import BeautifulSoup
 from typing import Tuple
 
-from .context import GlobalContext
+from ..base_system.context import GlobalContext
 
 
 class ContentParser:

@@ -21,6 +21,15 @@ class BaseConfigMeta(type):
     """元类用于收集配置字段信息"""
 
     def __new__(cls, name, bases, namespace):
+        # 处理配置路径继承
+        if "__config_path__" not in namespace:  # 如果子类没有定义
+            parent_config_path = (
+                getattr(bases[0], "__config_path__", "config.yml")
+                if bases
+                else "config.yml"
+            )
+            namespace["__config_path__"] = parent_config_path
+
         # 收集类型注解和默认值
         annotations = namespace.get("__annotations__", {})
         fields = {}
@@ -52,31 +61,37 @@ class Field:
 
 
 class BaseConfig(metaclass=BaseConfigMeta):
-    __config_path__: str = "config.yml"
+    __config_path__: str = "config.yml"  # 类级默认路径
 
-    def __init__(self, **kwargs):
+    def __init__(self, config_path: str = None, **kwargs):
+        # 初始化配置路径（支持实例级覆盖）
+        self.__config_path__ = config_path or self.__class__.__config_path__
+
+        # 初始化字段值
         for name, field in self.__fields__.items():
             value = kwargs.get(name, field["default"])
             setattr(self, name, value)
 
     @classmethod
-    def load(cls: Type[T]) -> T:
+    def load(cls: Type[T], config_path: str = None) -> T:
         """从YAML加载配置"""
-        config_path = Path(cls.__config_path__)
+        target_path = config_path or cls.__config_path__
+        config_path = Path(target_path)
 
         if not config_path.exists():
-            instance = cls()
+            instance = cls(config_path=target_path)  # 传递路径给实例
             instance.save()
             return instance
 
         with open(config_path, "r", encoding="utf-8") as f:
             raw_data = yaml.safe_load(f)
 
-        return cls(**cls._validate_config(raw_data))
+        return cls(config_path=target_path, **cls._validate_config(raw_data))
 
-    def save(self):
+    def save(self, config_path: str = None):
         """保存为带注释的YAML"""
-        config_path = Path(self.__config_path__)
+        target_path = config_path or self.__config_path__
+        config_path = Path(target_path)
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
         yaml_data = self._generate_yaml_with_comments()

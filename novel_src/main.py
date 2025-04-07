@@ -6,11 +6,11 @@ import time
 import requests
 from ascii_magic import AsciiArt
 
-from .context import GlobalContext
-from .network import NetworkClient
-from .book_manager import BookManager
-from .downloader import ChapterDownloader
-from .parser import ContentParser
+from .base_system.context import GlobalContext
+from .network_parser.network import NetworkClient
+from .book_parser.book_manager import BookManager
+from .network_parser.downloader import ChapterDownloader
+from .book_parser.parser import ContentParser
 from .constants import VERSION
 
 
@@ -185,12 +185,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                         ContentParser.parse_book_info(response.text)
                     )
                     cover_path = config.default_save_dir / f"{book_name}.jpg"
+                    preview_ascii(cover_path, 100)
                     logger.info(f"\n书名: {book_name}")
                     logger.info(f"作者: {author}")
                     logger.info(f"是否完结: {tags[0]} | 共 {chapter_count} 章")
                     logger.info(f"标签: {'|'.join(tags[1:])}")
                     logger.info(f"简介: {description[:50]}...")  # 显示前50字符
-                    preview_ascii(cover_path, 100)
                 except Exception as e:
                     cover_path = config.default_save_dir / f"None.jpg"
                     logger.error(f"解析书籍信息失败: {str(e)}")

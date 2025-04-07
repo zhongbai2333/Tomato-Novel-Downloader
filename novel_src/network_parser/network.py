@@ -8,7 +8,7 @@ import requests
 from typing import Optional, Dict, Tuple
 from fake_useragent import UserAgent
 
-from .context import GlobalContext
+from ..base_system.context import GlobalContext
 
 
 class NetworkClient:
