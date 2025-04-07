@@ -1,9 +1,11 @@
 # -------------------------------
 # main.py - 主程序模块
 # -------------------------------
+import re
 import os
 import time
 import requests
+from urllib.parse import urlparse, parse_qs
 from ascii_magic import AsciiArt
 
 from .base_system.context import GlobalContext
@@ -114,6 +116,11 @@ def show_config_menu(config):
             print(f"保存配置失败: {str(e)}")
 
 
+def search_book(book_name: str) -> str:
+    api = f"http://rehaofan.jingluo.love/search?query={book_name}&offset=0"
+    
+
+
 def main():
     """命令行入口函数"""
     logger = GlobalContext.get_logger()
@@ -141,21 +148,52 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
         while True:
             # 用户输入处理
             try:
-                book_id = input(
-                    "\n请输入小说ID（输入s进入配置菜单 输入q退出）："
+                user_input = input(
+                    "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入q退出）："
                 ).strip()
             except KeyboardInterrupt:
                 break
-            if book_id.lower() == "q":
+
+            if user_input.lower() == "q":
                 break
-            if book_id.lower() == "s":  # 新增配置命令
+            if user_input.lower() == "s":
                 show_config_menu(config)
                 continue
 
-            # 输入验证
-            if not book_id.isdigit():
-                logger.info("错误：小说ID必须为纯数字")
-                continue
+            book_id = None
+
+            # 1. 纯数字 ID
+            if user_input.isdigit():
+                book_id = user_input
+
+            # 2. URL 链接
+            elif user_input.startswith("http"):
+                parsed = urlparse(user_input)
+                # 2.1 页面链接 fanqienovel.com/page/<book_id>
+                m = re.search(r"/page/(\d+)", parsed.path)
+                if m:
+                    book_id = m.group(1)
+                else:
+                    # 2.2 分享链接，解析 query 参数中的 book_id
+                    qs = parse_qs(parsed.query)
+                    bid_list = qs.get("book_id") or qs.get("bookId")  # 有时参数名大小写不同
+                    if bid_list:
+                        book_id = bid_list[0]
+
+                if not book_id:
+                    logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
+                    continue
+
+            # 3. 书名
+            else:
+                book_name = user_input
+                # 调用你自己的搜索函数
+                found_id = search_book(book_name)
+                if found_id:
+                    book_id = found_id
+                else:
+                    logger.info(f"未找到书名“{book_name}”对应的小说，请检查名称或使用 ID/链接重试")
+                    continue
 
             # 获取保存路径
             save_path = input(
