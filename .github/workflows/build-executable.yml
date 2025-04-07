@@ -3,12 +3,11 @@ name: Auto Build Python Executable
 on:
   push:
     branches: [ "main" ]
+    tags: [ "v*" ]
     paths: 
       - '**.py'          # 所有 Python 文件
       - 'requirements.txt' # 依赖清单
       - 'img/**'         # 图标资源目录
-  push:
-    tags: [ "v*" ]
   pull_request:
 
 jobs:
