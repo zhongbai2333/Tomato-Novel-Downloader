@@ -53,7 +53,10 @@ class Config(BaseConfig):
     @property
     def default_save_dir(self) -> Path:
         """获取默认保存目录路径对象"""
-        return Path(self.save_path) or Path(os.getcwd())
+        if self.save_path:
+            return Path(self.save_path)
+        else:
+            return Path(os.getcwd())
 
     def status_file_path(self, save_dir: str, book_id: str) -> Path:
         """生成书籍专属状态文件路径"""
