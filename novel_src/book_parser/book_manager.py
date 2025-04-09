@@ -81,7 +81,7 @@ class BookManager:
         # 构造要写入的章节记录
         chapter_record = {"id": chapter_id, "title": title, "content": content}
         try:
-            with self.chapter_status_file.open("a", encoding="utf-8") as f:
+            with self.status_file.open("a", encoding="utf-8") as f:
                 # 将记录转换成 JSON 字符串，并换行写入
                 f.write(json.dumps(chapter_record, ensure_ascii=False) + "\n")
             self.logger.debug(f"章节 {chapter_id} 缓存成功")
@@ -93,7 +93,7 @@ class BookManager:
         self.downloaded[chapter_id] = ["Error", "Error"]
         chapter_record = {"id": chapter_id, "title": "Error", "content": "Error"}
         try:
-            with self.chapter_status_file.open("a", encoding="utf-8") as f:
+            with self.status_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(chapter_record, ensure_ascii=False) + "\n")
             self.logger.debug(f"章节 {chapter_id} 下载错误记录缓存成功")
         except Exception as e:
