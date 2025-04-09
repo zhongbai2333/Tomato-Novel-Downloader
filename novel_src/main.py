@@ -223,7 +223,7 @@ def download_book(logger, config, network, log_system, book_id: str, save_path: 
             for key, value in manager.downloaded.items()
             if value == ["Error", "Error"]
         ]
-        downloaded_failed = len(keys) + 1
+        downloaded_failed = len(keys) + 1 if len(keys) else 0
         downloaded_count = len(manager.downloaded) - len(keys)
         logger.info(
             f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
