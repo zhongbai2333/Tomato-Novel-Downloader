@@ -303,7 +303,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                     for key, value in manager.downloaded.items()
                     if value == ["Error", "Error"]
                 ]
-                downloaded_failed = len(keys)
+                downloaded_failed = len(keys) + 1
                 downloaded_count = len(manager.downloaded) - len(keys)
                 logger.info(
                     f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
