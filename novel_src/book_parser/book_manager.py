@@ -58,30 +58,46 @@ class BookManager:
             self.downloaded = {}
 
     def save_download_status(self):
-        """保存完整下载状态"""
-        if self.downloaded:
-            data = {
-                "book_name": self.book_name,
-                "author": self.author,
-                "tags": self.tags,
-                "description": self.description,
-                "downloaded": self.downloaded,
-            }
-            try:
-                with self.status_file.open("w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                self.logger.error(f"状态文件保存失败: {e}")
+        """保存书本基本信息（元数据），这部分数据不经常更新"""
+        meta_data = {
+            "book_name": self.book_name,
+            "author": self.author,
+            "tags": self.tags,
+            "description": self.description,
+            "dowloaded": self.downloaded,
+        }
+        try:
+            with self.meta_status_file.open("w", encoding="utf-8") as f:
+                json.dump(meta_data, f, ensure_ascii=False, indent=2)
+            self.logger.debug("元数据保存成功")
+        except Exception as e:
+            self.logger.error(f"元数据保存失败: {e}")
 
     def save_chapter(self, chapter: Dict, title: str, content: str):
-        """保存章节内容（统一入口）"""
-        self.downloaded[chapter["id"]] = [title, content]
-        self.logger.debug(f"章节 {chapter['id']} 缓存成功")
+        """以追加方式保存章节内容"""
+        chapter_id = chapter["id"]
+        # 更新内存中的章节状态
+        self.downloaded[chapter_id] = [title, content]
+        # 构造要写入的章节记录
+        chapter_record = {"id": chapter_id, "title": title, "content": content}
+        try:
+            with self.chapter_status_file.open("a", encoding="utf-8") as f:
+                # 将记录转换成 JSON 字符串，并换行写入
+                f.write(json.dumps(chapter_record, ensure_ascii=False) + "\n")
+            self.logger.debug(f"章节 {chapter_id} 缓存成功")
+        except Exception as e:
+            self.logger.error(f"章节 {chapter_id} 缓存失败: {e}")
 
     def save_error_chapter(self, chapter_id):
-        """保存下载错误章节"""
+        """以追加方式保存下载错误章节的状态"""
         self.downloaded[chapter_id] = ["Error", "Error"]
-        self.logger.debug(f"章节 {chapter_id} 下载错误记录缓存成功")
+        chapter_record = {"id": chapter_id, "title": "Error", "content": "Error"}
+        try:
+            with self.chapter_status_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(chapter_record, ensure_ascii=False) + "\n")
+            self.logger.debug(f"章节 {chapter_id} 下载错误记录缓存成功")
+        except Exception as e:
+            self.logger.error(f"章节 {chapter_id} 缓存失败: {e}")
 
     def finalize_spawn(self, result):
         """生成最终文件"""

@@ -106,7 +106,7 @@ class LogSystem(object):
 
         @PHANDLER_ROUTINE
         def _win_handler(event):
-            if event == 5:  # CTRL_CLOSE_EVENT
+            if event in (2, 5, 6):  # CTRL_CLOSE_EVENT
                 self.safe_exit()
                 sys.exit(0)
             return False
