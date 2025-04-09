@@ -4,6 +4,10 @@ on:
   push:
     branches: [ "main" ]
     tags: [ "v*" ]
+    paths: 
+      - '**.py'          # 所有 Python 文件
+      - 'requirements.txt' # 依赖清单
+      - 'img/**'         # 图标资源目录
   pull_request:
 
 jobs:
