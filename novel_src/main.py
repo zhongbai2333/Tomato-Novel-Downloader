@@ -350,6 +350,8 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                         result = download_book(
                             logger, config, network, log_system, book_id, save_path
                         )
+                    else:
+                        break
 
             except KeyboardInterrupt:
                 break
