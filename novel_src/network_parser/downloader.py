@@ -147,7 +147,7 @@ class ChapterDownloader:
                     for ch in chapters
                     if (
                         ch["id"] not in book_manager.downloaded
-                        or book_manager.downloaded.get(ch["id"]) == ["Error", "Error"]
+                        or book_manager.downloaded.get(ch["id"]) == [ch["id"], "Error"]
                     )
                 }
 
