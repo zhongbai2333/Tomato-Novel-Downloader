@@ -293,6 +293,8 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                 if user_input.lower() == "s":
                     show_config_menu(config)
                     continue
+                if user_input == "":
+                    continue
 
                 book_id = None
 
@@ -346,7 +348,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                         num = input("是否重新下载错误章节？[Y/n]: ").lower()
                         if num == "n":
                             logger.warning("失败章节已保存到缓存文件")
-                            continue
+                            break
                         result = download_book(
                             logger, config, network, log_system, book_id, save_path
                         )

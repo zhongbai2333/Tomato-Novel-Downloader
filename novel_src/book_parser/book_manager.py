@@ -79,13 +79,13 @@ class BookManager:
         self.save_download_status()
         self.logger.debug(f"章节 {chapter['id']} 缓存成功")
 
-    def save_error_chapter(self, chapter_id):
+    def save_error_chapter(self, chapter_id, title):
         """保存下载错误章节"""
-        self.downloaded[chapter_id] = ["Error", "Error"]
+        self.downloaded[chapter_id] = [title, "Error"]
         self.save_download_status()
         self.logger.debug(f"章节 {chapter_id} 下载错误记录缓存成功")
 
-    def finalize_spawn(self, result):
+    def finalize_spawn(self, chapters, result):
         """生成最终文件"""
         output_file = self.save_dir / f"{self.book_name}.{self.config.novel_format}"
         if output_file.exists():
@@ -93,14 +93,29 @@ class BookManager:
         if self.config.novel_format == "epub":
             # 生成EPUB骨架
             epub = EpubGenerator(
-                self.book_id, self.book_name, "zh-CN", self.author, self.description, "番茄小说"
+                self.book_id,
+                self.book_name,
+                "zh-CN",
+                self.author,
+                self.description,
+                "番茄小说",
             )
 
-            epub.add_chapter("简介", f"<h1>简介</h1><p>{self.tags}</p><p>{self.description}</p>", "description.xhtml")
+            epub.add_chapter(
+                "简介",
+                f"<h1>简介</h1><p>{self.tags}</p><p>{self.description}</p>",
+                "description.xhtml",
+            )
 
-            for chapter in self.downloaded.values():
-                epub.add_chapter(chapter[0], chapter[1])
-
+            for chapter in chapters:
+                chapter_id = chapter["id"]
+                epub.add_chapter(
+                    self.downloaded.get(chapter_id, [chapter["title"], None])[0],
+                    self.downloaded.get(
+                        chapter_id,
+                        [None, "<p>Download Faild or Didn't Download Finish!</p>"],
+                    )[1],
+                )
             epub.generate(output_file)
             self.logger.info(
                 f"EPUB生成完成: {self.save_dir / f'{self.book_name}.epub'}"
@@ -110,8 +125,12 @@ class BookManager:
                 f.write(
                     f"书名: {self.book_name}\n作者: {self.author}\n标签: {self.tags}\n简介: {self.description}\n\n"
                 )
-                for chapter in self.downloaded.values():
-                    f.write(f"\n\n{chapter[0]}\n{chapter[1]}")
+                for chapter in chapters:
+                    chapter_id = chapter["id"]
+                    f.write(
+                        f"\n\n{self.downloaded.get(chapter_id, [chapter["title"], None])[0]}\n"
+                        f"{self.downloaded.get(chapter_id, [None, "Download Faild or Didn't Download Finish!"])[1]}"
+                    )
             self.logger.info(f"TXT生成完成: {output_file}")
         if result == 0 and self.config.auto_clear_dump:
             cover_path = self.save_dir / f"{self.book_name}.jpg"
