@@ -10,7 +10,7 @@
 
 ## 我该如何使用？
 
-根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader-Lite/releases)列表下载可执行文件，并运行
+根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases)列表下载可执行文件，并运行
 你可以通过输入书籍id以及需要保存的路径来进行下载
 
 ---
@@ -46,7 +46,7 @@
 
 5. 我是纯小白，程序在哪里下载啊
 
-    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader-Lite/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
+    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
 
 ## 注意事项（必看）
 
