@@ -16,6 +16,7 @@ from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
 
 from .network import NetworkClient
+from .visit_model import download_chapter_official
 from ..book_parser.book_manager import BookManager
 from ..book_parser.parser import ContentParser
 from ..base_system.context import GlobalContext
@@ -138,12 +139,23 @@ class ChapterDownloader:
         results = {"success": 0, "failed": 0, "canceled": 0}
 
         try:
-            max_workers = min(self.config.max_workers, len(self.config.api_endpoints))
+            max_workers = (
+                min(self.config.max_workers, len(self.config.api_endpoints))
+                if not self.config.use_official_api
+                else self.config.max_workers
+            )
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 创建未来任务列表
                 # 提交所有章节任务，不用关心 API 数量，由 APIManager 动态调度
                 futures = {
-                    executor.submit(self._download_single, ch): ch
+                    executor.submit(
+                        (
+                            self._download_single
+                            if not self.config.use_official_api
+                            else self._download_single_official
+                        ),
+                        ch,
+                    ): ch
                     for ch in chapters
                     if (
                         ch["id"] not in book_manager.downloaded
@@ -326,3 +338,32 @@ class ChapterDownloader:
 
         self.logger.error(f"[{request_id}] 下载失败，多次重试均未成功")
         return "Error", chapter_id
+
+    def _download_single_official(self, chapter: dict) -> Tuple[str, str]:
+        chapter_id = chapter["id"]
+        request_id = f"{chapter_id[:4]}-{random.randint(1000,9999)}"
+
+        self.logger.debug(f"[{request_id}] 开始下载章节 {chapter['title']}")
+
+        try:
+            # 保留随机延迟（50-300ms）
+            delay = random.randint(
+                self.config.min_wait_time, self.config.max_wait_time
+            )
+            self.logger.debug(f"[{request_id}] 添加随机延迟: {delay}ms")
+            time.sleep(delay / 1000)
+
+            start_time = time.time()
+            data = download_chapter_official(chapter_id) 
+            response_time = time.time() - start_time
+
+            content, title = ContentParser.extract_api_content(data)
+
+            self.logger.info(
+                    f"[{request_id}] 成功下载章节 {title}，用时 {response_time:.2f}s"
+                )
+
+            return content, title
+        except Exception as e:
+            self.logger.error(f"[{request_id}] 下载失败，原因：{e}")
+            return "Error", chapter_id

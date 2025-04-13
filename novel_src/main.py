@@ -37,6 +37,11 @@ def show_config_menu(config):
             "field": "auto_clear_dump",
             "type": bool,
         },
+        "A": {
+            "name": "是否使用官方API[True/False]",
+            "field": "use_official_api",
+            "type": bool,
+        },
         "0": {"name": "返回主菜单"},
     }
 
