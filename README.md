@@ -1,5 +1,3 @@
-# 目前无第三方API可用，现正寻找可用方案
-
 # 番茄小说下载器~~精简版~~
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
