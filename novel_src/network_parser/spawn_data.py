@@ -9,7 +9,7 @@ import string
 import requests
 import base64
 
-from .TTEncrypt import TT  # 假设 TT 提供 encrypt 方法
+from .TTEncrypt import TT
 
 
 # -------------------- 工具函数 --------------------
@@ -435,7 +435,3 @@ def main():
 
         # 休眠 1 秒后重试
         time.sleep(1)
-
-
-if __name__ == "__main__":
-    main()
