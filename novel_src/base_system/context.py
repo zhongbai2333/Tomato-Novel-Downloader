@@ -41,6 +41,7 @@ class Config(BaseConfig):
 
     # API配置
     use_official_api: bool = Field(default=True, description="使用官方API")
+    iid: str = Field(default="", description="自动生成")
     api_endpoints: list = Field(
         default=[],
         description="API列表",

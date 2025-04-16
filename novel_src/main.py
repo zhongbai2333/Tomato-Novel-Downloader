@@ -167,6 +167,9 @@ def download_book(logger, config, network, log_system, book_id: str, save_path: 
                 headers=network.get_headers(),
                 timeout=config.request_timeout,
             )
+            if response.status_code == 404:
+                logger.error(f"小说ID {book_id} 不存在！")
+                return None
             response.raise_for_status()
         except requests.RequestException as e:
             logger.error(f"获取书籍信息失败: {str(e)}")
@@ -348,7 +351,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                     logger, config, network, log_system, book_id, save_path
                 )
 
-                while True:
+                while True and not result is None:
                     if result["failed"] > 0:
                         num = input("是否重新下载错误章节？[Y/n]: ").lower()
                         if num == "n":

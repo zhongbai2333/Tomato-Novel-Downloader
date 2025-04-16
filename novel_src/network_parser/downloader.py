@@ -16,7 +16,7 @@ from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
 
 from .network import NetworkClient
-from .visit_model import download_chapter_official
+from .visit_model import download_chapter_official, get_a_iid
 from ..book_parser.book_manager import BookManager
 from ..book_parser.parser import ContentParser
 from ..base_system.context import GlobalContext
@@ -130,6 +130,8 @@ class ChapterDownloader:
         self, book_manager: BookManager, book_name: str, chapters: List[Dict]
     ) -> Dict[str, int]:
         """执行多线程下载任务"""
+        if self.config.use_official_api and not self.config.iid:
+            get_a_iid()
         original_handlers = self.logger.handlers.copy()
 
         # 临时关闭非tqdm处理器

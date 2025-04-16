@@ -8,6 +8,9 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 from typing import Tuple
 
+from ..base_system.context import GlobalContext
+from .spawn_data import main as get_iid
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
 
@@ -17,7 +20,6 @@ STATIC_KEY_PARTS = ["ac25", "c67d", "dd8f", "38c1", "b37a", "2348", "828e", "222
 # 基础 API URL（根据需求可以进一步封装）
 API_BASE_URL = "https://api5-normal-sinfonlineb.fqnovel.com/reading"
 
-INSTALL_ID = "4343550757889306"
 AID = "1967"
 UPDATE_VERSION_CODE = "66732"
 
@@ -169,8 +171,35 @@ class FqReq:
         except Exception:
             pass
 
+def get_a_iid():
+    config = GlobalContext.get_config()
+    logger = GlobalContext.get_logger()
+    logger.info("从未获取iid, 正在自动获取中...")
+    config.iid = str(get_iid())
+    config.save()
+    install_id = config.iid
+    server_device_id = str(int(install_id) - 4096)
+    aid = AID
+    update_version_code = UPDATE_VERSION_CODE
+    fq_var = FqVariable(install_id, server_device_id, aid, update_version_code)
+    fq_req = FqReq(fq_var)
+    logger.info("调试iid中...")
+    try:
+        fq_req.batch_get("7310102404588896783")
+        logger.info("正常请求一次")
+    except Exception as ex:
+        logger.info("正常请求错误一次")
+    try:
+        fq_req.batch_get("7310102404588896783")
+        logger.info("正常请求二次")
+    except Exception as ex:
+        logger.info("正常请求错误二次")
+    logger.info("获取iid成功！")
+
+
 def download_chapter_official(chapter: str) -> dict:
-    install_id = INSTALL_ID
+    config = GlobalContext.get_config()
+    install_id = config.iid
     server_device_id = str(int(install_id) - 4096)
     aid = AID
     update_version_code = UPDATE_VERSION_CODE
