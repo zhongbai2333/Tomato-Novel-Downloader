@@ -1,18 +1,16 @@
-# 目前无第三方API可用，现正寻找可用方案
-
 # 番茄小说下载器~~精简版~~
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
 我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
 
-本项目完全基于第三方API，未使用官方API，由于官方API地址一直在变动，我也无精力一直适配官方API，如有需要可以查看Dlmily的项目
+本项目~~完全~~基于第三方API，~~未~~使用官方API
 
 ---
 
 ## 我该如何使用？
 
-根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader-Lite/releases)列表下载可执行文件，并运行
+根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases)列表下载可执行文件，并运行
 你可以通过输入书籍id以及需要保存的路径来进行下载
 
 ---
@@ -48,7 +46,7 @@
 
 5. 我是纯小白，程序在哪里下载啊
 
-    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader-Lite/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
+    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
 
 ## 注意事项（必看）
 

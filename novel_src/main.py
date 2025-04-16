@@ -273,7 +273,7 @@ def main():
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}
-项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader-Lite
+项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader
 Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 作者: zhongbai233 (https://github.com/zhongbai2333)
 项目早期代码: Dlmily (https://github.com/Dlmily)
