@@ -1,4 +1,5 @@
 import yaml
+import shutil
 from pathlib import Path
 from typing import Dict, Any, Type, TypeVar, get_origin, get_args
 
@@ -182,3 +183,15 @@ class BaseConfig(metaclass=BaseConfigMeta):
             if field_info["description"]:
                 print(f"  描述: {field_info['description']}")
             print()
+
+class FileCleaner(object):
+    """清理类"""
+    @staticmethod
+    def clean_dump_folder(path: str | Path, *, ignore_errors=False) -> str:
+        """清理临时文件夹"""
+        shutil.rmtree(Path(path), ignore_errors=ignore_errors)
+
+    @staticmethod
+    def is_empty_dir(path: str | Path) -> bool:
+        """判断目录是否为空"""
+        return not any(Path(path).iterdir())

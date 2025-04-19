@@ -8,6 +8,7 @@ import time
 import string
 import requests
 import base64
+from fake_useragent import UserAgent
 
 from .TTEncrypt import TT
 
@@ -350,18 +351,7 @@ def activate_install(install_id, tt_info):
     params = {"aid": "1967", "tt_info": tt_info}
     url = "https://log.snssdk.com/service/2/app_alert_check/"
     headers = {
-        "Accept-Encoding": "gzip",
-        "X-SS-REQ-TICKET": str(current_millis()),
-        "x-vc-bdturing-sdk-version": "3.7.2.cn",
-        "sdk-version": "2",
-        "passport-sdk-version": "50564",
-        "User-Agent": (
-            "com.dragon.read/66732 (Linux; U; Android 9; zh_CN; RMX1931; "
-            "Build/PQ3B.190801.04011825;tt-ok/3.12.13.4-tiktok)"
-        ),
-        "Host": "ichannel.snssdk.com",
-        "Connection": "Keep-Alive",
-        "Cookie": f"install_id={install_id}; store-region=cn-zj; store-region-src=did",
+        "Cookie": f"install_id={install_id}",
     }
     try:
         response = requests.get(url, params=params, headers=headers)
@@ -372,7 +362,7 @@ def activate_install(install_id, tt_info):
 
 
 # -------------------- 主流程 --------------------
-def main():
+def get_iid():
     while True:
         # 生成完整请求体数据
         data = generate_full_request_body()
@@ -396,18 +386,14 @@ def main():
 
         # 设置请求参数和请求头
         url = "https://log.snssdk.com/service/2/device_register/?tt_data=a"
+        ua = UserAgent(
+            browsers=["Chrome", "Edge"],  # 限定主流浏览器
+            os=["Windows"],  # 仅Windows系统
+            platforms=["desktop"],  # 仅桌面端
+            fallback="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36 Edg/134.0.0.0",  # 备用UA
+        )
         headers = {
-            "accept-encoding": "gzip",
-            "log-encode-type": "gzip",
-            "x-ss-req-ticket": str(current_millis()),
-            "x-vc-bdturing-sdk-version": "3.7.2.cn",
-            "sdk-version": "2",
-            "passport-sdk-version": "50564",
-            "user-agent": (
-                "com.dragon.read/66732 (Linux; U; Android 9; zh_CN; RMX1931; "
-                "Build/PQ3B.190801.04011825;tt-ok/3.12.13.4-tiktok)"
-            ),
-            "x-neptune": "-8|50:51:59:20:21:30:40:47:49:39:22:29",
+            "user-agent": ua.random,
             "content-type": "application/octet-stream;tt-data=a",
         }
 
@@ -428,7 +414,6 @@ def main():
             ):
                 code = activate_install(res_data.get("install_id_str"), encoded_tt_info)
                 if code == 200:
-                    print("Activation success:", res_data.get("install_id"))
                     return res_data.get("install_id")
         except Exception as e:
             print(f"Response processing error: {e}")

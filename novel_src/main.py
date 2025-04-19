@@ -1,22 +1,20 @@
-# -------------------------------
-# main.py - 主程序模块
-# -------------------------------
 import re
 import os
+import sys
 import time
-import requests
+import shutil
 from urllib.parse import urlparse, parse_qs
 from ascii_magic import AsciiArt
 
-from .base_system.context import GlobalContext
-from .network_parser.network import NetworkClient
+from .base_system.context import GlobalContext, Config
+from .base_system.storge_system import FileCleaner
 from .book_parser.book_manager import BookManager
+from .network_parser.network import NetworkClient
 from .network_parser.downloader import ChapterDownloader
-from .book_parser.parser import ContentParser
 from .constants import VERSION
 
 
-def show_config_menu(config):
+def show_config_menu(config: Config):
     """显示配置菜单"""
     print("\n=== 配置选项 ===")
     options = {
@@ -123,153 +121,26 @@ def show_config_menu(config):
             print(f"保存配置失败: {str(e)}")
 
 
-def search_book(book_name: str, network: NetworkClient, config, logger) -> str:
-    for endpoint in config.api_endpoints:
-        api = endpoint + f"/search?query={book_name}&offset=0"
-        try:
-            response = requests.get(
-                url=api, headers=network.get_headers(), timeout=config.request_timeout
-            )
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"通过端点 {endpoint} 搜索失败: {str(e)}")
-            continue
-        data = response.json()
-        search_datas = data["search_tabs"][5]["data"]
-        book_id_list = []
-        for num, search_res in enumerate(search_datas):
-            book_info = search_res["book_data"][0]
-            logger.info(
-                f"{num + 1}. 书名: {book_info['book_name']} | 初始书名: {book_info['original_book_name']} | ID: {book_info['book_id']} | 作者: {book_info['author']}"
-            )
-            book_id_list.append(book_info["book_id"])
-        while True:
-            num = input("请输入序号 (输入q返回重新搜索)：")
-            if num == "q":
-                return "0000"
-            if 1 <= int(num) <= len(book_id_list):
-                return book_id_list[int(num) - 1]
-            else:
-                logger.warning("输入错误!")
-    return None
-
-
-def download_book(logger, config, network, log_system, book_id: str, save_path: str):
+def preview_ascii(image_path):
     try:
-        # --- 获取书籍信息 ---
-        logger.info("\n正在获取书籍信息...")
-        book_info_url = f"https://fanqienovel.com/page/{book_id}"
-
-        # 发送请求
-        try:
-            response = requests.get(
-                book_info_url,
-                headers=network.get_headers(),
-                timeout=config.request_timeout,
-            )
-            if response.status_code == 404:
-                logger.error(f"小说ID {book_id} 不存在！")
-                return None
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"获取书籍信息失败: {str(e)}")
-            return None
-
-        # 解析书籍信息
-        try:
-            book_name, author, description, tags, chapter_count = (
-                ContentParser.parse_book_info(response.text)
-            )
-            cover_path = config.default_save_dir / f"{book_name}.jpg"
-            preview_ascii(cover_path, 100)
-            logger.info(f"\n书名: {book_name}")
-            logger.info(f"作者: {author}")
-            logger.info(f"是否完结: {tags[0]} | 共 {chapter_count} 章")
-            logger.info(f"标签: {'|'.join(tags[1:])}")
-            logger.info(f"简介: {description[:50]}...")  # 显示前50字符
-        except Exception as e:
-            cover_path = config.default_save_dir / f"None.jpg"
-            logger.error(f"解析书籍信息失败: {str(e)}")
-            book_name = f"未知书籍_{book_id}"
-            author = "未知作者"
-            description = "无简介"
-
-        # 初始化书籍管理器
-        manager = BookManager(
-            save_path,
-            book_id,
-            book_name,
-            author,
-            tags,
-            description,
-        )  # 添加book_name参数
-
-        log_system.add_safe_exit_func(manager.save_download_status)
-
-        # 用户确认
-        confirm = input("\n是否开始下载？(Y/n): ").strip().lower()
-        if confirm not in ("", "y", "yes"):
-            if cover_path.exists():
-                os.remove(cover_path)
-                logger.debug(f"封面文件已清理！{cover_path}")
-            return None
-
-        # 初始化下载器
-        downloader = ChapterDownloader(book_id, network)
-
-        # --- 获取章节列表 ---
-        logger.info("\n正在获取章节列表...")
-        chapters = downloader.fetch_chapter_list()
-        if not chapters:
-            logger.error("错误：无法获取章节列表")
-            return None
-
-        # 显示章节统计
-        total = len(chapters)
-        keys = [
-            key
-            for key, value in manager.downloaded.items()
-            if value == [key, "Error"]
-        ]
-        downloaded_failed = len(keys)
-        downloaded_count = len(manager.downloaded) - len(keys)
-        logger.info(
-            f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
-        )
-
-        # 检查已有下载
-        if downloaded_count > 0:
-            choice = input(
-                "检测到已有下载记录：\n1. 继续下载\n2. 重新下载\n请选择(默认1): "
-            ).strip()
-            if choice == "2":
-                manager.downloaded.clear()
-                logger.info("已清除下载记录，将重新下载全部章节")
-
-        # --- 执行下载 ---
-        logger.info("\n开始下载...")
-        start_time = time.time()
-
-        # 执行下载流程
-        result = downloader.download_book(manager, book_name, chapters)
-
-        # 显示统计信息
-        time_cost = time.time() - start_time
-        logger.info(f"\n下载完成！用时 {time_cost:.1f} 秒")
-        logger.info(f"成功: {result['success']} 章")
-        logger.info(f"失败: {result['failed']} 章")
-        logger.info(f"取消: {result['canceled']} 章")
-        return result
+        cols, _ = shutil.get_terminal_size(fallback=(80, 24))
+        code_cols = int((cols - 8) / 2)
+        print("=" * code_cols + "封面预览" + "=" * code_cols)
+        # 转换为ASCII
+        art = AsciiArt.from_image(image_path)
+        art.to_terminal(columns=cols)
     except Exception as e:
-        logger.error(f"处理过程中发生错误: {str(e)}")
-        return None
+        print(f"生成预览失败：{e}")
 
 
-def main():
-    """命令行入口函数"""
+def main() -> None:
+    """主程序"""
     logger = GlobalContext.get_logger()
     config = GlobalContext.get_config()
     log_system = GlobalContext.get_log_system()
+    network = NetworkClient()
+    manager = None
+    downloader = None
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}
@@ -284,103 +155,141 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 """
     )
 
-    # 初始化核心组件
-    network = NetworkClient()
-    manager = None  # 类型注解: Optional[BookManager]
-
     try:
         while True:
-            # 用户输入处理
-            try:
-                user_input = input(
-                    "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入q退出）："
-                ).strip()
+            user_input = input(
+                "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入q退出）："
+            ).strip()
 
-                if user_input.lower() == "q":
-                    break
-                if user_input.lower() == "s":
-                    show_config_menu(config)
+            if user_input == "":
+                continue
+            if user_input.lower() == "q":
+                break
+            if user_input.lower() == "s":
+                show_config_menu(config)
+                continue
+
+            book_id = None
+
+            # 1. 首先尝试从文本中提取 URL
+            urls = re.findall(r"(https?://[^\s]+)", user_input)
+            if urls:
+                url_str = urls[0]  # 取第一个找到的链接
+                parsed = urlparse(url_str)
+                # 尝试解析 /page/<book_id> 模式
+                m = re.search(r"/page/(\d+)", parsed.path)
+                if m:
+                    book_id = m.group(1)
+                else:
+                    # 从 query 参数中尝试获取 book_id 或 bookId
+                    qs = parse_qs(parsed.query)
+                    bid_list = qs.get("book_id") or qs.get("bookId")
+                    if bid_list:
+                        book_id = bid_list[0]
+
+                if not book_id:
+                    logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
                     continue
-                if user_input == "":
-                    continue
 
-                book_id = None
-
-                # 1. 首先尝试从文本中提取 URL
-                urls = re.findall(r"(https?://[^\s]+)", user_input)
-                if urls:
-                    url_str = urls[0]  # 取第一个找到的链接
-                    parsed = urlparse(url_str)
-                    # 尝试解析 /page/<book_id> 模式
-                    m = re.search(r"/page/(\d+)", parsed.path)
-                    if m:
-                        book_id = m.group(1)
+            # 2. 如果没有提取到 URL，再判断是否为纯数字 ID
+            if not book_id:
+                if user_input.isdigit():
+                    book_id = user_input
+                else:
+                    # 3. 作为书名处理，调用搜索接口获取book_id
+                    book_name = user_input
+                    found_id = network.search_book(book_name)
+                    if found_id and found_id == "0000":
+                        continue
+                    elif found_id:
+                        book_id = found_id
                     else:
-                        # 从 query 参数中尝试获取 book_id 或 bookId
-                        qs = parse_qs(parsed.query)
-                        bid_list = qs.get("book_id") or qs.get("bookId")
-                        if bid_list:
-                            book_id = bid_list[0]
-
-                    if not book_id:
-                        logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
+                        logger.error("API获取信息异常!")
                         continue
 
-                # 2. 如果没有提取到 URL，再判断是否为纯数字 ID
-                if not book_id:
-                    if user_input.isdigit():
-                        book_id = user_input
-                    else:
-                        # 3. 作为书名处理，调用搜索接口获取book_id
-                        book_name = user_input
-                        found_id = search_book(book_name, network, config, logger)
-                        if found_id and found_id == "0000":
-                            continue
-                        elif found_id:
-                            book_id = found_id
-                        else:
-                            logger.error("API获取信息异常!")
-                            continue
+            # 获取保存路径
+            save_path = input(
+                f"保存路径（默认：{config.default_save_dir}）："
+            ).strip() or str(config.default_save_dir)
 
-                # 获取保存路径
-                save_path = input(
-                    f"保存路径（默认：{config.default_save_dir}）："
-                ).strip() or str(config.default_save_dir)
+            book_name, author, description, tags, chapter_count = network.get_book_info(
+                book_id
+            )
+            if book_name is None:
+                continue
 
-                result = download_book(
-                    logger, config, network, log_system, book_id, save_path
-                )
+            folder_path = config.get_status_folder_path
+            cover_path = folder_path / f"{book_name}.jpg"
+            preview_ascii(cover_path)
+            logger.info(f"\n书名: {book_name}")
+            logger.info(f"作者: {author}")
+            logger.info(f"是否完结: {tags[0]} | 共 {chapter_count} 章")
+            logger.info(f"标签: {'|'.join(tags[1:])}")
+            logger.info(f"简介: {description[:50]}...")  # 显示前50字符
 
-                while True and not result is None:
-                    if result["failed"] > 0:
-                        num = input("是否重新下载错误章节？[Y/n]: ").lower()
-                        if num == "n":
-                            logger.warning("失败章节已保存到缓存文件")
-                            break
-                        result = download_book(
-                            logger, config, network, log_system, book_id, save_path
-                        )
-                    else:
+            manager = BookManager(
+                save_path, book_id, book_name, author, tags, description
+            )
+
+            log_system.add_safe_exit_func(manager.save_download_status)
+
+            # 用户确认
+            confirm = input("\n是否开始下载？(Y/n): ").strip().lower()
+            if confirm not in ("", "y", "yes"):
+                if cover_path.exists():
+                    os.remove(cover_path)
+                    logger.debug(f"封面文件已清理！{cover_path}")
+                    if FileCleaner.is_empty_dir(folder_path):
+                        FileCleaner.clean_dump_folder(folder_path)
+                return None
+
+            chapter_list = network.fetch_chapter_list(book_id)
+            if chapter_list is None:
+                continue
+
+            total = len(chapter_list)
+            keys = [
+                key for key, value in manager.downloaded.items() if value == [key, "Error"]
+            ]
+            downloaded_failed = len(keys)
+            downloaded_count = len(manager.downloaded) - len(keys)
+            logger.info(
+                f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
+            )
+            # 检查已有下载
+            if downloaded_count > 0:
+                choice = input(
+                    "检测到已有下载记录：\n1. 继续下载\n2. 重新下载\n请选择(默认1): "
+                ).strip()
+                if choice == "2":
+                    manager.downloaded.clear()
+                    logger.info("已清除下载记录，将重新下载全部章节")
+
+            # --- 执行下载 ---
+            logger.info("\n开始下载...")
+            start_time = time.time()
+
+            downloader = ChapterDownloader(book_id, network)
+            # 执行下载流程
+            result = downloader.download_book(manager, book_name, chapter_list)
+
+            # 显示统计信息
+            time_cost = time.time() - start_time
+            logger.info(f"\n下载完成！用时 {time_cost:.1f} 秒")
+            logger.info(f"成功: {result['success']} 章")
+            logger.info(f"失败: {result['failed']} 章")
+            logger.info(f"取消: {result['canceled']} 章")
+
+            while True and not result is None:
+                if result["failed"] > 0:
+                    num = input("是否重新下载错误章节？[Y/n]: ").lower()
+                    if num == "n":
+                        logger.warning("失败章节已保存到缓存文件")
                         break
+                    result = downloader.download_book(manager, book_name, chapter_list)
+                else:
+                    break
 
-            except KeyboardInterrupt:
-                break
-
-    except KeyboardInterrupt:
-        if manager:
-            try:
-                manager.save_download_status()
-                logger.info("下载状态已保存")
-            except Exception as e:
-                logger.error(f"保存状态失败: {str(e)}")
+    except (KeyboardInterrupt, EOFError):
         logger.info("\n操作已取消")
-
-
-def preview_ascii(image_path, columns=100):
-    try:
-        print("=" * 46 + "封面预览" + "=" * 46)
-        # 转换为ASCII
-        art = AsciiArt.from_image(image_path)
-        art.to_terminal(columns=columns)
-    except Exception as e:
-        print(f"生成预览失败：{e}")
+        sys.exit(0)

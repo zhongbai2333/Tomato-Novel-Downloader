@@ -1,18 +1,14 @@
-# -------------------------------
-# book_manager.py - 书籍管理模块
-# -------------------------------
 import os
 import json
 from pathlib import Path
 from typing import Dict
 
 from ..base_system.context import GlobalContext
+from ..base_system.storge_system import FileCleaner
 from .epub_generator import EpubGenerator
 
-
-class BookManager:
-    """书籍文件管理类"""
-
+class BookManager(object):
+    """书籍存储控制器"""
     def __init__(
         self,
         save_path: str,
@@ -38,7 +34,9 @@ class BookManager:
         self.downloaded: Dict[list] = {}
 
         # 状态文件路径
-        self.status_file = self.config.status_file_path(save_path, book_id)
+        filename = f"chapter_status_{book_id}.json"
+        self.status_folder = self.config.get_status_folder_path
+        self.status_file = self.status_folder / filename
 
         self._load_download_status()
 
@@ -57,27 +55,11 @@ class BookManager:
             self.logger.error(f"状态文件加载失败: {e}")
             self.downloaded = {}
 
-    def save_download_status(self):
-        """保存完整下载状态"""
-        if self.downloaded:
-            data = {
-                "book_name": self.book_name,
-                "author": self.author,
-                "tags": self.tags,
-                "description": self.description,
-                "downloaded": self.downloaded,
-            }
-            try:
-                with self.status_file.open("w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                self.logger.error(f"状态文件保存失败: {e}")
-
-    def save_chapter(self, chapter: Dict, title: str, content: str):
+    def save_chapter(self, chapte_id: str, title: str, content: str):
         """保存章节内容（统一入口）"""
-        self.downloaded[chapter["id"]] = [title, content]
+        self.downloaded[chapte_id] = [title, content]
         self.save_download_status()
-        self.logger.debug(f"章节 {chapter['id']} 缓存成功")
+        self.logger.debug(f"章节 {chapte_id} 缓存成功")
 
     def save_error_chapter(self, chapter_id, title):
         """保存下载错误章节"""
@@ -133,10 +115,27 @@ class BookManager:
                     )
             self.logger.info(f"TXT生成完成: {output_file}")
         if result == 0 and self.config.auto_clear_dump:
-            cover_path = self.save_dir / f"{self.book_name}.jpg"
+            cover_path = self.status_folder / f"{self.book_name}.jpg"
             if self.status_file.exists():
                 os.remove(self.status_file)
                 self.logger.debug(f"断点缓存文件已清理！{self.status_file}")
             if cover_path.exists():
                 os.remove(cover_path)
                 self.logger.debug(f"封面文件已清理！{cover_path}")
+            FileCleaner.clean_dump_folder(self.config.get_status_folder_path)
+
+    def save_download_status(self):
+        """保存完整下载状态"""
+        if self.downloaded:
+            data = {
+                "book_name": self.book_name,
+                "author": self.author,
+                "tags": self.tags,
+                "description": self.description,
+                "downloaded": self.downloaded,
+            }
+            try:
+                with self.status_file.open("w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                self.logger.warning(f"状态文件保存失败或无需保存: {e}")
