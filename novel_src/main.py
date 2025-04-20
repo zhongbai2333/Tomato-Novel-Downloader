@@ -239,22 +239,43 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             log_system.add_safe_exit_func(manager.save_download_status)
 
             # 用户确认
-            confirm = input("\n是否开始下载？(Y/n): ").strip().lower()
-            if confirm not in ("", "y", "yes"):
+            chapter_count_list = []
+            confirm = (
+                input(
+                    "\n是否开始下载？(Y/n [输入数字xx~xx可选定下载章节范围(分卷章节从全书最开始累加计算)]): "
+                )
+                .strip()
+                .lower()
+            )
+            if confirm not in ("", "y", "yes") and "~" not in confirm:
                 if cover_path.exists():
                     os.remove(cover_path)
                     logger.debug(f"封面文件已清理！{cover_path}")
                     if FileCleaner.is_empty_dir(folder_path):
                         FileCleaner.clean_dump_folder(folder_path)
-                return None
+                continue
+            elif "~" in confirm:
+                chapter_count_list = list(map(int, confirm.split("~")))
 
             chapter_list = network.fetch_chapter_list(book_id)
+            if chapter_count_list:
+                chapter_list_for = chapter_list.copy()
+                chapter_list = []
+                for chapter in chapter_list_for:
+                    if (
+                        chapter_count_list[0] - 1
+                        <= int(chapter["index"])
+                        <= chapter_count_list[1] - 1
+                    ):
+                        chapter_list.append(chapter)
             if chapter_list is None:
                 continue
 
             total = len(chapter_list)
             keys = [
-                key for key, value in manager.downloaded.items() if value == [key, "Error"]
+                key
+                for key, value in manager.downloaded.items()
+                if value == [key, "Error"]
             ]
             downloaded_failed = len(keys)
             downloaded_count = len(manager.downloaded) - len(keys)
