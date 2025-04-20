@@ -40,6 +40,11 @@ def show_config_menu(config: Config):
             "field": "use_official_api",
             "type": bool,
         },
+        "B": {
+            "name": "是否以散装的形式保存小说[True/False]",
+            "field": "bulk_files",
+            "type": bool,
+        },
         "0": {"name": "返回主菜单"},
     }
 
@@ -53,7 +58,7 @@ def show_config_menu(config: Config):
             print(f"{key}. {opt['name']}: {current_value}")
         print("0. 返回主菜单")
 
-        choice = input("\n请选择要修改的配置项：").strip()
+        choice = input("\n请选择要修改的配置项：").strip().upper()
 
         if choice == "0":
             break

@@ -26,8 +26,9 @@ class Config(BaseConfig):
 
     # 保存配置
     novel_format: str = Field(
-        default="txt", description="保存小说格式, 可选: [txt, epub]"
+        default="epub", description="保存小说格式, 可选: [txt, epub]"
     )
+    bulk_files: bool = Field(default=False, description="是否以散装形式保存小说")
     auto_clear_dump: bool = Field(default=True, description="是否自动清理缓存文件")
 
     # 路径配置

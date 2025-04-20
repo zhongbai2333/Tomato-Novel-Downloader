@@ -55,11 +55,44 @@ class BookManager(object):
             self.logger.error(f"状态文件加载失败: {e}")
             self.downloaded = {}
 
-    def save_chapter(self, chapte_id: str, title: str, content: str):
-        """保存章节内容（统一入口）"""
-        self.downloaded[chapte_id] = [title, content]
-        self.save_download_status()
-        self.logger.debug(f"章节 {chapte_id} 缓存成功")
+    def save_chapter(self, chapter_id: str, title: str, content: str):
+        """保存章节内容，支持散装保存（EPUB 下生成完整 XHTML）"""
+        self.downloaded[chapter_id] = [title, content]
+        if self.config.bulk_files:
+            bulk_dir = self.save_dir / self.book_name
+            bulk_dir.mkdir(parents=True, exist_ok=True)
+
+            if self.config.novel_format == "epub":
+                suffix = ".xhtml"
+                # 简易的 XHTML 模板，生成时可根据需要补充 meta/css 等
+                xhtml_template = f'''<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>{title}</title>
+</head>
+<body>
+  {content}
+</body>
+</html>'''
+                file_content = xhtml_template
+            else:
+                suffix = ".txt"
+                file_content = f"{title}\n\n{content}"
+
+            # 把 title 中的非法文件名字符替换掉
+            safe_title = "".join(c for c in title if c.isalnum() or c in "-_ ")
+            filename = f"{safe_title}{suffix}"
+            file_path = bulk_dir / filename
+
+            with file_path.open("w", encoding="utf-8") as f:
+                f.write(file_content)
+
+            self.logger.debug(f"章节散装保存：{file_path}")
+        else:
+            self.save_download_status()
+
+        self.logger.debug(f"章节 {chapter_id} 缓存成功")
 
     def save_error_chapter(self, chapter_id, title):
         """保存下载错误章节"""
@@ -69,6 +102,8 @@ class BookManager(object):
 
     def finalize_spawn(self, chapters, result):
         """生成最终文件"""
+        if self.config.bulk_files:
+            return
         output_file = self.save_dir / f"{self.book_name}.{self.config.novel_format}"
         if output_file.exists():
             os.remove(output_file)
