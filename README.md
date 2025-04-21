@@ -76,6 +76,6 @@
 
 感谢原作者Dimily的基础项目
 
-感谢来自QQ用户@终忆的api！
+项目前期 · 感谢来自QQ用户@终忆的api！
 
-感谢来自Github用户@jingluopro的api！！
+项目前期 · 感谢来自Github用户@jingluopro的api！！
