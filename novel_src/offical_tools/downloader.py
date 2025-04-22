@@ -154,6 +154,25 @@ class FqReq:
         self.session.close()
 
 
+def search_api(book_name: str) -> dict:
+    _ensure_fresh_iid()
+    headers = {
+        "cookie": "install_id=1229734607899353;",
+    }
+    api = "https://api-lf.fanqiesdk.com/api/novel/channel/homepage/search/search/v1/"
+    params = {
+        "offset": "0",
+        "aid": "1967",
+        "q": book_name,
+    }
+
+    response = requests.get(api, params=params, headers=headers, verify=False)
+
+    response.raise_for_status()
+
+    return response.json().get("data", {}).get("ret_data", {})
+
+
 def download_chapter_official(chapter_id: str) -> Dict:
     _ensure_fresh_iid()
     cfg = GlobalContext.get_config()

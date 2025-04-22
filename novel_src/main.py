@@ -242,7 +242,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 项目早期代码: Dlmily (https://github.com/Dlmily)
 
 项目说明: 此项目基于Dlmily的项目Fork而来, 我对其进行重构 + 优化, 添加更对功能, 包括: EPUB下载支持、更好的断点传输、更好的错误管理等特性
-本项目完全基于第三方API, 未使用官方API, 由于官方API地址一直在变动, 我也无精力一直适配官方API, 如有需要可以查看Dlmily的项目
+本项目[完全]基于第三方API, [未]使用官方API, 如有需要可以查看Dlmily的项目
 本项目仅供 Python 网络爬虫技术、网页数据处理及相关研究的学习用途。请勿将其用于任何违反法律法规或侵犯他人权益的活动。
 """
     )

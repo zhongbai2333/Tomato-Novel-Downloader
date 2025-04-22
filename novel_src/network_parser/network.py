@@ -9,6 +9,7 @@ from fake_useragent import UserAgent
 
 from ..base_system.context import GlobalContext
 from ..book_parser.parser import ContentParser
+from ..offical_tools.downloader import search_api
 
 
 class NetworkClient:
@@ -58,36 +59,21 @@ class NetworkClient:
         return headers
 
     def search_book(self, book_name: str) -> str:
-        for endpoint in self.config.api_endpoints:
-            api = endpoint + f"/search?query={book_name}&offset=0"
-            try:
-                response = requests.get(
-                    url=api,
-                    headers=self.get_headers(),
-                    timeout=self.config.request_timeout,
-                )
-                response.raise_for_status()
-            except requests.RequestException as e:
-                self.logger.error(f"通过端点 {endpoint} 搜索失败: {str(e)}")
-                continue
-            data = response.json()
-            search_datas = data["search_tabs"][5]["data"]
-            book_id_list = []
-            for num, search_res in enumerate(search_datas):
-                book_info = search_res["book_data"][0]
-                self.logger.info(
-                    f"{num + 1}. 书名: {book_info['book_name']} | 初始书名: {book_info['original_book_name']} | ID: {book_info['book_id']} | 作者: {book_info['author']}"
-                )
-                book_id_list.append(book_info["book_id"])
-            while True:
-                num = input("请输入序号 (输入q返回重新搜索)：")
-                if num == "q":
-                    return "0000"
-                if 1 <= int(num) <= len(book_id_list):
-                    return book_id_list[int(num) - 1]
-                else:
-                    self.logger.warning("输入错误!")
-        return None
+        search_datas = search_api(book_name)
+        book_id_list = []
+        for num, search_res in enumerate(search_datas):
+            self.logger.info(
+                f"{num + 1}. 书名: {search_res['title']} | ID: {search_res['book_id']} | 作者: {search_res['author']}"
+            )
+            book_id_list.append(search_res["book_id"])
+        while True:
+            num = input("请输入序号 (输入q返回重新搜索)：")
+            if num == "q":
+                return "0000"
+            if 1 <= int(num) <= len(book_id_list):
+                return book_id_list[int(num) - 1]
+            else:
+                self.logger.warning("输入错误!")
 
     def get_book_info(self, book_id: str) -> tuple:
         book_info_url = f"https://fanqienovel.com/page/{book_id}"
