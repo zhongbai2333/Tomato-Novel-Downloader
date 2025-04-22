@@ -2,7 +2,11 @@ import re
 import os
 import sys
 import time
+import json
 import shutil
+from pathlib import Path
+from typing import Optional, List, Tuple
+from logging import Logger
 from urllib.parse import urlparse, parse_qs
 from ascii_magic import AsciiArt
 
@@ -126,6 +130,89 @@ def show_config_menu(config: Config):
             print(f"保存配置失败: {str(e)}")
 
 
+def load_download_status(status_path: Path) -> dict:
+    """
+    读取并返回 status_path 对应的 JSON 数据，失败时返回空 dict。
+    """
+    try:
+        with status_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as e:
+        # 如果日志中需要详细信息，可以：logger.error(f"JSON 解析错误：{e}")
+        return {}
+
+
+def update_menu(
+    config: Config, logger: Logger, network: NetworkClient
+) -> Optional[str]:
+    """
+    检查本地保存目录下可更新的小说，并让用户选择要更新的书籍 ID。
+    返回选中书籍的 book_id，或在取消/无可更新时返回 None。
+    """
+    save_dir: Path = Path(config.default_save_dir)
+    subdirs = list_subdirs(save_dir)  # 假设返回的都是子文件夹名列表
+
+    if not subdirs:
+        logger.info("没有可供更新的小说")
+        return None
+
+    choices: List[Tuple[str, str]] = []
+    for folder in subdirs:
+        if "_" not in folder:
+            continue
+
+        book_id, book_name = folder.split("_", 1)
+        try:
+            chapters = network.fetch_chapter_list(book_id)
+        except Exception as e:
+            logger.error(f"获取章节列表失败：{book_id}，原因：{e}")
+            continue
+
+        status_path = save_dir / folder / f"chapter_status_{book_id}.json"
+        status = load_download_status(status_path)
+        downloaded = status.get("downloaded", {})
+        new_count = max(len(chapters) - len(downloaded), 0)
+
+        choices.append((book_id, f"《{book_name}》({book_id}) — 新章节：{new_count}"))
+
+    if not choices:
+        logger.info("没有合法格式且可更新的小说")
+        return None
+
+    logger.info("===== 可供更新的小说列表 =====")
+    for idx, (_id, desc) in enumerate(choices, start=1):
+        logger.info(f"{idx}. {desc}")
+
+    while True:
+        user_input = input("请输入编号 (输入 q 退出)：").strip().lower()
+        if user_input == "q":
+            logger.info("已取消更新")
+            return None
+
+        if not user_input.isdigit():
+            print("错误：请输入数字编号或 q 退出。")
+            continue
+
+        idx = int(user_input)
+        if 1 <= idx <= len(choices):
+            selected_id = choices[idx - 1][0]
+            logger.info(f"已选择更新：{choices[idx - 1][1]}")
+            return selected_id
+
+        print(f"错误：请输入 1 到 {len(choices)} 之间的数字。")
+
+
+def list_subdirs(path):
+    """
+    返回指定目录下所有一级子文件夹的名称列表（不含文件）。
+    """
+    return [
+        name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))
+    ]
+
+
 def preview_ascii(image_path):
     try:
         cols, _ = shutil.get_terminal_size(fallback=(80, 24))
@@ -163,7 +250,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
     try:
         while True:
             user_input = input(
-                "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入q退出）："
+                "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入u进入更新菜单 输入q退出）："
             ).strip()
 
             if user_input == "":
@@ -176,25 +263,31 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 
             book_id = None
 
-            # 1. 首先尝试从文本中提取 URL
-            urls = re.findall(r"(https?://[^\s]+)", user_input)
-            if urls:
-                url_str = urls[0]  # 取第一个找到的链接
-                parsed = urlparse(url_str)
-                # 尝试解析 /page/<book_id> 模式
-                m = re.search(r"/page/(\d+)", parsed.path)
-                if m:
-                    book_id = m.group(1)
-                else:
-                    # 从 query 参数中尝试获取 book_id 或 bookId
-                    qs = parse_qs(parsed.query)
-                    bid_list = qs.get("book_id") or qs.get("bookId")
-                    if bid_list:
-                        book_id = bid_list[0]
-
-                if not book_id:
-                    logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
+            if user_input.lower() == "u":
+                book_id = update_menu(config, logger, network)
+                if book_id is None:
                     continue
+
+            if not book_id:
+                # 1. 首先尝试从文本中提取 URL
+                urls = re.findall(r"(https?://[^\s]+)", user_input)
+                if urls:
+                    url_str = urls[0]  # 取第一个找到的链接
+                    parsed = urlparse(url_str)
+                    # 尝试解析 /page/<book_id> 模式
+                    m = re.search(r"/page/(\d+)", parsed.path)
+                    if m:
+                        book_id = m.group(1)
+                    else:
+                        # 从 query 参数中尝试获取 book_id 或 bookId
+                        qs = parse_qs(parsed.query)
+                        bid_list = qs.get("book_id") or qs.get("bookId")
+                        if bid_list:
+                            book_id = bid_list[0]
+
+                    if not book_id:
+                        logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
+                        continue
 
             # 2. 如果没有提取到 URL，再判断是否为纯数字 ID
             if not book_id:
