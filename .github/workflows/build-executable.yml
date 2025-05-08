@@ -269,6 +269,11 @@ jobs:
             if (since) params.since = since;
             const issuesResp = await github.rest.issues.listForRepo(params);
             const items = issuesResp.data;
+            const issuesResp = await github.rest.issues.listForRepo({ owner, repo, state: 'closed', since, per_page: 100 });
+            // 过滤掉带有 wontfix 或 duplicate 标签的
+            const items = issuesResp.data.filter(item =>
+              !item.labels.some(lbl => lbl.name.toLowerCase() === 'wontfix' || lbl.name.toLowerCase() === 'duplicate')
+            );
   
             // 4. 按标签分组
             const groups = { Fix: [], Update: [], Feature: [] };
