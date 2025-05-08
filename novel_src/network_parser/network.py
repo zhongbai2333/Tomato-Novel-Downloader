@@ -87,7 +87,7 @@ class NetworkClient:
             )
             if response.status_code == 404:
                 self.logger.error(f"小说ID {book_id} 不存在！")
-                return None
+                return None, None, None, None, None
             response.raise_for_status()
             book_name, author, description, tags, chapter_count = (
                 ContentParser.parse_book_info(response.text, book_id)
@@ -95,10 +95,10 @@ class NetworkClient:
             return book_name, author, description, tags, chapter_count
         except requests.RequestException as e:
             self.logger.error(f"获取书籍信息失败: {str(e)}")
-            return None
+            return None, None, None, None, None
         except Exception as e:
             self.logger.error(f"解析书籍信息失败: {str(e)}")
-            return None
+            return None, None, None, None, None
 
     def fetch_chapter_list(self, book_id: str) -> Optional[List[Dict]]:
         """从API获取章节列表"""
