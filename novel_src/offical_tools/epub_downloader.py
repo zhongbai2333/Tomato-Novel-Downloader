@@ -1,9 +1,7 @@
-import os
 import re
-import time
-import urllib.parse
+import urllib3
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict
 
 import requests
 
@@ -14,6 +12,9 @@ from .downloader import (
     FqVariable,
 )
 from .get_version_code import GetVersionCode
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 __all__ = [
     "fetch_chapter_for_epub",

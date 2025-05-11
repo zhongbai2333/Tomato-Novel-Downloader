@@ -1,10 +1,13 @@
 import json
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from typing import Tuple, Dict
 
 from ..base_system.context import GlobalContext
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 class ContentParser(object):
     """内容解析处理器"""
@@ -141,7 +144,7 @@ class ContentParser(object):
             / f"{title}.jpg"
         )
         if image_url:
-            resp = requests.get(image_url)
+            resp = requests.get(image_url, verify=False)
             if resp.ok:
                 img_path.write_bytes(resp.content)
         return title, author, description, tags, chapter_count

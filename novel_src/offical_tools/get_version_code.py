@@ -1,6 +1,10 @@
 import re
 import requests
+import urllib3
 from urllib.parse import urlparse
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 SHORT_URL = "https://fqnovel.ugurl.cn/ncX3"
 TIMEOUT = 10  # 秒
@@ -39,7 +43,7 @@ class GetVersionCode(object):
         主函数：返回 APK 名，若失败抛出异常
         """
         # 用 HEAD 就足够拿到 header；如果服务端不支持 HEAD 可改用 GET，并加上 stream=True
-        resp = requests.get(short_url, stream=True, allow_redirects=True, timeout=TIMEOUT)
+        resp = requests.get(short_url, stream=True, allow_redirects=True, timeout=TIMEOUT, verify=False)
         resp.close()  # 立刻关闭，不真正下载
 
         # 尝试从 Content-Disposition 提取

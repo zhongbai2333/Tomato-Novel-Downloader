@@ -4,6 +4,7 @@
 # -------------------------------
 import json
 import requests
+import urllib3
 from typing import Optional, Dict, List
 from fake_useragent import UserAgent
 
@@ -11,6 +12,8 @@ from ..base_system.context import GlobalContext
 from ..book_parser.parser import ContentParser
 from ..offical_tools.downloader import search_api
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 class NetworkClient:
     """网络请求客户端"""
@@ -84,6 +87,7 @@ class NetworkClient:
                 book_info_url,
                 headers=self.get_headers(),
                 timeout=self.config.request_timeout,
+                verify=False,
             )
             if response.status_code == 404:
                 self.logger.error(f"小说ID {book_id} 不存在！")
@@ -108,7 +112,7 @@ class NetworkClient:
         try:
             self.logger.debug(f"开始获取章节列表，URL: {api_url}")
             response = requests.get(
-                api_url, headers=self.get_headers(), timeout=self.config.request_timeout
+                api_url, headers=self.get_headers(), timeout=self.config.request_timeout, verify=False
             )
             self.logger.debug(
                 f"章节列表响应状态: {response.status_code} 长度: {len(response.text)}字节"

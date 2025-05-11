@@ -2,14 +2,13 @@
 # downloader.py - 核心下载模块
 # 职责：实现多线程下载和任务管理
 # -------------------------------
-import re
 import time
-import json
 import requests
 import random
 import threading
 import signal
 import queue
+import urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
@@ -22,6 +21,8 @@ from ..book_parser.parser import ContentParser
 from ..base_system.context import GlobalContext
 from ..base_system.log_system import TqdmLoggingHandler
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 class APIManager:
     def __init__(self, api_endpoints, config, network_status):
@@ -238,6 +239,7 @@ class ChapterDownloader:
                     url,
                     headers=self.network.get_headers(),
                     timeout=(3.05, self.config.request_timeout),
+                    verify=False,
                 )
                 rt = time.time() - st
 

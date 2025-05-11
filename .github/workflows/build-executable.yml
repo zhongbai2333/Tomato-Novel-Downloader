@@ -247,10 +247,10 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const tag = context.ref.replace('refs/tags/', '');
-          
+  
             // 1. 找到上一个 release
             const releasesResp = await github.rest.repos.listReleases({
-                owner, repo, per_page: 100
+              owner, repo, per_page: 100
             });
             const releases = releasesResp.data;
             const tags = releases.map(r => r.tag_name);
@@ -258,51 +258,48 @@ jobs:
             const prev = idx < releases.length - 1 ? releases[idx+1] : null;
             const since = prev ? prev.published_at : null;
             const prevTag = prev ? prev.tag_name : null;
-          
+  
             // 2. 生成 compare 链接
             const compareUrl = prevTag
-                ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}`
-                : '';
-          
-            // 3. 拉取自上一个 release 以来所有关闭的 issue/PR
+              ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}`
+              : '';
+  
+            // 3. 拉取自上一个 release 以来所有关闭的 issue/PR（已过滤 wontfix/duplicate）
             const params = { owner, repo, state: 'closed', per_page: 100 };
             if (since) params.since = since;
             const issuesResp = await github.rest.issues.listForRepo(params);
-            const items = issuesResp.data;
-            const issuesResp = await github.rest.issues.listForRepo({ owner, repo, state: 'closed', since, per_page: 100 });
-            // 过滤掉带有 wontfix 或 duplicate 标签的
             const items = issuesResp.data.filter(item =>
-              !item.labels.some(lbl => lbl.name.toLowerCase() === 'wontfix' || lbl.name.toLowerCase() === 'duplicate')
+              !item.labels.some(lbl => ['wontfix', 'duplicate'].includes(lbl.name.toLowerCase()))
             );
   
             // 4. 按标签分组
             const groups = { Fix: [], Update: [], Feature: [] };
             items.forEach(item => {
-                item.labels.forEach(lbl => {
+              item.labels.forEach(lbl => {
                 if (lbl.name === 'bug')         groups.Fix.push(item);
                 else if (lbl.name === 'update') groups.Update.push(item);
                 else if (lbl.name === 'enhancement') groups.Feature.push(item);
-                });
+              });
             });
   
             // 5. 构建 Markdown body
             let body = "# What's Changed\n\n";
             const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
             for (const key of ['Fix','Update','Feature']) {
-                const list = groups[key];
-                if (list.length) {
+              if (groups[key].length) {
                 body += `## ${key}\n\n`;
-                for (const i of list) {
-                    body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
+                for (const i of groups[key]) {
+                  body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
                 }
                 body += "\n";
-                }
+              }
             }
             if (compareUrl) {
-                body += `**Full Changelog**: ${compareUrl}\n`;
+              body += `**Full Changelog**: ${compareUrl}\n`;
             }
+  
             return body;
-
+  
       - name: Create Unified Release
         uses: softprops/action-gh-release@v2
         with:

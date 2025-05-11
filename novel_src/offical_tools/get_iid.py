@@ -8,10 +8,13 @@ import time
 import string
 import requests
 import base64
+import urllib3
 from fake_useragent import UserAgent
 
 from .TTEncrypt import TT
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+requests.packages.urllib3.disable_warnings()
 
 # -------------------- 工具函数 --------------------
 def generate_uuid():
@@ -354,7 +357,7 @@ def activate_install(install_id, tt_info):
         "Cookie": f"install_id={install_id}",
     }
     try:
-        response = requests.get(url, params=params, headers=headers)
+        response = requests.get(url, params=params, headers=headers, verify=False)
         return response.status_code
     except Exception as e:
         print(f"activate_install error: {e}")
