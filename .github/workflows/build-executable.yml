@@ -112,60 +112,66 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
-  build-termux:
+  build-android:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_NDK_VERSION: r25b
+      ANDROID_API_LEVEL: 21
+
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
-  
-      # 1. 安装 QEMU 支持，使 x86-64 Runner 能跑 Arm64 镜像
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-  
-      # 2. 拉取并运行 Termux Docker 镜像，挂载代码目录到 /workspace
-      - name: Build Termux (aarch64) Executable
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+
+      - name: Create standalone toolchain
         run: |
-          docker run --rm --privileged --platform linux/arm64 \
-            -v "${{ github.workspace }}:/workspace" \
-            termux/termux-docker:aarch64 \
-            /bin/bash -l -c "
-              # 1. 更新包列表
-              export DEBIAN_FRONTEND=noninteractive && \
-              apt-get update -y && \
+          $ANDROID_NDK_ROOT/build/tools/make_standalone_toolchain.py \
+            --arch arm64 \
+            --api $ANDROID_API_LEVEL \
+            --install-dir $HOME/android-toolchain
+          echo "$HOME/android-toolchain/bin" >> $GITHUB_PATH
 
-              # 2. 非交互安装核心依赖（跳过 python-pip）
-              apt-get install -y \
-                --no-install-recommends \
-                -o Dpkg::Options::=\"--force-confdef\" \
-                -o Dpkg::Options::=\"--force-confold\" \
-                openssl python python-ensurepip-wheels \
-                clang make git libexpat libxml2 libxslt build-essential libjpeg-turbo libpng libwebp zlib && \
+      - name: Setup host Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
-              # 3. ensurepip 引导 pip
-              python3 -m ensurepip --upgrade && \
-  
-              # 4. 安装 Python 依赖与 PyInstaller
-              pkg update && pkg upgrade && pkg install --reinstall libc++ clang
-              python3 -m pip install -r /workspace/requirements.txt pyinstaller && \
-              cd /workspace && \
-              if [ \"${{ github.ref_type }}\" = \"tag\" ]; then VERSION=\"${{ github.ref_name }}\"; \
-              else VERSION=\"sha-${{ github.sha }}\"; fi && \
-              python3 -m pyinstaller \
-                --onefile --strip \
-                --exclude-module _bootlocale \
-                --exclude-module _cffi_backend \
-                --collect-data fake_useragent \
-                -i img/Tomato-downlaoder-ico.ico \
-                --name TomatoNovelDownloader-Termux-aarch64-\$VERSION \
-                --clean main.py
-            "
-  
-      # 3. 上传 Termux 编译产物
-      - name: Upload Termux Artifact
+      - name: Install crossenv
+        run: pip install crossenv
+
+      - name: Create cross-compiling environment
+        run: |
+          python3 -m crossenv \
+            $HOME/android-toolchain/bin/aarch64-linux-android${ANDROID_API_LEVEL}-clang \
+            cross-env
+
+      - name: Activate cross environment
+        shell: bash
+        run: |
+          source cross-env/bin/activate
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build executable with PyInstaller
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${{ github.sha }}"
+          fi
+
+          pyinstaller --onefile --strip --name TomatoNovelDownloader-Android-$VERSION main.py
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: termux-build
-          path: dist/TomatoNovelDownloader-Termux-aarch64-*
+          name: android-build
+          path: dist/TomatoNovelDownloader-*
 
   build-windows:
     runs-on: windows-latest
@@ -277,7 +283,7 @@ jobs:
           path: dist/TomatoNovelDownloader-macOS_arm64-*
 
   publish-release:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-termux]
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     
@@ -367,4 +373,4 @@ jobs:
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
-            release-artifacts/termux-arm64-build/TomatoNovelDownloader-Termux_arm64-*
+            release-artifacts/build-android/TomatoNovelDownloader-Android-*
