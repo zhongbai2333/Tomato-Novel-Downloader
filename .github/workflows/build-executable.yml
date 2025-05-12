@@ -145,6 +145,7 @@ jobs:
               python3 -m ensurepip --upgrade && \
   
               # 4. 安装 Python 依赖与 PyInstaller
+              pkg update && pkg upgrade && pkg install --reinstall libc++ clang
               python3 -m pip install -r /workspace/requirements.txt pyinstaller && \
               cd /workspace && \
               if [ \"${{ github.ref_type }}\" = \"tag\" ]; then VERSION=\"${{ github.ref_name }}\"; \
