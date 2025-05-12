@@ -133,7 +133,7 @@ jobs:
 
       - name: Configure and build CPython for Android
         run: |
-          git clone --branch 3.13.x https://github.com/python/cpython.git
+          git clone --branch 3.13 https://github.com/python/cpython.git
           cd cpython
           ./configure \
             --host=aarch64-linux-android \
