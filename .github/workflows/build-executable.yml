@@ -145,26 +145,18 @@ jobs:
               python3 -m ensurepip --upgrade && \
   
               # 4. 安装 Python 依赖与 PyInstaller
-              pip install --upgrade pip && \
-              pip install -r /workspace/requirements.txt pyinstaller && \
-  
-              # 5. 进入项目目录并打包
+              python3 -m pip install -r /workspace/requirements.txt pyinstaller && \
               cd /workspace && \
-              if [ \"${{ github.ref_type }}\" = \"tag\" ]; then
-                VERSION=\"${{ github.ref_name }}\"
-              else
-                VERSION=\"sha-${{ github.sha }}\"
-              fi && \
-              pyinstaller \
-                --onefile \
-                --strip \
+              if [ \"${{ github.ref_type }}\" = \"tag\" ]; then VERSION=\"${{ github.ref_name }}\"; \
+              else VERSION=\"sha-${{ github.sha }}\"; fi && \
+              python3 -m pyinstaller \
+                --onefile --strip \
                 --exclude-module _bootlocale \
                 --exclude-module _cffi_backend \
                 --collect-data fake_useragent \
                 -i img/Tomato-downlaoder-ico.ico \
                 --name TomatoNovelDownloader-Termux-aarch64-\$VERSION \
-                --clean \
-                main.py
+                --clean main.py
             "
   
       # 3. 上传 Termux 编译产物
