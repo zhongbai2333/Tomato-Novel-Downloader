@@ -13,48 +13,55 @@ on:
 
 jobs:
   extract-termux-libs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout
+          uses: actions/checkout@v4
   
-      - name: 安装解包工具
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils binutils curl wget tar
+        - name: Install Tools
+          run: |
+            sudo apt-get update
+            sudo apt-get install -y xz-utils binutils curl wget tar
   
-      - name: 拉取 Termux aarch64 库
-        run: |
-          mkdir -p termux-libs/usr/lib
-          PKGS="openssl bzip2 xz libffi sqlite readline ncurses zlib util-linux"
-          for pkg in $PKGS; do
-            echo "下载并解包 $pkg ..."
-            URL=$(xzcat <(curl -sL https://packages-cf.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages.xz) \
-              | awk "/^Package: $pkg\$/,/^$/" \
-              | grep '^Filename:' \
-              | awk '{print "https://packages-cf.termux.dev/apt/termux-main/" $2}')
-            wget -q -O "${pkg}.deb" "$URL"
-            ar x "${pkg}.deb" data.tar.xz
-            tar -xf data.tar.xz -C termux-libs
-          done
-
-      - name: 拉取 Debian aarch64 glibc 核心库
-        run: |
-          mkdir -p debian-rootfs
-          # 获取官方 minimal rootfs（含 glibc）
-          curl -sL https://deb.debian.org/debian/dists/stable/main/installer-arm64/current/images/netboot/debian-installer/arm64/rootfs.gz \
-            | gunzip -c > rootfs.tar
-          tar -xf rootfs.tar -C debian-rootfs
-          # 拷贝 glibc 库到一起
-          for lib in libc.so.6 libdl.so.2 libpthread.so.0 libz.so.1 ld-linux-aarch64.so.1; do
-            cp debian-rootfs/lib/aarch64-linux-gnu/$lib termux-libs/usr/lib/
-          done
-
-      - name: 上传 termux-libs 工件
-        uses: actions/upload-artifact@v4
-        with:
-          name: termux-libs-aarch64
-          path: termux-libs/usr/lib
+        - name: Pull Termux aarch64
+          # 必须用 bash，才能正确解析管道
+          shell: bash
+          run: |
+            mkdir -p termux-libs/usr/lib
+            PKGS="openssl bzip2 xz libffi sqlite readline ncurses zlib util-linux"
+            PACKAGES_URL="https://packages-cf.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages.xz"
+  
+            for pkg in $PKGS; do
+              echo "下载并解包 $pkg ..."
+              # 1) 先从仓库下载 Packages.xz → 解压 → 找到对应 .deb 路径
+              URL=$(curl -sL $PACKAGES_URL \
+                   | xzcat \
+                   | awk "/^Package: $pkg\$/,/^$/" \
+                   | grep '^Filename:' \
+                   | awk '{print "https://packages-cf.termux.dev/apt/termux-main/" $2}')
+              # 2) 下载 .deb 并解包
+              wget -q -O "${pkg}.deb" "$URL"
+              ar x "${pkg}.deb" data.tar.xz
+              tar -xf data.tar.xz -C termux-libs
+            done
+  
+        - name: Pull Debian aarch64 glibc
+          shell: bash
+          run: |
+            mkdir -p debian-rootfs
+            curl -sL \
+              https://deb.debian.org/debian/dists/stable/main/installer-arm64/current/images/netboot/debian-installer/arm64/rootfs.gz \
+              | gunzip -c > rootfs.tar
+            tar -xf rootfs.tar -C debian-rootfs
+            for lib in libc.so.6 libdl.so.2 libpthread.so.0 libz.so.1 ld-linux-aarch64.so.1; do
+              cp debian-rootfs/lib/aarch64-linux-gnu/$lib termux-libs/usr/lib/
+            done
+  
+        - name: Upload termux-libs Artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: termux-libs-aarch64
+            path: termux-libs/usr/lib
 
   build-linux:
     runs-on: ubuntu-latest
