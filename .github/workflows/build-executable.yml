@@ -18,34 +18,34 @@ jobs:
         - name: Checkout
           uses: actions/checkout@v4
   
-        - name: Install Tools
+        - name: 安装解包工具
           run: |
             sudo apt-get update
             sudo apt-get install -y xz-utils binutils curl wget tar
   
-        - name: Pull Termux aarch64
-          # 必须用 bash，才能正确解析管道
+        - name: 拉取 Termux aarch64 库
           shell: bash
           run: |
             mkdir -p termux-libs/usr/lib
             PKGS="openssl bzip2 xz libffi sqlite readline ncurses zlib util-linux"
             PACKAGES_URL="https://packages-cf.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages.xz"
   
+            # 1) 下载索引到本地
+            curl -sL "$PACKAGES_URL" -o Packages.xz
+            xzcat Packages.xz > Packages
+  
+            # 2) 依次解包每个 pkg
             for pkg in $PKGS; do
               echo "下载并解包 $pkg ..."
-              # 1) 先从仓库下载 Packages.xz → 解压 → 找到对应 .deb 路径
-              URL=$(curl -sL $PACKAGES_URL \
-                   | xzcat \
-                   | awk "/^Package: $pkg\$/,/^$/" \
-                   | grep '^Filename:' \
-                   | awk '{print "https://packages-cf.termux.dev/apt/termux-main/" $2}')
-              # 2) 下载 .deb 并解包
+              URL=$(awk "/^Package: $pkg\$/,/^$/" Packages \
+                    | grep '^Filename:' \
+                    | awk '{print "https://packages-cf.termux.dev/apt/termux-main/" $2}')
               wget -q -O "${pkg}.deb" "$URL"
               ar x "${pkg}.deb" data.tar.xz
               tar -xf data.tar.xz -C termux-libs
             done
   
-        - name: Pull Debian aarch64 glibc
+        - name: 拉取 Debian aarch64 glibc 核心库
           shell: bash
           run: |
             mkdir -p debian-rootfs
@@ -57,7 +57,7 @@ jobs:
               cp debian-rootfs/lib/aarch64-linux-gnu/$lib termux-libs/usr/lib/
             done
   
-        - name: Upload termux-libs Artifact
+        - name: 上传 termux-libs 工件
           uses: actions/upload-artifact@v4
           with:
             name: termux-libs-aarch64
