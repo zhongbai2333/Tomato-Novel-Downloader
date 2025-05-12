@@ -114,7 +114,6 @@ jobs:
 
   build-termux:
     runs-on: ubuntu-latest
-    needs: build-linux
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -126,20 +125,19 @@ jobs:
       # 2. 拉取并运行 Termux Docker 镜像，挂载代码目录到 /workspace
       - name: Build Termux (aarch64) Executable
         run: |
-          # 进入 Termux 容器并执行以下命令
           docker run --rm --privileged --platform linux/arm64 \
             -v "${{ github.workspace }}:/workspace" \
             termux/termux-docker:aarch64 \
             /bin/bash -l -c "
-              # 更新包列表并安装基础编译环境
+              # 1. 安装 libexpat 及其他基础包
               pkg update -y && \
-              pkg install -y python clang make git && \
+              pkg install -y python clang make git libexpat && \
   
-              # 安装 PyInstaller 及项目依赖
+              # 2. 安装 Python 依赖与 PyInstaller
               pip install --upgrade pip && \
               pip install -r /workspace/requirements.txt pyinstaller && \
   
-              # 切到工作目录，执行打包
+              # 3. 进入项目目录并打包
               cd /workspace && \
               if [ \"${{ github.ref_type }}\" = \"tag\" ]; then
                 VERSION=\"${{ github.ref_name }}\"
