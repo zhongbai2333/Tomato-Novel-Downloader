@@ -8,6 +8,7 @@ on:
       - '**.py'          # 所有 Python 文件
       - 'requirements.txt' # 依赖清单
       - 'img/**'         # 图标资源目录
+      - '.github/workflows/**' # GitHub Actions 工作流文件
   pull_request:
 
 jobs:
