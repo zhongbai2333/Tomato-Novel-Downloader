@@ -134,10 +134,7 @@ jobs:
               apt-get install -y \
               -o Dpkg::Options::=\"--force-confdef\" \
               -o Dpkg::Options::=\"--force-confold\" \
-              openssl && \
-
-              pkg update -y && \
-              pkg install -y python clang make git libexpat libxml2 libxslt build-essential libjpeg-turbo libpng libwebp zlib && \
+              openssl python python-pip clang make git libexpat libxml2 libxslt build-essential libjpeg-turbo libpng libwebp zlib && \
   
               # 2. 安装 Python 依赖与 PyInstaller
               pip install --upgrade pip && \
