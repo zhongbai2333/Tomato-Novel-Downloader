@@ -12,6 +12,50 @@ on:
   pull_request:
 
 jobs:
+  extract-termux-libs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+  
+      - name: 安装解包工具
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils binutils curl wget tar
+  
+      - name: 拉取 Termux aarch64 库
+        run: |
+          mkdir -p termux-libs/usr/lib
+          PKGS="openssl bzip2 xz libffi sqlite readline ncurses zlib util-linux"
+          for pkg in $PKGS; do
+            echo "下载并解包 $pkg ..."
+            URL=$(xzcat <(curl -sL https://packages-cf.termux.dev/apt/termux-main/dists/stable/main/binary-aarch64/Packages.xz) \
+              | awk "/^Package: $pkg\$/,/^$/" \
+              | grep '^Filename:' \
+              | awk '{print "https://packages-cf.termux.dev/apt/termux-main/" $2}')
+            wget -q -O "${pkg}.deb" "$URL"
+            ar x "${pkg}.deb" data.tar.xz
+            tar -xf data.tar.xz -C termux-libs
+          done
+
+      - name: 拉取 Debian aarch64 glibc 核心库
+        run: |
+          mkdir -p debian-rootfs
+          # 获取官方 minimal rootfs（含 glibc）
+          curl -sL https://deb.debian.org/debian/dists/stable/main/installer-arm64/current/images/netboot/debian-installer/arm64/rootfs.gz \
+            | gunzip -c > rootfs.tar
+          tar -xf rootfs.tar -C debian-rootfs
+          # 拷贝 glibc 库到一起
+          for lib in libc.so.6 libdl.so.2 libpthread.so.0 libz.so.1 ld-linux-aarch64.so.1; do
+            cp debian-rootfs/lib/aarch64-linux-gnu/$lib termux-libs/usr/lib/
+          done
+
+      - name: 上传 termux-libs 工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-libs-aarch64
+          path: termux-libs/usr/lib
+
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -113,32 +157,50 @@ jobs:
           path: dist/TomatoNovelDownloader-*
 
   build-termux-arm64:
-    runs-on: ubuntu-latest
-    container: ghcr.io/termux/package-builder:latest
+    needs: extract-termux-libs
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Termux Packages
-        run: |
-          pkg update && pkg install -y \
-            python clang make patchelf binutils \
-            zlib openssl bzip2 xz libffi sqlite readline ncurses util-linux
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
-      - name: Setup Python Dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
 
-      - name: Build Executable for Termux ARM64
+      - name: Install Python deps
         run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Download Termux+glibc 库
+        uses: actions/download-artifact@v4
+        with:
+          name: termux-libs-aarch64
+          path: termux-libs/usr/lib
+
+      - name: Build Executable 并注入 so
+        run: |
+          # 版本号
           if [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${{ github.ref_name }}"
           else
             VERSION="sha-${{ github.sha }}"
           fi
 
+          # 拼接所有 so 的 --add-binary 参数
+          SO_FLAGS=""
+          for so in termux-libs/usr/lib/*.so*; do
+            SO_FLAGS="$SO_FLAGS --add-binary $so:lib"
+          done
+
+          # 1) 先打包
           pyinstaller \
             --onefile \
             --strip \
@@ -148,11 +210,13 @@ jobs:
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Termux_arm64-$VERSION \
             --clean \
+            $SO_FLAGS \
             main.py
 
-          # 设置 rpath，使运行时能加载打包的 so
-          patchelf --set-rpath '$ORIGIN/lib' \
-            dist/TomatoNovelDownloader-Termux_arm64-$VERSION
+          # 2) 用 patchelf 修改 interpreter 与 rpath → 运行时优先加载解包后的 lib/
+          patchelf --set-interpreter '$ORIGIN/lib/ld-linux-aarch64.so.1' \
+                   --set-rpath '$ORIGIN/lib' \
+                   dist/TomatoNovelDownloader-Termux_arm64-$VERSION
 
       - name: Upload Termux ARM64 Artifact
         uses: actions/upload-artifact@v4
