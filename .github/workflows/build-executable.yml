@@ -114,7 +114,7 @@ jobs:
 
   build-termux-arm64:
     runs-on: ubuntu-latest
-    container: ghcr.io/termux/package-builder:latest :contentReference[oaicite:0]{index=0}
+    container: ghcr.io/termux/package-builder:latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -122,8 +122,8 @@ jobs:
       - name: Install Termux Packages
         run: |
           pkg update && pkg install -y \
-          python clang make patchelf binutils \
-          zlib openssl bzip2 xz libffi sqlite readline ncurses util-linux
+            python clang make patchelf binutils \
+            zlib openssl bzip2 xz libffi sqlite readline ncurses util-linux
 
       - name: Setup Python Dependencies
         run: |
@@ -134,26 +134,26 @@ jobs:
       - name: Build Executable for Termux ARM64
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-          VERSION="${{ github.ref_name }}"
+            VERSION="${{ github.ref_name }}"
           else
-          VERSION="sha-${{ github.sha }}"
+            VERSION="sha-${{ github.sha }}"
           fi
-  
+
           pyinstaller \
-          --onefile \
-          --strip \
-          --exclude-module _bootlocale \
-          --exclude-module _cffi_backend \
-          --collect-data fake_useragent \
-          -i img/Tomato-downlaoder-ico.ico \
-          --name=TomatoNovelDownloader-Termux_arm64-$VERSION \
-          --clean \
-          main.py
-  
-          # 确保运行时能加载解包后的 .so
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-Termux_arm64-$VERSION \
+            --clean \
+            main.py
+
+          # 设置 rpath，使运行时能加载打包的 so
           patchelf --set-rpath '$ORIGIN/lib' \
-          dist/TomatoNovelDownloader-Termux_arm64-$VERSION
-  
+            dist/TomatoNovelDownloader-Termux_arm64-$VERSION
+
       - name: Upload Termux ARM64 Artifact
         uses: actions/upload-artifact@v4
         with:
