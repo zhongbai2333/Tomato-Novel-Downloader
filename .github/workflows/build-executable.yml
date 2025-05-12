@@ -111,6 +111,54 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
+  build-termux-arm64:
+    runs-on: ubuntu-latest
+    container: ghcr.io/termux/package-builder:latest :contentReference[oaicite:0]{index=0}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Termux Packages
+        run: |
+          pkg update && pkg install -y \
+          python clang make patchelf binutils \
+          zlib openssl bzip2 xz libffi sqlite readline ncurses util-linux
+
+      - name: Setup Python Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Executable for Termux ARM64
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+          VERSION="${{ github.ref_name }}"
+          else
+          VERSION="sha-${{ github.sha }}"
+          fi
+  
+          pyinstaller \
+          --onefile \
+          --strip \
+          --exclude-module _bootlocale \
+          --exclude-module _cffi_backend \
+          --collect-data fake_useragent \
+          -i img/Tomato-downlaoder-ico.ico \
+          --name=TomatoNovelDownloader-Termux_arm64-$VERSION \
+          --clean \
+          main.py
+  
+          # 确保运行时能加载解包后的 .so
+          patchelf --set-rpath '$ORIGIN/lib' \
+          dist/TomatoNovelDownloader-Termux_arm64-$VERSION
+  
+      - name: Upload Termux ARM64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-arm64-build
+          path: dist/TomatoNovelDownloader-Termux_arm64-*
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -221,7 +269,7 @@ jobs:
           path: dist/TomatoNovelDownloader-macOS_arm64-*
 
   publish-release:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos]
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-termux-arm64]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     
@@ -311,3 +359,4 @@ jobs:
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
+            release-artifacts/termux-arm64-build/TomatoNovelDownloader-Termux_arm64-*
