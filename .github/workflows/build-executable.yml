@@ -114,64 +114,75 @@ jobs:
 
   build-android:
     runs-on: ubuntu-latest
-    env:
-      ANDROID_NDK_VERSION: r25b
-      ANDROID_API_LEVEL: 21
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Android NDK
+        id: setup_ndk
         uses: nttld/setup-ndk@v1
         with:
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          ndk-version: r25b
+          add-to-path: true    # 把 NDK 工具链自动加入 PATH
 
-      - name: Create standalone toolchain
+      - name: Export NDK variables to environment
         run: |
-          $ANDROID_NDK_ROOT/build/tools/make_standalone_toolchain.py \
-            --arch arm64 \
-            --api $ANDROID_API_LEVEL \
-            --install-dir $HOME/android-toolchain
-          echo "$HOME/android-toolchain/bin" >> $GITHUB_PATH
+          echo "ANDROID_NDK_ROOT=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_API=21"                                   >> $GITHUB_ENV
 
-      - name: Setup host Python
+      - name: Configure and build CPython for Android
+        run: |
+          git clone --branch 3.13.x https://github.com/python/cpython.git
+          cd cpython
+          ./configure \
+            --host=aarch64-linux-android \
+            --build=$(./config.guess) \
+            --prefix=$PWD/python-android \
+            CC=aarch64-linux-android${ANDROID_API}-clang \
+            CXX=aarch64-linux-android${ANDROID_API}-clang++
+          make -j$(nproc) install
+
+      - name: Setup host Python & crossenv
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
-      - name: Install crossenv
-        run: pip install crossenv
-
       - name: Create cross-compiling environment
-        run: |
-          python3 -m crossenv \
-            $HOME/android-toolchain/bin/aarch64-linux-android${ANDROID_API_LEVEL}-clang \
-            cross-env
-
-      - name: Activate cross environment
         shell: bash
         run: |
-          source cross-env/bin/activate
+          pip install crossenv
+          python3 -m crossenv cpython/python-android/bin/python3 cross-env
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Build executable with PyInstaller
+      - name: Install deps & build executable
+        shell: bash
         run: |
+          # 版本号判断
           if [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${{ github.ref_name }}"
           else
             VERSION="sha-${{ github.sha }}"
           fi
 
-          pyinstaller --onefile --strip --name TomatoNovelDownloader-Android-$VERSION main.py
+          # 激活交叉环境、安装依赖、打包
+          source cross-env/bin/activate
+          pip install -r requirements.txt pyinstaller
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-Android-$VERSION \
+            --clean \
+            main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-build
-          path: dist/TomatoNovelDownloader-*
+          name: android-arm64
+          path: dist/TomatoNovelDownloader-Android-*
 
   build-windows:
     runs-on: windows-latest
