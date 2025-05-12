@@ -129,18 +129,26 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             termux/termux-docker:aarch64 \
             /bin/bash -l -c "
-              # 1. 安装 libexpat 及其他基础包
+              # 1. 更新包列表
+              export DEBIAN_FRONTEND=noninteractive && \
               apt-get update -y && \
+
+              # 2. 非交互安装核心依赖（跳过 python-pip）
               apt-get install -y \
-              -o Dpkg::Options::=\"--force-confdef\" \
-              -o Dpkg::Options::=\"--force-confold\" \
-              openssl python python-pip clang make git libexpat libxml2 libxslt build-essential libjpeg-turbo libpng libwebp zlib && \
+                --no-install-recommends \
+                -o Dpkg::Options::=\"--force-confdef\" \
+                -o Dpkg::Options::=\"--force-confold\" \
+                openssl python python-ensurepip-wheels \
+                clang make git libexpat libxml2 libxslt build-essential libjpeg-turbo libpng libwebp zlib && \
+
+              # 3. ensurepip 引导 pip
+              python3 -m ensurepip --upgrade && \
   
-              # 2. 安装 Python 依赖与 PyInstaller
+              # 4. 安装 Python 依赖与 PyInstaller
               pip install --upgrade pip && \
               pip install -r /workspace/requirements.txt pyinstaller && \
   
-              # 3. 进入项目目录并打包
+              # 5. 进入项目目录并打包
               cd /workspace && \
               if [ \"${{ github.ref_type }}\" = \"tag\" ]; then
                 VERSION=\"${{ github.ref_name }}\"
