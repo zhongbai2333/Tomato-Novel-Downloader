@@ -112,78 +112,6 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
-  build-android:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Android NDK
-        id: setup_ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25b
-          add-to-path: true    # 把 NDK 工具链自动加入 PATH
-
-      - name: Export NDK variables to environment
-        run: |
-          echo "ANDROID_NDK_ROOT=${{ steps.setup_ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "ANDROID_API=21"                                   >> $GITHUB_ENV
-
-      - name: Configure and build CPython for Android
-        run: |
-          git clone --branch 3.13 https://github.com/python/cpython.git
-          cd cpython
-          ./configure \
-            --host=aarch64-linux-android \
-            --build=$(./config.guess) \
-            --prefix=$PWD/python-android \
-            CC=aarch64-linux-android${ANDROID_API}-clang \
-            CXX=aarch64-linux-android${ANDROID_API}-clang++
-          make -j$(nproc) install
-
-      - name: Setup host Python & crossenv
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Create cross-compiling environment
-        shell: bash
-        run: |
-          pip install crossenv
-          python3 -m crossenv cpython/python-android/bin/python3 cross-env
-
-      - name: Install deps & build executable
-        shell: bash
-        run: |
-          # 版本号判断
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="sha-${{ github.sha }}"
-          fi
-
-          # 激活交叉环境、安装依赖、打包
-          source cross-env/bin/activate
-          pip install -r requirements.txt pyinstaller
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Android-$VERSION \
-            --clean \
-            main.py
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-arm64
-          path: dist/TomatoNovelDownloader-Android-*
-
   build-windows:
     runs-on: windows-latest
     steps:
@@ -294,7 +222,7 @@ jobs:
           path: dist/TomatoNovelDownloader-macOS_arm64-*
 
   publish-release:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-android]
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     
@@ -384,4 +312,3 @@ jobs:
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
-            release-artifacts/build-android/TomatoNovelDownloader-Android-*
