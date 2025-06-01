@@ -40,11 +40,16 @@ def show_config_menu(config: Config):
             "type": bool,
         },
         "A": {
-            "name": "是否使用官方API[True/False]",
+            "name": "是否使用官方API[功能不可用][True/False]",
             "field": "use_official_api",
             "type": bool,
         },
         "B": {
+            "name": "是否使用helloplhm_qwq API[True/False]",
+            "field": "use_helloplhm_qwq_api",
+            "type": bool,
+        },
+        "C": {
             "name": "是否以散装的形式保存小说[True/False]",
             "field": "bulk_files",
             "type": bool,

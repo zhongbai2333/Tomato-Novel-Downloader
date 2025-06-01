@@ -4,6 +4,7 @@ import sys
 from novel_src.constants import VERSION
 from novel_src.base_system.context import GlobalContext
 from novel_src.main import main as n_main
+from novel_src.web_main import main as w_main
 
 
 def main():
@@ -15,6 +16,7 @@ def main():
     )
 
     parser.add_argument("--debug", action="store_true", help="启用调试模式（详细输出）")
+    parser.add_argument("--server", action="store_true", help="启用服务器后端模式")
     parser.add_argument("--version", action="store_true", help="显示程序版本信息")
     parser.add_argument("-h", "--help", action="store_true", help="显示帮助信息并退出")
 
@@ -34,7 +36,10 @@ def main():
     debug_mode = args.debug
     GlobalContext(debug_mode)
 
-    n_main()
+    if args.server:
+        w_main()
+    else:
+        n_main()
 
 
 if __name__ == "__main__":

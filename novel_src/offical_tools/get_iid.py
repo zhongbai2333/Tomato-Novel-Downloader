@@ -12,6 +12,7 @@ import urllib3
 from fake_useragent import UserAgent
 
 from .TTEncrypt import TT
+from .get_version_code import GetVersionCode
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
@@ -171,7 +172,9 @@ def generate_full_request_body():
     device_info = generate_device_info()
     optional_fields, _gen_time = generate_optional_fields()
     ipv6_list = generate_ipv6_list()
-    app_version = "6.6.7.32"
+    num = GetVersionCode.get()
+    parts = [ num[0], num[1], num[2], num[3:] ]
+    app_version = ".".join(parts)
     app_code = app_version.replace(".", "")
     version_data = {
         "app_version_minor": app_version,

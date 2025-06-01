@@ -31,7 +31,7 @@ class ContentParser(object):
             if GlobalContext.get_config().novel_format == "txt":
                 processed = ContentParser._clean_content(raw_content)
             else:
-                processed = ContentParser.clean_for_ebooklib(raw_content, title)
+                processed = ContentParser._clean_for_ebooklib(raw_content, title)
             chapters[cid] = (processed, title)
         return chapters
 
@@ -52,10 +52,16 @@ class ContentParser(object):
         return "\n".join(paras)
 
     @staticmethod
-    def clean_for_ebooklib(html_content: str, ch_title: str) -> str:
-        """纯净 XHTML 内容，保留插图及占位块"""
+    def _clean_for_ebooklib(html_content: str, ch_title: str) -> str:
+        """
+        纯净 XHTML 内容，保留插图及占位块。
+        本版改用 find_all(..., recursive=True) 来递归查找 <img>、<p>、带 data-fanqie-type 的 <div>，
+        而不是只遍历 article.children。
+        """
+        # 1. 先用 BeautifulSoup 解析原始字符串
         soup = BeautifulSoup(html_content, "html.parser")
-        # 标题处理
+
+        # 2. 把 <header> 整段删掉，并从 header 里尝试提取章节标题
         header = soup.find("header")
         if header:
             h1 = header.find("div", class_="tt-title")
@@ -63,27 +69,59 @@ class ContentParser(object):
                 ch_title = h1.get_text(strip=True)
             header.decompose()
 
+        # 3. 构造输出内容列表，第一行放 <h1>章节名</h1>
         content_parts = [f"<h1>{ch_title}</h1>"]
+
+        # 4. 定位到 <article> 节点
         article = soup.find("article")
-        if article:
-            for elem in article.children:
-                # 忽略非标签节点
-                if not getattr(elem, "name", None):
-                    continue
-                # 保留单独的 <img> 标签、包含 <img> 的块，及带有 data-fanqie-type 属性的占位 <div>
-                if (
-                    elem.name == "img"
-                    or elem.find("img")
-                    or (elem.name == "div" and elem.has_attr("data-fanqie-type"))
-                ):
+        if not article:
+            # 如果没有 article，就仅返回标题
+            return "\n".join(content_parts)
+
+        # 5. 递归地在 article 中找到所有 <img>、<p>、和带 data-fanqie-type 的 <div>
+        #    注意：find_all(..., recursive=True) 会在任意嵌套深度都查到子孙节点
+        #    按照原意，优先保留：<img> 或者 包含 <img> 的块，或者 data-fanqie-type 占位 <div>，
+        #    其次处理 <p> 标签，把里面的 <br> 换成换行，再拼成 <p>纯文本</p>。
+        for elem in article.find_all(recursive=True):
+            # A. 如果它是 <img> 标签，直接保持整个 <img>；或者如果它的子孙里有 <img>，也保持整个父级块
+            if elem.name == "img":
+                content_parts.append(str(elem))
+                # 既然整张 <img> 都加过了，就跳过它的后代
+                continue
+
+            # B. 任何包含 <img> 的块级元素，比如 <div>、<figure>、<section> 等
+            #    只要 elem.find("img") 不为 None，就保留整个 elem 的原始 HTML
+            if elem.find("img"):
+                # 检查是否已经把这个块加过了——避免同一个父级和子级都加一遍
+                # 这里简单做法：只保留最外层包含 <img> 的块
+                parent_has_been_added = False
+                parent_cursor = elem.parent
+                while parent_cursor and parent_cursor != article:
+                    if parent_cursor.name in ("div", "section", "figure", "article") and parent_cursor.find("img") is not None:
+                        parent_has_been_added = True
+                        break
+                    parent_cursor = parent_cursor.parent
+
+                if not parent_has_been_added:
                     content_parts.append(str(elem))
-                elif elem.name == "p":
-                    # 转换 <br> 为换行
-                    for br in elem.find_all("br"):
-                        br.replace_with("\n")
-                    text = elem.get_text().strip()
-                    if text:
-                        content_parts.append(f"<p>{text}</p>")
+                continue
+
+            # C. 如果它是 <div> 并且带 data-fanqie-type 属性，就保留整个 <div>
+            if elem.name == "div" and elem.has_attr("data-fanqie-type"):
+                content_parts.append(str(elem))
+                continue
+
+            # D. 如果它是 <p> 标签：
+            #    1) 把所有 <br> 换成换行符 "\n"
+            #    2) 取纯文本（strip 后如果非空，就拼成 <p>文本</p>）
+            if elem.name == "p":
+                for br in elem.find_all("br"):
+                    br.replace_with("\n")
+                text = elem.get_text().strip()
+                if text:
+                    content_parts.append(f"<p>{text}</p>")
+
+        # 6. 最终把所有部分 join 到一起，返回干净的 XHTML 片段
         return "\n".join(content_parts)
 
     @classmethod
