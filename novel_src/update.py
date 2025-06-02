@@ -219,7 +219,7 @@ class UpdateManager:
 
         # 下面构造 bat 内容：
         lines = [
-            "@echo off",
+            "",
             "echo 等待主程序退出...",
             "ping 127.0.0.1 -n 3 > nul",
             "",
