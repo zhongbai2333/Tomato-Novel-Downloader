@@ -15,6 +15,7 @@ from .base_system.storge_system import FileCleaner
 from .book_parser.book_manager import BookManager
 from .network_parser.network import NetworkClient
 from .network_parser.downloader import ChapterDownloader
+from .update import UpdateManager
 from .constants import VERSION
 
 
@@ -236,8 +237,12 @@ def main() -> None:
     config = GlobalContext.get_config()
     log_system = GlobalContext.get_log_system()
     network = NetworkClient()
+    update = UpdateManager()
     manager = None
     downloader = None
+
+    if not log_system.debug:
+        update.check_for_updates()
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}

@@ -11,7 +11,7 @@ permissions:
 jobs:
   ## ── 第一步：获取最新 Tag 并删除对应 Release 下的旧资产 ──
   fetch_and_clean:
-    name: 获取最新 Tag 并清理旧资产
+    name: 获取最新 Tag
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.get_latest_tag.outputs.Tag }}
@@ -28,28 +28,7 @@ jobs:
           LATEST_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | head -n 1)
           echo "Tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           echo "获取到最新 Tag: $LATEST_TAG"
-
-      - name: 删除最新 Release 下所有旧资产
-        uses: andreaswilli/delete-release-assets-action@main
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.get_latest_tag.outputs.Tag }}
-          deleteOnlyFromDrafts: false
-
-      # ── 新增步骤：创建并上传“刷新提示”文件 ──
-      - name: 创建刷新提示文件
-        run: |
-          echo "刷新构建中，请稍后再试" > refresh_in_progress.txt
         
-      - name: 传刷新提示文件到 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.get_latest_tag.outputs.Tag }}
-          files: |
-            refresh_in_progress.txt
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   ## ── 并行构建：Linux AMD64 ──
   build-linux:
     name: 构建 Linux AMD64 可执行文件
@@ -398,7 +377,7 @@ jobs:
         with:
           path: release-artifacts
     
-      - name: 删除“刷新提示”文件
+      - name: 删除旧资产
         uses: andreaswilli/delete-release-assets-action@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
