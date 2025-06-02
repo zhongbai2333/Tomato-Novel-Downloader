@@ -8,6 +8,7 @@ import subprocess
 import requests
 from pathlib import Path
 from typing import Optional, Dict, Any
+from tqdm import tqdm
 
 from .constants import VERSION
 from .base_system.context import GlobalContext
@@ -110,29 +111,58 @@ class UpdateManager:
 
     def download_asset(self, url: str) -> Path:
         """
-        仅下载 asset，不做哈希校验。将文件写入临时目录并返回对应 Path，
-        如果失败抛异常。
+        下载 asset，并显示 tqdm 进度条。返回下载到本地的临时文件路径。
+        如果下载过程中出错，会抛出 RuntimeError。
         """
         try:
+            # 发起 GET 请求，不立刻读取全部内容，stream=True 以便分块下载
             response = requests.get(url, stream=True, timeout=self.DOWNLOAD_TIMEOUT)
             response.raise_for_status()
         except Exception as e:
-            raise RuntimeError(f"下载资产时出错：{url}，{e}")
+            raise RuntimeError(f"[UpdateManager] 下载资产时出错：{url}，{e}")
 
+        # 从 headers 中获取文件总大小（字节），用于进度条
+        total_size = response.headers.get("Content-Length")
+        if total_size is None:
+            # 无法获取 Content-Length，就按原来方式全量写入（不显示进度）
+            total_size = 0
+        else:
+            total_size = int(total_size)
+
+        # 创建临时目录
         tmp_dir = Path(tempfile.mkdtemp(prefix="upd_"))
-        fname = Path(
-            url
-        ).name  # 文件名，例如 "TomatoNovelDownloader-Linux_amd64-v1.5.1" 或带 ".exe"
+        fname = Path(url).name
         tmp_file = tmp_dir / fname
 
         try:
+            # chunk_size 每次读 8192 字节
+            chunk_size = 8192
             with tmp_file.open("wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+                if total_size == 0:
+                    # 如果没有 Content-Length，就不做进度条，直接写
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                else:
+                    # 使用 tqdm 展示进度条，单位是字节
+                    with tqdm(
+                        total=total_size,
+                        unit="B",
+                        unit_scale=True,
+                        desc=f"Downloading {fname}",
+                    ) as pbar:
+                        for chunk in response.iter_content(chunk_size=chunk_size):
+                            if chunk:
+                                f.write(chunk)
+                                pbar.update(len(chunk))
             return tmp_file
         except Exception as e:
-            raise RuntimeError(f"写入下载临时文件失败：{tmp_file}，{e}")
+            # 写入过程中出错，尝试删除残留文件并抛异常
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
+            raise RuntimeError(f"[UpdateManager] 写入下载临时文件失败：{tmp_file}，{e}")
 
     def download_and_verify(self, url: str, expected_sha256: str) -> Path:
         """
@@ -204,6 +234,8 @@ class UpdateManager:
             f'if exist "{new_full_path}" (',
             f'    ren "{new_full_path}" "{final_name}"',
             ")",
+            "",
+            "ping 127.0.0.1 -n 1 > nul",
             "",
             ":: 启动新版",
             f'start "" "{final_full_path}"',
