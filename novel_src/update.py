@@ -263,18 +263,30 @@ class UpdateManager:
         orig = self.local_executable
         system = platform.system()
         exe_dir = orig.parent
-        orig_name = (
-            orig.name
-        )  # 包含版本号，比如 "TomatoNovelDownloader-Linux_amd64-v1.5.1" 或 “.exe”
+        orig_name = orig.name  # 例如 "TomatoNovelDownloader-Win64-v1.5.3.exe" 或 "TomatoNovelDownloader-Linux_amd64-v1.5.3"
 
-        timestamp = datetime.now().strftime(
-            "%Y%m%d-%H%M%S"
-        )  # 格式化当前时间为 "YYYYMMDD-HHMMSS"
-        base_name = orig_name.rsplit(".exe", 1)[
-            0
-        ]  # 去掉 ".exe"，得到 "TomatoNovelDownloader-Win64-v1.5.3"
-        new_name_base = f"{base_name}-{timestamp}.exe"  # 例如 "TomatoNovelDownloader-Win64-v1.5.3-20250602-153045.exe"
-        new_with_suffix = new_name_base + ".new"  # 最终临时文件名带 .new 后缀
+        # —— 1. 生成时间戳
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # 例如 "20250602-153045"
+
+        # —— 2. 计算 base_name（去掉原始后缀）
+        if system == "Windows":
+            # Windows 下 假设原始文件名一定以 .exe 结尾
+            base_name = orig_name.rsplit(".exe", 1)[0]
+            # 例如 "TomatoNovelDownloader-Win64-v1.5.3"
+            new_name_base = f"{base_name}-{timestamp}.exe"
+            # 例如 "TomatoNovelDownloader-Win64-v1.5.3-20250602-153045.exe"
+        else:
+            # Linux/macOS 下 假设原始文件名无后缀或带其他后缀，不强制 .exe
+            base_name = orig_name
+            # 例如 "TomatoNovelDownloader-Linux_amd64-v1.5.3"
+            new_name_base = f"{base_name}-{timestamp}"
+            # 例如 "TomatoNovelDownloader-Linux_amd64-v1.5.3-20250602-153045"
+
+        # —— 3. 带 .new 后缀的临时文件名
+        new_with_suffix = new_name_base + ".new"
+        # Windows 下： "…-20250602-153045.exe.new"
+        # Linux/macOS 下： "…-20250602-153045.new"
 
         new_path = exe_dir / new_with_suffix
 
