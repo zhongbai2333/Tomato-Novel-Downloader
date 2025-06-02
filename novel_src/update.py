@@ -9,6 +9,7 @@ import requests
 from pathlib import Path
 from typing import Optional, Dict, Any
 from tqdm import tqdm
+import datetime
 
 from .constants import VERSION
 from .base_system.context import GlobalContext
@@ -20,8 +21,6 @@ class UpdateManager:
     1. 查询 GitHub 仓库的最新 Release 信息。
     2. 比对本地版本和 release tag，决定是否要做“完整升级”或“热补丁”。
     3. 下载对应平台的资产文件，并应用替换（Windows 通过 .bat，Unix/macOS 直接 execv）。
-       在 Windows 下，热更新时将子进程的临时目录指向全新路径，
-       以避免父、子进程共享同一 _MEIxxxx 导致 DLL 加载失败。
     """
 
     GITHUB_API_TIMEOUT = 10  # 秒
@@ -98,9 +97,8 @@ class UpdateManager:
         """
         for asset in release_info.get("assets", []):
             name = asset.get("name", "")
-            digest_field = asset.get(
-                "digest", ""
-            )  # asset["digest"] 形如 "sha256:<hex>"
+            # asset["digest"] 形如 "sha256:<hex>"；也可能直接没有 digest
+            digest_field = asset.get("digest", "")
             if plat_key.lower() in name.lower() and tag.lower() in name.lower():
                 url = asset.get("browser_download_url")
                 if not url:
@@ -118,29 +116,36 @@ class UpdateManager:
         如果下载过程中出错，会抛出 RuntimeError。
         """
         try:
+            # 发起 GET 请求，不立刻读取全部内容，stream=True 以便分块下载
             response = requests.get(url, stream=True, timeout=self.DOWNLOAD_TIMEOUT)
             response.raise_for_status()
         except Exception as e:
             raise RuntimeError(f"[UpdateManager] 下载资产时出错：{url}，{e}")
 
+        # 从 headers 中获取文件总大小（字节），用于进度条
         total_size = response.headers.get("Content-Length")
         if total_size is None:
+            # 无法获取 Content-Length，就按原来方式全量写入（不显示进度）
             total_size = 0
         else:
             total_size = int(total_size)
 
+        # 创建临时目录
         tmp_dir = Path(tempfile.mkdtemp(prefix="upd_"))
         fname = Path(url).name
         tmp_file = tmp_dir / fname
 
         try:
+            # chunk_size 每次读 8192 字节
             chunk_size = 8192
             with tmp_file.open("wb") as f:
                 if total_size == 0:
+                    # 如果没有 Content-Length，就不做进度条，直接写
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if chunk:
                             f.write(chunk)
                 else:
+                    # 使用 tqdm 展示进度条，单位是字节
                     with tqdm(
                         total=total_size,
                         unit="B",
@@ -153,6 +158,7 @@ class UpdateManager:
                                 pbar.update(len(chunk))
             return tmp_file
         except Exception as e:
+            # 写入过程中出错，尝试删除残留文件并抛异常
             try:
                 tmp_file.unlink()
             except Exception:
@@ -194,45 +200,49 @@ class UpdateManager:
         """
         Windows 下生成一个用于替换和重启的 BAT 脚本，主要流程：
         1. 等待主程序退出（ping 延时）。
-        2. 切换到 exe_dir 目录（cd /d "%~dp0"）。
+        2. 切换到 exe_dir 目录（cd /d）。
         3. 删除 exe_dir 下所有以 old_prefix+"-v*.exe" 的旧版本。
         4. 将 new_with_suffix 重命名为 final_name（去掉 .new）。
-        5. start "" /D "%~dp0" "%~dp0<final_name.exe>" 启动新版 exe。
-        6. 删除自身 BAT 脚本（del "%~f0"）。
+        5. start 启动新版 exe（此时工作目录已在 exe_dir）。
+        6. 删除自身 BAT 脚本。
         """
+        # orig_name 例如 "TomatoNovelDownloader-Win64-v1.5.1.exe"
         old_prefix = orig_name.rsplit("-v", 1)[0]  # "TomatoNovelDownloader-Win64"
         pattern = f"{old_prefix}-v*.exe"  # 用于删除旧版本
 
+        # 把 exe_dir 和文件名都改成字符串
         exe_dir_str = str(exe_dir)
         final_name = new_with_suffix.removesuffix(".new")
 
+        # BAT 文件写在临时目录
         bat_filename = f"update_{orig_name[:-4]}.bat"
         bat_path = Path(tempfile.gettempdir()) / bat_filename
 
+        # 下面构造 bat 内容：
         lines = [
             "@echo off",
             "echo 等待主程序退出...",
             "ping 127.0.0.1 -n 3 > nul",
             "",
-            ":: 切换到 BAT 所在目录 (即 EXE 所在目录)",
-            'cd /d "%~dp0"',
+            f":: 切换到可执行所在目录",
+            f'cd /d "{exe_dir_str}"',
             "",
-            f":: 删除所有旧版本：{pattern}",
+            f":: 删除旧版本：{pattern}",
             f'for %%F in ("{pattern}") do (',
             '    if exist "%%~fF" (',
             '        del /F /Q "%%~fF"',
             "    )",
             ")",
             "",
-            ":: 重命名新版 (.new -> .exe)",
+            f":: 重命名新版",
             f'if exist "{new_with_suffix}" (',
             f'    ren "{new_with_suffix}" "{final_name}"',
             ")",
             "",
-            ":: 启动新版，可执行工作目录已在 %~dp0",
-            f'start "" /D "%~dp0" "%~dp0{final_name}"',
+            ":: 启动新版，可执行工作目录已在 exe_dir",
+            f'start "" "{final_name}"',
             "",
-            ":: 删除自身 BAT 脚本",
+            ":: 删除自身脚本",
             'del "%~f0"',
         ]
         bat_content = "\r\n".join(lines)
@@ -245,20 +255,27 @@ class UpdateManager:
 
     def apply_update(self, tmp_file: Path) -> None:
         """
-        将下载后的 tmp_file（带版本号，未加 .new）移动到可执行目录并加上 .new 后缀，然后：
-        - Windows：为子进程设置独立 TEMP，再调用 BAT；最后父进程退出，子进程自行运行新版 EXE。
-        - Unix/macOS：删除旧版、重命名 .new -> 正式文件、赋予执行权限、execv 启动新版。
+        将下载后的 tmp_file（带版本号，未加 .new）移动到可执行目录并加上 .new 后缀，
+        然后：
+        - Windows：生成 .bat 执行脚本，由脚本完成删除旧版、重命名、启动新版、删除 bat
+        - Unix/macOS：删除旧版、重命名 .new -> 正式文件、赋予执行权限、execv 启动新版
         """
         orig = self.local_executable
         system = platform.system()
         exe_dir = orig.parent
         orig_name = (
             orig.name
-        )  # 包含版本号，比如 "TomatoNovelDownloader-Win64-v1.5.3.exe"
+        )  # 包含版本号，比如 "TomatoNovelDownloader-Linux_amd64-v1.5.1" 或 “.exe”
 
-        # 1. 将 tmp_file 移到 exe_dir，并改名为 "[资产名].new"
-        new_name_base = tmp_file.name  # 例如 "TomatoNovelDownloader-Win64-v1.5.3.exe"
-        new_with_suffix = new_name_base + ".new"
+        timestamp = datetime.now().strftime(
+            "%Y%m%d-%H%M%S"
+        )  # 格式化当前时间为 "YYYYMMDD-HHMMSS"
+        base_name = orig_name.rsplit(".exe", 1)[
+            0
+        ]  # 去掉 ".exe"，得到 "TomatoNovelDownloader-Win64-v1.5.3"
+        new_name_base = f"{base_name}-{timestamp}.exe"  # 例如 "TomatoNovelDownloader-Win64-v1.5.3-20250602-153045.exe"
+        new_with_suffix = new_name_base + ".new"  # 最终临时文件名带 .new 后缀
+
         new_path = exe_dir / new_with_suffix
 
         try:
@@ -269,34 +286,19 @@ class UpdateManager:
             return
 
         if system == "Windows":
-            # Windows 平台：方案二 B —— 为子进程指定独立的 TEMP 目录
+            # Windows 平台走 .bat 脚本
             try:
-                # 2. 生成属于子进程的临时目录（不同于父进程的 _MEIxxxx）
-                child_temp_dir = tempfile.mkdtemp(prefix="_MEIchild_")
-                # 上述路径形如 C:\Users\<用户名>\AppData\Local\Temp\_MEIchild_ABCD
-
-                # 3. 调整环境变量，让子进程的 TMP、TEMP 指向新的 child_temp_dir
-                child_env = os.environ.copy()
-                child_env["TMP"] = child_temp_dir
-                child_env["TEMP"] = child_temp_dir
-
-                # 4. 生成 BAT 脚本（使用 %~dp0、%~f0），交由 BAT 删除旧 EXE、重命名、启动新版 EXE、删除自身
                 bat_path = self._create_windows_updater_bat(
                     exe_dir, orig_name, new_with_suffix
                 )
-
-                # 5. 以 新窗口 (DETACHED_PROCESS) 方式启动 BAT，同时传入 child_env
+                self.logger.info(
+                    "[UpdateManager] 已启动 Windows 更新脚本，主程序即将退出。"
+                )
                 subprocess.Popen(
-                    ["cmd.exe", "/c", "start", "", str(bat_path)],
-                    shell=False,
-                    env=child_env,
-                    creationflags=subprocess.DETACHED_PROCESS
-                    | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    f'"{bat_path}"',
+                    shell=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                )
-                self.logger.info(
-                    "[UpdateManager] 已在新窗口启动更新脚本，主程序即将退出。"
                 )
                 sys.exit(0)
             except Exception as e:
@@ -307,15 +309,16 @@ class UpdateManager:
         else:
             # Unix/macOS 平台：同步删除旧版本、重命名并 execv
             try:
+                # 2. 提取 prefix，比如从 "TomatoNovelDownloader-Linux_amd64-v1.5.1" 中取 "TomatoNovelDownloader-Linux_amd64"
                 if "-v" in orig_name:
                     prefix = orig_name.rsplit("-v", 1)[0]
                 else:
                     prefix = orig_name
 
-                # 删除旧版本
+                # 3. 删除旧版本
                 self._cleanup_old_versions_unix(exe_dir, prefix)
 
-                # 重命名 .new
+                # 4. 重命名 .new 文件
                 final_path = exe_dir / new_name_base
                 if new_path.exists():
                     try:
@@ -334,13 +337,13 @@ class UpdateManager:
                     )
                     return
 
-                # 赋予可执行权限
+                # 5. 赋予可执行权限
                 try:
                     final_path.chmod(0o755)
                 except Exception:
                     pass
 
-                # execv 启动新进程并替换当前进程
+                # 6. execv 启动新进程并替换当前进程
                 self.logger.info(f"[UpdateManager] Execv 启动新版本：{new_name_base}")
                 os.execv(str(final_path), [str(final_path)] + sys.argv[1:])
             except Exception as e:
@@ -350,9 +353,9 @@ class UpdateManager:
     def check_for_updates(self) -> bool:
         """
         核心入口：
-        1. 获取最新 release，如果失败返回 True（正常继续使用）。
+        1. 获取最新 release，如果失败返回 True（表示正常继续使用）。
         2. 如果最新 tag 与本地 local_version 不同，提示完整升级；否则进入热补丁检查。
-        3. 完整升级后返回 False（程序被替换或退出），取消升级返回 False。
+        3. 完整升级后返回 False（程序将被替换或退出），取消升级返回 False。
         4. 热补丁检查：比较本地哈希与云端 digest：
            - 相同：返回 True（无需更新）。
            - 不同：自动下载并替换，返回 False。
@@ -366,7 +369,7 @@ class UpdateManager:
             self.logger.error("[UpdateManager] 未获取到最新 Release 的 tag_name")
             return True
 
-        # 大版本更新场景
+        # ------------- 1. 完整升级场景 -------------
         if latest_tag != self.local_version:
             self.logger.info(
                 f"[UpdateManager] 检测到新版本：{latest_tag}，当前：{self.local_version}"
@@ -379,7 +382,7 @@ class UpdateManager:
                     self.logger.error(
                         "[UpdateManager] 未找到对应平台/版本的发布资产，无法升级。"
                     )
-                    return False  # 取消继续执行
+                    return False  # 取消继续执行，交由调用方决定
 
                 url = asset_info["url"]
                 name = asset_info["name"]
@@ -387,6 +390,7 @@ class UpdateManager:
 
                 self.logger.info(f"[UpdateManager] 正在下载最新版本 ({name}) ...")
                 try:
+                    # 如果 asset_info["sha256"] 可用，优先校验
                     if sha256_val:
                         tmp_path = self.download_and_verify(url, sha256_val)
                     else:
@@ -402,10 +406,11 @@ class UpdateManager:
                 self.logger.warning("[UpdateManager] 用户取消升级，继续使用旧版本。")
                 return False
 
-        # 热补丁检查场景（版本号相同）
+        # ------------- 2. 热补丁检查场景（版本号相同） -------------
         self.logger.info(
             f"[UpdateManager] 本地版本 ({self.local_version}) 与最新相同，检查热补丁..."
         )
+
         try:
             local_hash = self.compute_file_sha256(self.local_executable)
         except Exception as e:
@@ -423,6 +428,7 @@ class UpdateManager:
         asset_url = asset_info["url"]
         asset_name = asset_info["name"]
         asset_digest = asset_info.get("sha256", "")
+
         if not asset_digest:
             self.logger.warning(
                 f"[UpdateManager] 资产 {asset_name} 未提供 sha256 字段，跳过热补丁检查。"
@@ -432,6 +438,7 @@ class UpdateManager:
         self.logger.info(f"[UpdateManager] 本地哈希：{local_hash}")
         self.logger.info(f"[UpdateManager] 云端哈希：{asset_digest}")
 
+        # 对比本地哈希和云端 digest
         if local_hash.lower() != asset_digest.lower():
             if self.debug:
                 choice = (
