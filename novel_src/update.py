@@ -9,7 +9,7 @@ import requests
 from pathlib import Path
 from typing import Optional, Dict, Any
 from tqdm import tqdm
-import datetime
+from datetime import datetime
 
 from .constants import VERSION
 from .base_system.context import GlobalContext
@@ -384,7 +384,7 @@ class UpdateManager:
                     )
                     return False  # 取消继续执行，交由调用方决定
 
-                url = asset_info["url"]
+                url = "https://github.moeyy.xyz/" + asset_info["url"]
                 name = asset_info["name"]
                 sha256_val = asset_info.get("sha256", "")
 
@@ -425,7 +425,7 @@ class UpdateManager:
             )
             return True
 
-        asset_url = asset_info["url"]
+        asset_url = "https://github.moeyy.xyz/" + asset_info["url"]
         asset_name = asset_info["name"]
         asset_digest = asset_info.get("sha256", "")
 
