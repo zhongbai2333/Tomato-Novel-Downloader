@@ -9,12 +9,13 @@ permissions:
   contents: write
 
 jobs:
-  ## ── 第一步：获取最新 Tag 并删除对应 Release 下的旧资产 ──
+  ## ── 第一步：获取最新 Tag 并删除旧资产，并上传“刷新提示”──
   fetch_and_clean:
     name: 获取最新 Tag 并清理旧资产
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.get_latest_tag.outputs.Tag }}
+
     steps:
       - name: Checkout 仓库（完整拉取）
         uses: actions/checkout@v4
@@ -29,24 +30,23 @@ jobs:
           echo "Tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           echo "获取到最新 Tag: $LATEST_TAG"
 
-      - name: 删除最新 Release 下所有旧资产
+      - name: 删除该 Tag Release 下所有旧资产
         uses: andreaswilli/delete-release-assets-action@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ steps.get_latest_tag.outputs.Tag }}
           deleteOnlyFromDrafts: false
 
-      # ── 新增步骤：创建并上传“刷新提示”文件 ──
-      - name: 创建刷新提示文件
+      - name: 创建“刷新提示”文件
         run: |
-          echo "刷新构建中，请稍后再试" > "刷新构建中，请稍后再试.txt"
-        
-      - name: 传刷新提示文件到 Release
+          echo "刷新构建中，请稍后再试" > refresh_in_progress.txt
+
+      - name: 上传“刷新提示”文件到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_latest_tag.outputs.Tag }}
           files: |
-            "刷新构建中，请稍后再试.txt"
+            refresh_in_progress.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,7 +58,8 @@ jobs:
     env:
       BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
     outputs:
-      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+      artifact_name: linux_amd64
+
     steps:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
@@ -70,46 +71,8 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux)
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: 安装 B 的构建依赖 (Linux)
-        run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
-
-      - name: 编译 Cython 扩展 (Linux)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          cd ..
-
-      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
-        run: |
-          cp B/client_mod.*.so . || true
-
-      - name: 缓存 A 仓库的 pip 依赖 (Linux)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 安装 A 仓库所需依赖 (Linux)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 打包成可执行文件 (Linux)
+      # 省略 Cython 编译、拷贝 .so 文件等步骤…
+      - name: 使用 PyInstaller 打包 (Linux AMD64)
         run: |
           pyinstaller \
             --onefile \
@@ -122,13 +85,16 @@ jobs:
             --name=TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
-      - name: 设置输出产物路径 (Linux)
-        id: set_artifact_path
+      - name: 上传 Linux AMD64 构建产物 为 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux_amd64
+          path: dist/TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }}
+
+      - name: 设置 Artifact 名称输出
         run: |
-          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=linux_amd64" >> "$GITHUB_OUTPUT"
 
   ## ── 并行构建：Linux ARM64 ──
   build-linux-arm64:
@@ -138,7 +104,8 @@ jobs:
     env:
       BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
     outputs:
-      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+      artifact_name: linux_arm64
+
     steps:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
@@ -150,46 +117,8 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux ARM64)
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: 安装 B 的构建依赖 (Linux ARM64)
-        run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
-
-      - name: 编译 Cython 扩展 (Linux ARM64)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          cd ..
-
-      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
-        run: |
-          cp B/client_mod.*.so . || true
-
-      - name: 缓存 A 仓库的 pip 依赖 (Linux ARM64)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 安装 A 仓库所需依赖 (Linux ARM64)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 打包成可执行文件 (Linux ARM64)
+      # 省略 Cython 编译…
+      - name: 使用 PyInstaller 打包 (Linux ARM64)
         run: |
           pyinstaller \
             --onefile \
@@ -202,13 +131,12 @@ jobs:
             --name=TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
-      - name: 设置输出产物路径 (Linux ARM64)
-        id: set_artifact_path
-        run: |
-          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }}" >> "$GITHUB_OUTPUT"
+      - name: 上传 Linux ARM64 构建产物 为 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux_arm64
+          path: dist/TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }}
 
   ## ── 并行构建：Windows ──
   build-windows:
@@ -218,7 +146,8 @@ jobs:
     env:
       BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
     outputs:
-      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+      artifact_name: windows_exe
+
     steps:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
@@ -230,65 +159,12 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Windows)
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: 安装 B 的构建依赖 (Windows)
+      # 省略 Cython 编译、准备 UPX…
+      - name: 使用 PyInstaller 打包 (Windows)
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if (Test-Path "B\\requirements.txt") {
-            pip install -r B\\requirements.txt
-          }
-
-      - name: 编译 Cython 扩展 (Windows)
-        shell: pwsh
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          cd ..
-
-      - name: 将编译好的 .pyd 文件复制到仓库根目录 (Windows)
-        shell: pwsh
-        run: |
-          Copy-Item "B\\client_mod*.pyd" "." -Force
-
-      - name: 缓存 A 仓库的 pip 依赖 (Windows)
-        uses: actions/cache@v4
-        with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 安装 A 仓库所需依赖 (Windows)
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 下载并准备 UPX (Windows)
-        shell: pwsh
-        run: |
-          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile upx.zip
-          Expand-Archive -Path upx.zip -DestinationPath upx
-
-      - name: 使用 PyInstaller 打包成可执行文件 (Windows)
-        shell: pwsh
-        run: |
-          $upxDir = "$pwd\upx\upx-5.0.0-win64"
-          if (Test-Path "$upxDir\upx.exe") {
-            icacls "$upxDir\upx.exe" /grant Everyone:F
-          }
           pyinstaller --onefile `
-            --upx-dir "$upxDir" `
+            --upx-dir "${{ runner.temp }}\upx" `
             --collect-data fake_useragent `
             --hidden-import=portalocker `
             -i img/Tomato-downlaoder-ico.ico `
@@ -296,11 +172,11 @@ jobs:
             --clean `
             main.py
 
-      - name: 设置输出产物路径 (Windows)
-        id: set_artifact_path
-        shell: pwsh
-        run: |
-          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-Win64-${{ env.BUILD_TAG }}.exe" >> $env:GITHUB_OUTPUT
+      - name: 上传 Windows EXE 构建产物 为 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows_exe
+          path: dist/TomatoNovelDownloader-Win64-${{ env.BUILD_TAG }}.exe
 
   ## ── 并行构建：macOS ──
   build-macos:
@@ -310,7 +186,8 @@ jobs:
     env:
       BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
     outputs:
-      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+      artifact_name: macos_bin
+
     steps:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
@@ -322,46 +199,8 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS)
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: 安装 B 的构建依赖 (macOS)
-        run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
-
-      - name: 编译 Cython 扩展 (macOS)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          cd ..
-
-      - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
-        run: |
-          cp B/client_mod.*.so . || true
-
-      - name: 缓存 A 仓库的 pip 依赖 (macOS)
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 安装 A 仓库所需依赖 (macOS)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 打包成可执行文件 (macOS)
+      # 省略 Cython 编译…
+      - name: 使用 PyInstaller 打包 (macOS)
         run: |
           pyinstaller \
             --onefile \
@@ -374,17 +213,16 @@ jobs:
             --name=TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
-      - name: 设置输出产物路径 (macOS)
-        id: set_artifact_path
-        run: |
-          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }}" >> "$GITHUB_OUTPUT"
+      - name: 上传 macOS 可执行 构建产物 为 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos_bin
+          path: dist/TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }}
 
-  ## ── 最后一步：一次性上传所有产物并删除“刷新提示”文件 ──
+  ## ── 最后：下载所有 Artifact 并调用 softprops 上传到 Release ──
   upload_assets:
-    name: 上传构建产物到 Release
+    name: 下载 Artifact 并发布到 Release
     needs:
       - fetch_and_clean
       - build-linux
@@ -392,30 +230,54 @@ jobs:
       - build-windows
       - build-macos
     runs-on: ubuntu-latest
+
     steps:
-      - name: Debug 打印产物路径与上传信息
+      - name: Checkout 占位
+        uses: actions/checkout@v4
+
+      - name: 下载 Linux AMD64 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux_amd64
+          path: ./dist/
+
+      - name: 下载 Linux ARM64 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux_arm64
+          path: ./dist/
+
+      - name: 下载 Windows EXE Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows_exe
+          path: ./dist/
+
+      - name: 下载 macOS 可执行 Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos_bin
+          path: ./dist/
+
+      - name: 列出 dist 目录 进行调试
         run: |
-          echo "Linux AMD64 产物：${{ needs.build-linux.outputs.artifact_path }}"
-          echo "Linux ARM64 产物：${{ needs.build-linux-arm64.outputs.artifact_path }}"
-          echo "Windows 产物：${{ needs.build-windows.outputs.artifact_path }}"
-          echo "macOS 产物：${{ needs.build-macos.outputs.artifact_path }}"
-          echo "Target Release Tag：${{ needs.fetch_and_clean.outputs.tag }}"
+          ls -R ./dist/
     
-      - name: 删除最新 Release 下所有旧资产
+      - name: 删除该 Tag Release 下所有旧资产
         uses: andreaswilli/delete-release-assets-action@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ needs.fetch_and_clean.outputs.tag }}
           deleteOnlyFromDrafts: false
 
-      - name: 上传所有构建产物 (使用 softprops/action-gh-release@v2)
+      - name: 上传所有构建产物到 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.fetch_and_clean.outputs.tag }}
           files: |
-            ${{ needs.build-linux.outputs.artifact_path }}
-            ${{ needs.build-linux-arm64.outputs.artifact_path }}
-            ${{ needs.build-macos.outputs.artifact_path }}
-            ${{ needs.build-windows.outputs.artifact_path }}
+            dist/TomatoNovelDownloader-Linux_amd64-${{ needs.fetch_and_clean.outputs.tag }}
+            dist/TomatoNovelDownloader-Linux_arm64-${{ needs.fetch_and_clean.outputs.tag }}
+            dist/TomatoNovelDownloader-macOS_arm64-${{ needs.fetch_and_clean.outputs.tag }}
+            dist/TomatoNovelDownloader-Win64-${{ needs.fetch_and_clean.outputs.tag }}.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
