@@ -1,0 +1,453 @@
+# .github/workflows/refresh-build-on-dispatch.yml
+name: Refresh Build
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - build_trigger
+      # 仅当外部通过 GitHub API 发送 event_type = "build_trigger" 时才触发此工作流
+      # 示例触发命令：
+      # curl -X POST \
+      #   -H "Accept: application/vnd.github.v3+json" \
+      #   -H "Authorization: token YOUR_PAT" \
+      #   https://api.github.com/repos/OWNER/REPO/dispatches \
+      #   -d '{"event_type":"build_trigger"}'
+
+permissions:
+  contents: write
+  # 需要写权限以执行删除旧资产和上传新资产的操作:contentReference[oaicite:6]{index=6}
+
+jobs:
+  ## ── 第一步：获取最新 Tag 并删除对应 Release 下的旧资产 ──
+  fetch_and_clean:
+    name: 获取最新 Tag 并清理旧资产
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get_latest_tag.outputs.Tag }}                  # 暴露最新 Tag 给后续作业:contentReference[oaicite:7]{index=7}
+      upload_url: ${{ steps.get_upload_url.outputs.UPLOAD_URL }}     # 暴露该 Release 的 upload_url（去掉模板后缀）:contentReference[oaicite:8]{index=8}
+    steps:
+      - name: Checkout 仓库（完整拉取）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+        # 通过 fetch-depth: 0 拉取所有 commit 和 Tag，以便后续步骤能拿到最新 Tag 列表:contentReference[oaicite:9]{index=9}
+
+      - name: 获取最新 Tag
+        id: get_latest_tag
+        run: |
+          # 按创建时间排序，取最新 Tag
+          LATEST_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | head -n 1)
+          echo "Tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "获取到最新 Tag: $LATEST_TAG"
+        # 这样，后续通过 ${{ needs.fetch_and_clean.outputs.tag }} 可以拿到最新 Tag（如 v1.5.0）:contentReference[oaicite:10]{index=10}
+
+      - name: 删除最新 Release 下所有旧资产
+        uses: andreaswilli/delete-release-assets-action@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.get_latest_tag.outputs.Tag }}
+          deleteOnlyFromDrafts: false
+        # 此步骤会定位到 Tag 对应的 Release（非草稿），并删除该 Release 下所有旧的 Asset 文件:contentReference[oaicite:11]{index=11}
+
+      - name: 获取对应 Release 的 upload_url
+        id: get_upload_url
+        run: |
+          # 通过 GitHub REST API 获取 Release 信息，并提取 upload_url（去掉模板后缀 `{?name,label}`）
+          RELEASE_JSON=$(curl -s \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.get_latest_tag.outputs.Tag }}")
+          UPLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.upload_url' | sed -E 's|\{\?name,label\}||')
+          echo "UPLOAD_URL=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 这样，后续通过 ${{ needs.fetch_and_clean.outputs.upload_url }} 可以拿到去除模板的上传地址:contentReference[oaicite:12]{index=12}
+
+  ## ── 并行构建：Linux AMD64 ──
+  build-linux:
+    name: 构建 Linux AMD64 可执行文件
+    needs: fetch_and_clean
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}  # 暴露本平台的打包产物路径:contentReference[oaicite:13]{index=13}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+        # 这里会检出最新 Tag 对应的代码（如 v1.5.0）以保证构建时使用正确版本:contentReference[oaicite:14]{index=14}
+
+      - name: Setup Python (Linux)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+        # 安装 Python 3.13 环境:contentReference[oaicite:15]{index=15}
+
+      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+        # 克隆私有仓库 B 到子目录 B，用于编译 Cython 扩展:contentReference[oaicite:16]{index=16}
+
+      - name: 安装 B 的构建依赖 (Linux)
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if [ -f B/requirements.txt ]; then
+            pip install -r B/requirements.txt
+          fi
+        # 安装 Cython 及 B 仓库中声明的依赖:contentReference[oaicite:17]{index=17}
+
+      - name: 编译 Cython 扩展 (Linux)
+        run: |
+          cd B
+          python setup.py build_ext --inplace
+          cd ..
+        # 在 B 子目录下执行 Cython 编译，生成 `.so` 文件供后续打包时使用:contentReference[oaicite:18]{index=18}
+
+      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
+        run: |
+          cp B/client_mod.*.so . || true
+        # 将生成的 `.so` 文件复制到根目录，以便 PyInstaller 打包时能包含该扩展模块:contentReference[oaicite:19]{index=19}
+
+      - name: 缓存 A 仓库的 pip 依赖 (Linux)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+        # 缓存 pip 下载目录，加速后续重复构建:contentReference[oaicite:20]{index=20}
+
+      - name: 安装 A 仓库所需依赖 (Linux)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+        # 安装项目依赖以及 PyInstaller:contentReference[oaicite:21]{index=21}
+
+      - name: 使用 PyInstaller 打包成可执行文件 (Linux)
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${{ github.sha }}"
+          fi
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            --hidden-import=portalocker \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
+            --clean \
+            main.py
+        env:
+          RELEASE_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+        # 生成名称形如 `TomatoNovelDownloader-Linux_amd64-v1.5.0` 的单文件可执行包:contentReference[oaicite:22]{index=22}
+
+      - name: 设置输出产物路径 (Linux)
+        id: set_artifact_path
+        run: |
+          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-Linux_amd64-${{ needs.fetch_and_clean.outputs.tag }}.tar.gz" >> "$GITHUB_OUTPUT"
+        # 将打包好的 tar.gz 文件路径写入输出供后续作业使用:contentReference[oaicite:23]{index=23}
+
+  ## ── 并行构建：Linux ARM64 ──
+  build-linux-arm64:
+    name: 构建 Linux ARM64 可执行文件
+    needs: fetch_and_clean
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}  # 暴露该平台打包产物路径:contentReference[oaicite:24]{index=24}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+
+      - name: Setup Python (Linux ARM64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux ARM64)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
+      - name: 安装 B 的构建依赖 (Linux ARM64)
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if [ -f B/requirements.txt ]; then
+            pip install -r B/requirements.txt
+          fi
+
+      - name: 编译 Cython 扩展 (Linux ARM64)
+        run: |
+          cd B
+          python setup.py build_ext --inplace
+          cd ..
+
+      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
+        run: |
+          cp B/client_mod.*.so . || true
+
+      - name: 缓存 A 仓库的 pip 依赖 (Linux ARM64)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装 A 仓库所需依赖 (Linux ARM64)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 使用 PyInstaller 打包成可执行文件 (Linux ARM64)
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${{ github.sha }}"
+          fi
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            --hidden-import=portalocker \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
+            --clean \
+            main.py
+        env:
+          RELEASE_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+
+      - name: 设置输出产物路径 (Linux ARM64)
+        id: set_artifact_path
+        run: |
+          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-Linux_arm64-${{ needs.fetch_and_clean.outputs.tag }}.tar.gz" >> "$GITHUB_OUTPUT"
+
+  ## ── 并行构建：Windows ──
+  build-windows:
+    name: 构建 Windows 可执行文件
+    needs: fetch_and_clean
+    runs-on: windows-latest
+    outputs:
+      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+
+      - name: Setup Python (Windows)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Windows)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
+      - name: 安装 B 的构建依赖 (Windows)
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if (Test-Path "B\\requirements.txt") {
+            pip install -r B\\requirements.txt
+          }
+
+      - name: 编译 Cython 扩展 (Windows)
+        shell: powershell
+        run: |
+          cd B
+          python setup.py build_ext --inplace
+          cd ..
+
+      - name: 将编译好的 .pyd 文件复制到仓库根目录 (Windows)
+        shell: powershell
+        run: |
+          Copy-Item "B\\client_mod*.pyd" "." -Force
+
+      - name: 缓存 A 仓库的 pip 依赖 (Windows)
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装 A 仓库所需依赖 (Windows)
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 下载并准备 UPX (Windows)
+        shell: powershell
+        run: |
+          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
+          Invoke-WebRequest -Uri $url -OutFile upx.zip
+          Expand-Archive -Path upx.zip -DestinationPath upx
+
+      - name: 使用 PyInstaller 打包成可执行文件 (Windows)
+        shell: powershell
+        run: |
+          $upxDir = "$pwd\upx\upx-5.0.0-win64"
+          if (Test-Path "$upxDir\upx.exe") {
+              icacls "$upxDir\upx.exe" /grant Everyone:F
+          }
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}"
+          } else {
+            $version = "sha-${{ github.sha }}"
+          }
+          pyinstaller --onefile `
+            --upx-dir "$upxDir" `
+            --collect-data fake_useragent `
+            --hidden-import=portalocker `
+            -i img/Tomato-downlaoder-ico.ico `
+            --name=TomatoNovelDownloader-Win64-$version `
+            --clean `
+            main.py
+
+      - name: 设置输出产物路径 (Windows)
+        id: set_artifact_path
+        shell: powershell
+        run: echo "ARTIFACT_PATH=dist\\TomatoNovelDownloader-Win64-${Env:RELEASE_TAG}.exe" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+
+  ## ── 并行构建：macOS ──
+  build-macos:
+    name: 构建 macOS 可执行文件
+    needs: fetch_and_clean
+    runs-on: macos-latest
+    outputs:
+      artifact_path: ${{ steps.set_artifact_path.outputs.ARTIFACT_PATH }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+
+      - name: Setup Python (macOS)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
+      - name: 安装 B 的构建依赖 (macOS)
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if [ -f B/requirements.txt ]; then
+            pip install -r B/requirements.txt
+          fi
+
+      - name: 编译 Cython 扩展 (macOS)
+        run: |
+          cd B
+          python setup.py build_ext --inplace
+          cd ..
+
+      - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
+        run: |
+          cp B/client_mod.*.so . || true
+
+      - name: 缓存 A 仓库的 pip 依赖 (macOS)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装 A 仓库所需依赖 (macOS)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 使用 PyInstaller 打包成可执行文件 (macOS)
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="sha-${{ github.sha }}"
+          fi
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            --hidden-import=portalocker \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
+            --clean \
+            main.py
+        env:
+          RELEASE_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+
+      - name: 设置输出产物路径 (macOS)
+        id: set_artifact_path
+        run: |
+          echo "ARTIFACT_PATH=dist/TomatoNovelDownloader-macOS_arm64-${{ needs.fetch_and_clean.outputs.tag }}.tar.gz" >> "$GITHUB_OUTPUT"
+
+  ## ── 最后一步：一次性将所有产物上传到该 Release ──
+  upload_assets:
+    name: 上传构建产物到 Release
+    needs:
+      - fetch_and_clean
+      - build-linux
+      - build-linux-arm64
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug 打印产物路径与上传信息
+        run: |
+          echo "Linux AMD64 产物：${{ needs.build-linux.outputs.artifact_path }}"
+          echo "Linux ARM64 产物：${{ needs.build-linux-arm64.outputs.artifact_path }}"
+          echo "Windows 产物：${{ needs.build-windows.outputs.artifact_path }}"
+          echo "macOS 产物：${{ needs.build-macos.outputs.artifact_path }}"
+          echo "Target Release Tag：${{ needs.fetch_and_clean.outputs.tag }}"
+        # 确认路径与 Tag 是否正确:contentReference[oaicite:28]{index=28}
+
+      - name: 上传所有构建产物 (使用 softprops/action-gh-release@v2)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.fetch_and_clean.outputs.tag }}
+          files: |
+            ${{ needs.build-linux.outputs.artifact_path }}
+            ${{ needs.build-linux-arm64.outputs.artifact_path }}
+            ${{ needs.build-macos.outputs.artifact_path }}
+            ${{ needs.build-windows.outputs.artifact_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # 将上述四个平台的产物一次性上传到 Tag 对应的 Release（覆盖旧资产）:contentReference[oaicite:29]{index=29}
