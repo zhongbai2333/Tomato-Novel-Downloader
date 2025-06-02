@@ -85,6 +85,7 @@ jobs:
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
+            --hidden-import=portalocker \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
             --clean \
@@ -165,6 +166,7 @@ jobs:
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
+            --hidden-import=portalocker \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
             --clean \
@@ -260,6 +262,7 @@ jobs:
           pyinstaller --onefile `
             --upx-dir "$upxDir" `
             --collect-data fake_useragent `
+            --hidden-import=portalocker `
             -i img/Tomato-downlaoder-ico.ico `
             --name=TomatoNovelDownloader-Win64-$version `
             --clean `
@@ -341,6 +344,7 @@ jobs:
             --exclude-module _bootlocale \
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
+            --hidden-import=portalocker \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
             --clean \
