@@ -197,53 +197,55 @@ class UpdateManager:
         self, exe_dir: Path, orig_name: str, new_with_suffix: str
     ) -> Path:
         """
-        为 Windows 生成一个 .bat 脚本，用于：
-        1. 等待当前程序退出（ping 延时）。
-        2. 删除 exe_dir 下所有以 old_prefix+"-v*.exe" 的旧版本。
-        3. 将 "{new_with_suffix}" 重命名为正确的 final_name（去掉 ".new"）。
-        4. 启动新版 exe。
-        5. 删除自身 bat 脚本。
+        Windows 下生成一个用于替换和重启的 BAT 脚本，主要流程：
+        1. 等待主程序退出（ping 延时）。
+        2. 切换到 exe_dir 目录（cd /d）。
+        3. 删除 exe_dir 下所有以 old_prefix+"-v*.exe" 的旧版本。
+        4. 将 new_with_suffix 重命名为 final_name（去掉 .new）。
+        5. start 启动新版 exe（此时工作目录已在 exe_dir）。
+        6. 删除自身 BAT 脚本。
         """
-        # old_prefix 例如 "TomatoNovelDownloader-Win64"
-        old_prefix = orig_name.rsplit("-v", 1)[0]
-        pattern = f"{old_prefix}-v*.exe"  # 用于删除通配
+        # orig_name 例如 "TomatoNovelDownloader-Win64-v1.5.1.exe"
+        old_prefix = orig_name.rsplit("-v", 1)[0]  # "TomatoNovelDownloader-Win64"
+        pattern = f"{old_prefix}-v*.exe"  # 用于删除旧版本
 
+        # 把 exe_dir 和文件名都改成字符串
         exe_dir_str = str(exe_dir)
-        new_full_path = exe_dir / new_with_suffix
         final_name = new_with_suffix.removesuffix(".new")
-        final_full_path = exe_dir / final_name
 
-        # 整理 bat 文件路径：存放在临时目录里
+        # BAT 文件写在临时目录
         bat_filename = f"update_{orig_name[:-4]}.bat"
         bat_path = Path(tempfile.gettempdir()) / bat_filename
 
-        # bat 内容：
-        bat_commands = [
+        # 下面构造 bat 内容：
+        lines = [
             "@echo off",
             "echo 等待主程序退出...",
             "ping 127.0.0.1 -n 3 > nul",
             "",
-            f":: 删除 exe_dir 下所有旧版本：{pattern}",
-            f'for %%F in ("{exe_dir_str}\\{pattern}") do (',
-            '    if exist "%%F" (',
-            '        del /F /Q "%%F"',
+            f":: 切换到可执行所在目录",
+            f'cd /d "{exe_dir_str}"',
+            "",
+            f":: 删除旧版本：{pattern}",
+            f'for %%F in ("{pattern}") do (',
+            '    if exist "%%~fF" (',
+            '        del /F /Q "%%~fF"',
             "    )",
             ")",
             "",
-            f':: 将新版本 "{new_with_suffix}" 重命名为 "{final_name}"',
-            f'if exist "{new_full_path}" (',
-            f'    ren "{new_full_path}" "{final_name}"',
+            f":: 重命名新版",
+            f'if exist "{new_with_suffix}" (',
+            f'    ren "{new_with_suffix}" "{final_name}"',
             ")",
             "",
-            "ping 127.0.0.1 -n 1 > nul",
+            ":: 启动新版，可执行工作目录已在 exe_dir",
+            f'start "" "{final_name}"',
             "",
-            ":: 启动新版",
-            f'start "" "{final_full_path}"',
-            "",
-            ":: 删除自身 bat 脚本",
+            "pause",
+            ":: 删除自身脚本",
             'del "%~f0"',
         ]
-        bat_content = "\r\n".join(bat_commands)
+        bat_content = "\r\n".join(lines)
 
         try:
             bat_path.write_text(bat_content, encoding="utf-8")
