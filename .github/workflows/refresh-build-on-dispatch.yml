@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.get_latest_tag.outputs.Tag }}
-      upload_url: ${{ steps.get_upload_url.outputs.UPLOAD_URL }}
     steps:
       - name: Checkout 仓库（完整拉取）
         uses: actions/checkout@v4
@@ -37,29 +36,19 @@ jobs:
           tag: ${{ steps.get_latest_tag.outputs.Tag }}
           deleteOnlyFromDrafts: false
 
-      - name: 获取对应 Release 的 upload_url
-        id: get_upload_url
-        run: |
-          RELEASE_JSON=$(curl -s \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ steps.get_latest_tag.outputs.Tag }}")
-          UPLOAD_URL=$(echo "$RELEASE_JSON" | jq -r '.upload_url' | sed -E 's|\{\?name,label\}||')
-          echo "UPLOAD_URL=$UPLOAD_URL" >> "$GITHUB_OUTPUT"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       # ── 新增步骤：创建并上传“刷新提示”文件 ──
       - name: 创建刷新提示文件
         run: |
           echo "刷新构建中，请稍后再试" > 刷新构建中，请稍后再试.txt
-
-      - name: 上传刷新提示文件到 Release
-        run: |
-          curl -s -X POST "${{ steps.get_upload_url.outputs.UPLOAD_URL }}?name=刷新构建中，请稍后再试.txt" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: text/plain" \
-            --data-binary @刷新构建中，请稍后再试.txt
+        
+      - name: 传刷新提示文件到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_latest_tag.outputs.Tag }}
+          files: |
+            刷新构建中，请稍后再试.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   ## ── 并行构建：Linux AMD64 ──
   build-linux:
@@ -411,6 +400,13 @@ jobs:
           echo "Windows 产物：${{ needs.build-windows.outputs.artifact_path }}"
           echo "macOS 产物：${{ needs.build-macos.outputs.artifact_path }}"
           echo "Target Release Tag：${{ needs.fetch_and_clean.outputs.tag }}"
+    
+      - name: 删除最新 Release 下所有旧资产
+        uses: andreaswilli/delete-release-assets-action@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.fetch_and_clean.outputs.tag }}
+          deleteOnlyFromDrafts: false
 
       - name: 上传所有构建产物 (使用 softprops/action-gh-release@v2)
         uses: softprops/action-gh-release@v2
@@ -423,20 +419,3 @@ jobs:
             ${{ needs.build-windows.outputs.artifact_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 删除刷新提示文件
-        run: |
-          # 获取 Release 资产列表
-          ASSETS_JSON=$(curl -s \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ needs.fetch_and_clean.outputs.tag }}")
-          # 找到名为 刷新构建中，请稍后再试.txt 的 asset id
-          ASSET_ID=$(echo "$ASSETS_JSON" | jq -r '.assets[] | select(.name=="刷新构建中，请稍后再试.txt") .id')
-          if [ "$ASSET_ID" != "null" ] && [ -n "$ASSET_ID" ]; then
-            # 删除该 asset
-            curl -s -X DELETE \
-              -H "Accept: application/vnd.github.v3+json" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID"
-          fi
