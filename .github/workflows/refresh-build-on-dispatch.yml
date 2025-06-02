@@ -39,14 +39,14 @@ jobs:
       # ── 新增步骤：创建并上传“刷新提示”文件 ──
       - name: 创建刷新提示文件
         run: |
-          echo "刷新构建中，请稍后再试" > 刷新构建中，请稍后再试.txt
+          echo "刷新构建中，请稍后再试" > "刷新构建中，请稍后再试.txt"
         
       - name: 传刷新提示文件到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_latest_tag.outputs.Tag }}
           files: |
-            刷新构建中，请稍后再试.txt
+            "刷新构建中，请稍后再试.txt"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
