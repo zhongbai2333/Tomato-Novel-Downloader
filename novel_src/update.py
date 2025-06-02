@@ -244,7 +244,7 @@ del "%~f0"
 
     def check_for_updates(self) -> bool:
         """
-        …（同前面示例，匹配 asset 时同时判断 plat_key 和 tag_name）…
+        …（前面版本判断的逻辑保持不变）…
         """
         info = self.fetch_latest_release()
         if info is None:
@@ -255,7 +255,7 @@ del "%~f0"
             self.logger.error("Error: 未获取到最新 Release 的 tag_name")
             return True
 
-        # 1. 版本号不同
+        # 1. 版本号不同 —— 完整升级逻辑（保持原样）
         if latest_tag != self.local_version:
             self.logger.info(
                 f"检测到新版本：{latest_tag}，当前版本：{self.local_version}"
@@ -265,15 +265,19 @@ del "%~f0"
                 plat_key = self.detect_platform_keyword()
                 asset_url = None
                 asset_name = None
+                asset_digest = None  # 用于存储云端提供的 sha256 值
                 for asset in info.get("assets", []):
                     name = asset.get("name", "")
-                    # 同时匹配平台关键字和版本号
                     if (
                         plat_key.lower() in name.lower()
                         and latest_tag.lower() in name.lower()
                     ):
                         asset_url = asset.get("browser_download_url")
                         asset_name = name
+                        # 直接从 asset 字段里取 digest
+                        digest_field = asset.get("digest", "")  # 形如 "sha256:<hex>"
+                        if digest_field.startswith("sha256:"):
+                            asset_digest = digest_field.split("sha256:")[-1]
                         break
 
                 if not asset_url:
@@ -288,47 +292,54 @@ del "%~f0"
 
                 self.logger.info("正在应用完整升级...")
                 self.apply_update(tmp_path)
-                # Windows 下会在 apply_update 里 sys.exit(0)
-                # Linux/macOS 下会在 execv 后替换进程
                 return False
-
             else:
                 self.logger.warning("已取消升级，继续使用旧版本。")
                 return False
 
-        # 2. 版本号相同：检查热补丁
+        # 2. 版本号相同：检查热补丁 —— 使用 digest 字段直接比较，无需先下载
         self.logger.info(
-            f"当前版本 ({self.local_version}) 与最新版本一致，检查是否有热补丁更新..."
+            f"当前版本 ({self.local_version}) 与最新版本一致，使用云端 digest 检查是否有热补丁..."
         )
-        local_hash = self.compute_file_sha256(self.local_executable)
+        # 2.1 先计算本地可执行的 SHA256
+        try:
+            local_hash = self.compute_file_sha256(self.local_executable)
+        except Exception as e:
+            self.logger.error(f"计算本地可执行文件哈希时出错：{e}")
+            return True
+
         plat_key = self.detect_platform_keyword()
         asset_url = None
         asset_name = None
+        asset_digest = None  # 云端 sha256（不含前缀）
         for asset in info.get("assets", []):
             name = asset.get("name", "")
             if plat_key.lower() in name.lower() and latest_tag.lower() in name.lower():
                 asset_url = asset.get("browser_download_url")
                 asset_name = name
+                # 读取 digest 字段
+                digest_field = asset.get("digest", "")
+                if digest_field.startswith("sha256:"):
+                    asset_digest = digest_field.split("sha256:")[-1]
                 break
 
-        if not asset_url:
+        if not asset_url or not asset_digest:
             self.logger.warning(
-                "Warning: 未找到对应平台/版本的发布资产，无法检查热补丁。"
+                "Warning: 未找到对应平台/版本的发布资产或缺少 digest，无法检查热补丁。"
             )
             return True
 
-        self.logger.info(f"正在下载最新热补丁文件 ({asset_name}) 以计算哈希...")
-        tmp_asset = self.download_asset(asset_url)
-        remote_hash = self.compute_file_sha256(tmp_asset)
         self.logger.info(f"本地哈希:  {local_hash}")
-        self.logger.info(f"远程哈希: {remote_hash}")
+        self.logger.info(f"云端哈希: {asset_digest}")
 
-        if local_hash != remote_hash:
-            self.logger.info("检测到热补丁更新，正在应用...")
+        # 2.2 直接比较本地 hash 和 云端 digest
+        if local_hash != asset_digest:
+            self.logger.info("检测到热补丁更新，开始下载并应用...")
+            tmp_asset = self.download_asset(asset_url)
             self.apply_update(tmp_asset)
             return False
         else:
-            self.logger.info("本地文件已是最新，无需更新。")
+            self.logger.info("本地已与云端哈希一致，无需更新。")
 
         return True
 
