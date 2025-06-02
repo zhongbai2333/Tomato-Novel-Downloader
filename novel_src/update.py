@@ -233,58 +233,29 @@ start "" "{final_full_str}"
 :: 删除这个批处理脚本自身
 del "%~f0"
 """
-        debug_bat_content = f"""@echo off
-rem ------------------- 调试日志开始 -------------------
-echo [BAT 调试] 执行时间: %date% %time% >> "%TEMP%\bat_debug.txt"
-echo [BAT 调试] exe_dir = "%~dp0" >> "%TEMP%\bat_debug.txt"
-echo [BAT 调试] new_with_suffix = "%~dp0\%~n0.new%" >> "%TEMP%\bat_debug.txt"
-echo [BAT 调试] final_name = "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
-rem ----------------------------------------------------
+        debug_bat_content = f"""echo 等待主程序退出...
+ping 127.0.0.1 -n 3 > nul
 
-echo 等待主程序退出...
-rem 用 timeout/循环检测，让主程序一定退出才继续
-:waitloop
-tasklist /FI "IMAGENAME eq TomatoNovelDownloader-Win64-*.exe" | findstr /I "TomatoNovelDownloader-Win64" > nul
-if "%ERRORLEVEL%"=="0" (
-  timeout /T 1 /NOBREAK > nul
-  goto waitloop
-)
-
-rem 删除旧版本
-for %%F in ("%~dp0\TomatoNovelDownloader-Win64-v*.exe") do (
+:: 删除可执行目录下所有 "{pattern_prefix}*.exe" 旧版本
+for %%F in ("{exe_dir}\\{pattern_prefix}*.exe") do (
     if exist "%%F" (
-        echo [BAT 调试] 删除旧文件：%%F >> "%TEMP%\bat_debug.txt"
         del /F /Q "%%F"
     )
 )
 
-rem 重命名 .new 文件到正式 exe（只保留文件名部分，路径保持 %~dp0）
-if exist "%~dp0\%~n0.new%" (
-    echo [BAT 调试] 重命名 "%~dp0\%~n0.new%" -> "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
-    ren "%~dp0\%~n0.new%" "%~n0%"
-) else (
-    echo [BAT 调试] 找不到 "%~dp0\%~n0.new%"，无法重命名! >> "%TEMP%\bat_debug.txt"
+:: 将新版本 "{new_with_suffix}" 改名为 "{final_name}"
+if exist "{new_full_str}" (
+    ren "{new_full_str}" "{final_name}"
 )
 
-rem 切换到 exe 所在目录，确保后续启动的工作目录正确
-pushd "%~dp0"
+:: 启动新版
+start "" "{final_full_str}"
 
-rem 启动新版可执行
-echo [BAT 调试] 开始启动 "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
-start "" "%~dp0\%~n0%"
-
-rem 等待几秒，确认启动有没有抛错（可选）
-timeout /T 2 /NOBREAK > nul
-
-popd
-
-rem 删除自己
-echo [BAT 调试] 删除自身："%~f0" >> "%TEMP%\bat_debug.txt"
-del "%~f0"
+pause
 """
 
         try:
-            with open(bat_path, "w", encoding="utf-8") as f:
+            with open(bat_path, "w") as f:
                 if self.debug:
                     f.write(debug_bat_content)
                 else:
