@@ -241,8 +241,7 @@ def main() -> None:
     manager = None
     downloader = None
 
-    if not log_system.debug:
-        update.check_for_updates()
+    update.check_for_updates()
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}

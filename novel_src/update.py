@@ -27,6 +27,7 @@ class UpdateManager:
         # "C:\\Program Files\\TomatoNovelDownloader\\TomatoNovelDownloader-Win64-v1.5.1.exe"
         self.local_executable = Path(sys.argv[0]).resolve()
         self.logger = GlobalContext.get_logger()
+        self.debug = GlobalContext.get_log_system().debug
 
     @staticmethod
     def compute_file_sha256(file_path: Path) -> str:
@@ -232,10 +233,62 @@ start "" "{final_full_str}"
 :: 删除这个批处理脚本自身
 del "%~f0"
 """
+        debug_bat_content = f"""@echo off
+rem ------------------- 调试日志开始 -------------------
+echo [BAT 调试] 执行时间: %date% %time% >> "%TEMP%\bat_debug.txt"
+echo [BAT 调试] exe_dir = "%~dp0" >> "%TEMP%\bat_debug.txt"
+echo [BAT 调试] new_with_suffix = "%~dp0\%~n0.new%" >> "%TEMP%\bat_debug.txt"
+echo [BAT 调试] final_name = "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
+rem ----------------------------------------------------
+
+echo 等待主程序退出...
+rem 用 timeout/循环检测，让主程序一定退出才继续
+:waitloop
+tasklist /FI "IMAGENAME eq TomatoNovelDownloader-Win64-*.exe" | findstr /I "TomatoNovelDownloader-Win64" > nul
+if "%ERRORLEVEL%"=="0" (
+  timeout /T 1 /NOBREAK > nul
+  goto waitloop
+)
+
+rem 删除旧版本
+for %%F in ("%~dp0\TomatoNovelDownloader-Win64-v*.exe") do (
+    if exist "%%F" (
+        echo [BAT 调试] 删除旧文件：%%F >> "%TEMP%\bat_debug.txt"
+        del /F /Q "%%F"
+    )
+)
+
+rem 重命名 .new 文件到正式 exe（只保留文件名部分，路径保持 %~dp0）
+if exist "%~dp0\%~n0.new%" (
+    echo [BAT 调试] 重命名 "%~dp0\%~n0.new%" -> "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
+    ren "%~dp0\%~n0.new%" "%~n0%"
+) else (
+    echo [BAT 调试] 找不到 "%~dp0\%~n0.new%"，无法重命名! >> "%TEMP%\bat_debug.txt"
+)
+
+rem 切换到 exe 所在目录，确保后续启动的工作目录正确
+pushd "%~dp0"
+
+rem 启动新版可执行
+echo [BAT 调试] 开始启动 "%~dp0\%~n0%" >> "%TEMP%\bat_debug.txt"
+start "" "%~dp0\%~n0%"
+
+rem 等待几秒，确认启动有没有抛错（可选）
+timeout /T 2 /NOBREAK > nul
+
+popd
+
+rem 删除自己
+echo [BAT 调试] 删除自身："%~f0" >> "%TEMP%\bat_debug.txt"
+del "%~f0"
+"""
 
         try:
             with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_content)
+                if self.debug:
+                    f.write(debug_bat_content)
+                else:
+                    f.write(bat_content)
         except Exception as e:
             self.logger.error(f"无法生成 Windows 更新脚本 {bat_path}：{e}")
             raise
@@ -334,10 +387,18 @@ del "%~f0"
 
         # 2.2 直接比较本地 hash 和 云端 digest
         if local_hash != asset_digest:
-            self.logger.info("检测到热补丁更新，开始下载并应用...")
-            tmp_asset = self.download_asset(asset_url)
-            self.apply_update(tmp_asset)
-            return False
+            if self.debug:
+                choice = input("是否下载并升级到最新版？[Y/n]: ").strip().lower()
+                if choice in ("", "y", "yes"):
+                    self.logger.info("检测到热补丁更新，开始下载并应用...")
+                    tmp_asset = self.download_asset(asset_url)
+                    self.apply_update(tmp_asset)
+                    return False
+            else:
+                self.logger.info("检测到热补丁更新，开始下载并应用...")
+                tmp_asset = self.download_asset(asset_url)
+                self.apply_update(tmp_asset)
+                return False
         else:
             self.logger.info("本地已与云端哈希一致，无需更新。")
 
