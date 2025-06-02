@@ -8,7 +8,7 @@ on:
       - '**.py'             # 所有 Python 文件变化
       - 'requirements.txt'  # 依赖清单
       - 'img/**'            # 图标资源目录
-      - '.github/workflows/**' # 工作流文件本身的变化
+      - '.github/workflows/build-executable.yml' # 工作流文件本身的变化
   pull_request:
   workflow_dispatch:
 
