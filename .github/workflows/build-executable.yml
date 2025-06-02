@@ -10,6 +10,7 @@ on:
       - 'img/**'            # 图标资源目录
       - '.github/workflows/**' # 工作流文件本身的变化
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-linux:
