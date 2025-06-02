@@ -241,7 +241,6 @@ class UpdateManager:
             ":: 启动新版，可执行工作目录已在 exe_dir",
             f'start "" "{final_name}"',
             "",
-            "pause",
             ":: 删除自身脚本",
             'del "%~f0"',
         ]
@@ -287,14 +286,14 @@ class UpdateManager:
                 bat_path = self._create_windows_updater_bat(
                     exe_dir, orig_name, new_with_suffix
                 )
-                subprocess.Popen(
-                    f'"{bat_path}"',
-                    shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
                 self.logger.info(
                     "[UpdateManager] 已启动 Windows 更新脚本，主程序即将退出。"
+                )
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "", str(bat_path)],
+                    shell=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
                 sys.exit(0)
             except Exception as e:
