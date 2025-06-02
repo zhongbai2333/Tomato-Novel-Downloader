@@ -16,4 +16,17 @@ soupsieve
 tqdm
 typing_extensions
 urllib3
+certifi
+charset-normalizer
+Cython
+idna
+Naked
 portalocker
+pycryptodome
+pywin32; sys_platform == "win32"
+PyYAML
+requests
+setuptools
+shellescape
+urllib3
+
