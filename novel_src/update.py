@@ -196,12 +196,14 @@ class UpdateManager(object):
             f'    ren "{str(new_executable.name) + ".new"}" "{str(new_executable.name)}"',
             ")",
             "",
+            'del "%~f0"',
+            "",
             f'start "" "{str(new_executable.name)}"',
         ]
         bat_content = "\r\n".join(lines)
 
         try:
-            bat_path = tmp_file.parent / "update.bat"
+            bat_path = local_executable.parent / "update.bat"
             bat_path.write_text(bat_content, encoding="utf-8")
         except Exception as e:
             raise RuntimeError(f"无法写入 Windows 更新脚本 {bat_path}：{e}")
