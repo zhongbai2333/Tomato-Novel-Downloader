@@ -164,7 +164,7 @@ class UpdateManager(object):
         if local_executable.exists():
             local_executable.unlink(missing_ok=True)
         shutil.move(str(tmp_file), str(local_executable.parent))
-        new_executable = local_executable.parent / local_executable.name
+        new_executable = local_executable.parent / tmp_file.name
         new_executable.chmod(0o755)
         self.logger.info(
             f"[UpdateManager] 更新成功，已将 {tmp_file} 移动到 {local_executable}"
@@ -176,7 +176,7 @@ class UpdateManager(object):
         Windows 系统下的更新逻辑
         """
         local_executable = Path(sys.argv[0]).resolve()
-        new_executable = local_executable.parent / local_executable.name
+        new_executable = local_executable.parent / tmp_file.name
         shutil.move(str(tmp_file), str(new_executable) + ".new")
 
         lines = [
@@ -250,15 +250,16 @@ class UpdateManager(object):
     def check_for_updates(self, auto_ture: bool = False) -> None:
         """检查是否有可用更新"""
         self.logger.info("[UpdateManager] 正在检查更新...")
+        current_version = f"v{VERSION}"
         latest_release = self._get_latest_release()
         if not latest_release:
             self.logger.info(
                 "[UpdateManager] 无法获取最新版本信息，可能网络异常或 GitHub API 出错。"
             )
             return
-        if latest_release["tag_name"] != VERSION:
+        if latest_release["tag_name"] != current_version:
             self.logger.info(
-                f"[UpdateManager] 检测到新版本：{latest_release['tag_name']}，当前：{VERSION}"
+                f"[UpdateManager] 检测到新版本：{latest_release['tag_name']}，当前：{current_version}"
             )
             choice = input("是否下载并升级到最新版？[Y/n]: ").strip().lower()
             if choice in ("", "y", "yes") or auto_ture:
@@ -272,7 +273,7 @@ class UpdateManager(object):
                 return
         else:
             self.logger.info(
-                f"[UpdateManager] 本地版本 ({VERSION}) 与最新相同，检查热补丁..."
+                f"[UpdateManager] 本地版本 ({current_version}) 与最新相同，检查热补丁..."
             )
             if self._get_self_hash() != latest_release["sha256"].lower():
                 self.logger.info("[UpdateManager] 检测到热补丁更新，正在应用...")
