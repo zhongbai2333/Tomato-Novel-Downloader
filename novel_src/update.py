@@ -196,9 +196,9 @@ class UpdateManager(object):
             f'    ren "{str(new_executable.name) + ".new"}" "{str(new_executable.name)}"',
             ")",
             "",
-            'del "%~f0"',
-            "",
             f'start "" "{str(new_executable.name)}"',
+            "",
+            'del "%~f0"',
         ]
         bat_content = "\r\n".join(lines)
 
