@@ -85,7 +85,19 @@ class LogSystem(object):
         self._setup_signal_handlers()
         self._setup_directories()
         self._configure_logging()
+        self._setup_exception_hook()
         atexit.register(self.safe_exit)
+
+    def _setup_exception_hook(self):
+        """记录所有未捕获异常"""
+        def handle_exception(exc_type, exc_value, exc_traceback):
+            if issubclass(exc_type, KeyboardInterrupt):
+                # 用户中断不记录
+                sys.__excepthook__(exc_type, exc_value, exc_traceback)
+                return
+            self.logger.error("未捕获异常：", exc_info=(exc_type, exc_value, exc_traceback))
+
+        sys.excepthook = handle_exception
 
     def _setup_signal_handlers(self):
         """设置跨平台信号/事件处理"""

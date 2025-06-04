@@ -196,6 +196,7 @@ class UpdateManager(object):
             f'    ren "{str(new_executable.name) + ".new"}" "{str(new_executable.name)}"',
             ")",
             "",
+            "set PYINSTALLER_RESET_ENVIRONMENT=1",
             f'start "" "{str(new_executable.name)}"',
             "",
             'del "%~f0"',
@@ -208,6 +209,10 @@ class UpdateManager(object):
         except Exception as e:
             raise RuntimeError(f"无法写入 Windows 更新脚本 {bat_path}：{e}")
         try:
+            env = os.environ.copy()
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"     # 关键！
+            env.pop("_PYI_APPLICATION_HOME_DIR", None)     # 保险起见
+            env.pop("_MEIPASS2", None)
             subprocess.Popen(
                 f'"{bat_path}"',
                 shell=True,
