@@ -1,423 +1,989 @@
-import re
+from __future__ import annotations
+
 import os
+import re
 import sys
-import time
 import json
+import urwid
 import shutil
 from pathlib import Path
-from typing import Optional, List, Tuple
-from logging import Logger
+from typing import Callable, List, Tuple, Optional, Dict
 from urllib.parse import urlparse, parse_qs
 from ascii_magic import AsciiArt
 
-from .base_system.context import GlobalContext, Config
-from .base_system.storge_system import FileCleaner
-from .book_parser.book_manager import BookManager
-from .network_parser.network import NetworkClient
-from .network_parser.downloader import ChapterDownloader
-from .update import UpdateManager
-from .constants import VERSION
+# =============== 原项目内部依赖 ===============
+from .base_system.context import GlobalContext, Config  # noqa: E402
+from .base_system.log_system import LogSystem  # noqa: E402
+from .base_system.storge_system import FileCleaner  # noqa: E402
+from .book_parser.book_manager import BookManager  # noqa: E402
+from .network_parser.network import NetworkClient  # noqa: E402
+from .network_parser.downloader import ChapterDownloader  # noqa: E402
+from .update import UpdateManager  # noqa: E402
+from .constants import VERSION  # noqa: E402
+
+# ------------------------------------------------------------
+# 通用工具函数（与 UI 无关）
+# ------------------------------------------------------------
 
 
-def show_config_menu(config: Config):
-    """显示配置菜单"""
-    print("\n=== 配置选项 ===")
-    options = {
-        "1": {"name": "保存路径", "field": "save_path", "type": str},
-        "2": {"name": "最大线程数", "field": "max_workers", "type": int},
-        "3": {"name": "请求超时(秒)", "field": "request_timeout", "type": int},
-        "4": {"name": "最大重试次数", "field": "max_retries", "type": int},
-        "5": {"name": "最小等待时间(ms)", "field": "min_wait_time", "type": int},
-        "6": {"name": "最大等待时间(ms)", "field": "max_wait_time", "type": int},
-        "7": {
-            "name": "优雅退出模式[True/False]",
-            "field": "graceful_exit",
-            "type": bool,
-        },
-        "8": {"name": "小说保存格式[txt/epub]", "field": "novel_format", "type": str},
-        "9": {
-            "name": "是否自动清理缓存文件[True/False]",
-            "field": "auto_clear_dump",
-            "type": bool,
-        },
-        "A": {
-            "name": "是否使用官方API[功能不可用][True/False]",
-            "field": "use_official_api",
-            "type": bool,
-        },
-        "B": {
-            "name": "是否使用helloplhm_qwq API[True/False]",
-            "field": "use_helloplhm_qwq_api",
-            "type": bool,
-        },
-        "C": {
-            "name": "是否以散装的形式保存小说[True/False]",
-            "field": "bulk_files",
-            "type": bool,
-        },
-        "0": {"name": "返回主菜单"},
-    }
-
-    while True:
-        print("\n当前配置：")
-        for key in sorted(options.keys()):
-            if key == "0":
-                continue
-            opt = options[key]
-            current_value = getattr(config, opt["field"], "N/A")
-            print(f"{key}. {opt['name']}: {current_value}")
-        print("0. 返回主菜单")
-
-        choice = input("\n请选择要修改的配置项：").strip().upper()
-
-        if choice == "0":
-            break
-
-        if choice not in options:
-            print("无效选项，请重新输入")
-            continue
-
-        if choice == "0":
-            break
-
-        # 获取配置项元数据
-        opt = options[choice]
-        field = opt["field"]
-        value_type = opt["type"]
-        current_value = getattr(config, field)
-
-        # 显示当前值并获取新值
-        print(f"\n当前 {opt['name']}: {current_value}")
-        new_value = input("请输入新值（留空取消修改）: ").strip()
-
-        if not new_value:
-            print("修改已取消")
-            continue
-
-        # 验证并转换值类型
-        try:
-            if value_type == bool:
-                converted = new_value.lower() in ("true", "1", "yes")
-            else:
-                converted = value_type(new_value)
-        except ValueError:
-            print(f"无效值类型，需要 {value_type.__name__}")
-            continue
-
-        # 特殊验证逻辑
-        if field == "max_workers":
-            if converted < 1 or converted > 16:
-                print("线程数必须在1-16之间")
-                continue
-        elif field in ("min_wait_time", "max_wait_time"):
-            if converted < 0:
-                print("等待时间不能为负数")
-                continue
-        elif field == "request_timeout":
-            if converted < 5:
-                print("请求超时时间不能小于5秒")
-                continue
-        elif field == "novel_format":
-            if converted not in ["txt", "epub"]:
-                print("格式应为txt或epub")
-                continue
-        elif field == "save_path":
-            converted = converted.rstrip("/")
-
-        # 更新配置
-        setattr(config, field, converted)
-        print(f"{opt['name']} 已更新为 {converted}")
-
-        # 立即保存配置
-        try:
-            config.save()
-            print("配置已保存")
-        except Exception as e:
-            print(f"保存配置失败: {str(e)}")
-
-
-def load_download_status(status_path: Path) -> dict:
-    """
-    读取并返回 status_path 对应的 JSON 数据，失败时返回空 dict。
-    """
-    try:
-        with status_path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError as e:
-        # 如果日志中需要详细信息，可以：logger.error(f"JSON 解析错误：{e}")
-        return {}
-
-
-def update_menu(
-    config: Config, logger: Logger, network: NetworkClient
-) -> Optional[str]:
-    """
-    检查本地保存目录下可更新的小说，并让用户选择要更新的书籍 ID。
-    返回选中书籍的 book_id，或在取消/无可更新时返回 None。
-    """
-    save_dir: Path = Path(config.default_save_dir)
-    subdirs = list_subdirs(save_dir)  # 假设返回的都是子文件夹名列表
-
-    if not subdirs:
-        logger.info("没有可供更新的小说")
-        return None
-
-    choices: List[Tuple[str, str]] = []
-    for folder in subdirs:
-        if "_" not in folder:
-            continue
-
-        book_id, book_name = folder.split("_", 1)
-        try:
-            chapters = network.fetch_chapter_list(book_id)
-        except Exception as e:
-            logger.error(f"获取章节列表失败：{book_id}，原因：{e}")
-            continue
-
-        status_path = save_dir / folder / f"chapter_status_{book_id}.json"
-        status = load_download_status(status_path)
-        downloaded = status.get("downloaded", {})
-        new_count = max(len(chapters) - len(downloaded), 0)
-
-        choices.append((book_id, f"《{book_name}》({book_id}) — 新章节：{new_count}"))
-
-    if not choices:
-        logger.info("没有合法格式且可更新的小说")
-        return None
-
-    logger.info("===== 可供更新的小说列表 =====")
-    for idx, (_id, desc) in enumerate(choices, start=1):
-        logger.info(f"{idx}. {desc}")
-
-    while True:
-        user_input = input("请输入编号 (输入 q 退出)：").strip().lower()
-        if user_input == "q":
-            logger.info("已取消更新")
-            return None
-
-        if not user_input.isdigit():
-            print("错误：请输入数字编号或 q 退出。")
-            continue
-
-        idx = int(user_input)
-        if 1 <= idx <= len(choices):
-            selected_id = choices[idx - 1][0]
-            logger.info(f"已选择更新：{choices[idx - 1][1]}")
-            return selected_id
-
-        print(f"错误：请输入 1 到 {len(choices)} 之间的数字。")
-
-
-def list_subdirs(path):
-    """
-    返回指定目录下所有一级子文件夹的名称列表（不含文件）。
-    """
+def list_subdirs(path: Path | str) -> List[str]:
+    """返回指定目录下所有一级子文件夹的名称列表（不含文件）。"""
     return [
         name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))
     ]
 
 
-def preview_ascii(image_path):
+def load_download_status(status_path: Path) -> dict:
+    """读取并返回 status_path 对应的 JSON 数据，失败时返回空 dict。"""
+    try:
+        with status_path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def preview_ascii(image_path: Path):
+    """在终端中渲染封面 ASCII 图（若失败则静默）。"""
     try:
         cols, _ = shutil.get_terminal_size(fallback=(80, 24))
         code_cols = int((cols - 8) / 2)
-        print("=" * code_cols + "封面预览" + "=" * code_cols)
-        # 转换为ASCII
-        art = AsciiArt.from_image(image_path)
+        print("=" * code_cols + " 封面预览 " + "=" * code_cols)
+        art = AsciiArt.from_image(str(image_path))
         art.to_terminal(columns=cols)
-    except Exception as e:
-        print(f"生成预览失败：{e}")
+    except Exception as e:  # noqa: BLE001
+        logger = GlobalContext.get_logger()
+        logger.debug(f"生成 ASCII 预览失败: {e}")
 
 
-def main() -> None:
-    """主程序"""
-    logger = GlobalContext.get_logger()
-    config = GlobalContext.get_config()
-    log_system = GlobalContext.get_log_system()
-    network = NetworkClient()
-    update = UpdateManager()
-    manager = None
-    downloader = None
+# ------------------------------------------------------------
+# urwid 相关组件
+# ------------------------------------------------------------
 
-    update.check_for_updates()
+PALETTE = [
+    ("reversed", "standout", ""),
+    ("title", "light cyan", ""),
+]
 
-    logger.info(
-        f"""欢迎使用番茄小说下载器! v{VERSION}
-项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader
-Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
-作者: zhongbai233 (https://github.com/zhongbai2333)
-项目早期代码: Dlmily (https://github.com/Dlmily)
 
-项目说明: 此项目基于Dlmily的项目Fork而来, 我对其进行重构 + 优化, 添加更对功能, 包括: EPUB下载支持、更好的断点传输、更好的错误管理等特性
-本项目[完全]基于第三方API, [未]使用官方API, 如有需要可以查看Dlmily的项目
-本项目仅供 Python 网络爬虫技术、网页数据处理及相关研究的学习用途。请勿将其用于任何违反法律法规或侵犯他人权益的活动。
-"""
+def menu_button(label: str, on_press: Callable[[urwid.Button], None]):
+    """生成带反色焦点的菜单按钮。"""
+    button = urwid.Button(label)
+    urwid.connect_signal(button, "click", on_press)
+    return urwid.AttrMap(button, None, focus_map="reversed")
+
+
+class MessagePopup(urwid.WidgetWrap):
+    """
+    简单弹窗：显示一段文本，按 q / Enter / Esc 时会调用 on_close 回调。
+    """
+
+    def __init__(self, text: str, on_close: Callable[[], None], width: int = 60):
+        self.on_close = on_close
+        body = urwid.Filler(urwid.Text(text + "\n\n<按 q 返回>"), valign="top")
+        frame = urwid.LineBox(body)
+        # Overlay 的底部会由外部传入
+        super().__init__(urwid.AttrMap(frame, None))
+
+    def keypress(self, size, key):  # noqa: D401, N802
+        if key in ("q", "Q", "enter", "esc"):
+            # 调用关闭回调，恢复到原来的界面
+            self.on_close()
+            return None
+        # 其他按键仍然按 Urwid 默认行为处理
+        return super().keypress(size, key)
+
+
+# ------------------------------------------------------------
+# 各页面 widget
+# ------------------------------------------------------------
+
+
+class AboutPage(urwid.WidgetWrap):
+    """“关于”页面，显示项目描述和作者信息。"""
+
+    TEXT = (
+        "项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader\n"
+        "Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite\n"
+        "作者: zhongbai233 (https://github.com/zhongbai2333)\n"
+        "项目早期代码: Dlmily (https://github.com/Dlmily)\n\n"
+        "项目说明: 此项目基于 Dlmily 的项目 Fork 而来, 我对其进行重构+优化,\n"
+        "添加更多功能, 包括: EPUB 下载支持、更好的断点传输、更好的错误管理等。\n"
+        "本项目 *完全* 基于第三方 API, 未使用官方 API。\n"
+        "本项目仅供 Python 网络爬虫技术、网页数据处理及相关研究的学习用途,\n"
+        "请勿将其用于任何违反法律法规或侵犯他人权益的活动。"
     )
 
-    try:
-        while True:
-            user_input = input(
-                "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入u进入更新菜单 输入q退出）："
-            ).strip()
+    def __init__(self, app: "TNDApp"):
+        self.app = app
+        txt = urwid.Text(self.TEXT)
+        back_btn = menu_button("返回主菜单", lambda btn: self.app.show_main())
+        piled = urwid.Pile(
+            [
+                urwid.Text(("title", "关于 / About")),
+                urwid.Divider(),
+                txt,
+                urwid.Divider(),
+                back_btn,
+            ]
+        )
+        super().__init__(urwid.LineBox(urwid.Filler(piled, "top")))
 
-            if user_input == "":
-                continue
-            if user_input.lower() == "q":
-                break
-            if user_input.lower() == "s":
-                show_config_menu(config)
-                continue
 
-            book_id = None
+def menu_button(label: str, callback):
+    btn = urwid.Button(label)
+    urwid.connect_signal(btn, "click", callback)
+    return urwid.AttrMap(btn, None, focus_map="reversed")
 
-            if user_input.lower() == "u":
-                book_id = update_menu(config, logger, network)
-                if book_id is None:
-                    continue
 
-            if not book_id:
-                # 1. 首先尝试从文本中提取 URL
-                urls = re.findall(r"(https?://[^\s]+)", user_input)
-                if urls:
-                    url_str = urls[0]  # 取第一个找到的链接
-                    parsed = urlparse(url_str)
-                    # 尝试解析 /page/<book_id> 模式
-                    m = re.search(r"/page/(\d+)", parsed.path)
-                    if m:
-                        book_id = m.group(1)
-                    else:
-                        # 从 query 参数中尝试获取 book_id 或 bookId
-                        qs = parse_qs(parsed.query)
-                        bid_list = qs.get("book_id") or qs.get("bookId")
-                        if bid_list:
-                            book_id = bid_list[0]
+class ConfigMenu(urwid.WidgetPlaceholder):
+    """配置编辑页面：
+    - 布尔型选项用复选框 (CheckBox)；
+    - “官方 API” 与 “helloplhm_qwq API” 互斥；
+    - 当 helloplhm_qwq API 为 True 时，强制 max_workers=1，min_wait_time ≥ 1000，max_wait_time ≥ 1200。
+    """
 
-                    if not book_id:
-                        logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
-                        continue
+    # 配置项元数据：显示名称 -> (Config 属性名, 类型)
+    OPTIONS = {
+        "保存路径": ("save_path", str),
+        "最大线程数": ("max_workers", int),
+        "请求超时(秒)": ("request_timeout", int),
+        "最大重试次数": ("max_retries", int),
+        "最小等待时间(ms)": ("min_wait_time", int),
+        "最大等待时间(ms)": ("max_wait_time", int),
+        "小说保存格式(txt/epub)": ("novel_format", str),
+        "优雅退出模式": ("graceful_exit", bool),
+        "是否自动清理缓存文件": ("auto_clear_dump", bool),
+        "是否使用官方API": ("use_official_api", bool),
+        "是否使用 helloplhm_qwq API": ("use_helloplhm_qwq_api", bool),
+        "是否以散装形式保存小说": ("bulk_files", bool),
+    }
 
-            # 2. 如果没有提取到 URL，再判断是否为纯数字 ID
-            if not book_id:
-                if user_input.isdigit():
-                    book_id = user_input
+    def __init__(self, app: "TNDApp"):
+        # 初始化时先用空白占位，接着 build 出真正的界面
+        super().__init__(urwid.SolidFill())
+        self.app = app
+        self._build_view()
+
+    def _build_view(self):
+        """
+        根据当前 config 的值重新构建整个页面。布尔项使用 CheckBox，
+        其他项仍然用“点击弹编辑框”方式。
+        """
+        cfg = self.app.config
+        body: List[urwid.Widget] = [
+            urwid.Text(("title", "配置菜单 (按 q 返回)"), align="center"),
+            urwid.Divider(),
+        ]
+
+        for name, (field, typ) in self.OPTIONS.items():
+            cur_val = getattr(cfg, field, "N/A")
+
+            # ----- 布尔型配置：用 CheckBox -----
+            if typ is bool:
+                # Create a CheckBox and capture `field` via default arg in lambda
+                cb = urwid.CheckBox(label=name, state=bool(cur_val))
+                urwid.connect_signal(
+                    cb,
+                    "change",
+                    lambda checkbox, new_state, f=field: self._on_bool_toggle(
+                        f, new_state
+                    ),
+                )
+                body.append(cb)
+
+            # ----- 其他类型：点击按钮弹出编辑框 -----
+            else:
+                label = f"{name}: {cur_val}"
+                # 用 default arguments 把 field、typ、name “冻结”到 callback 里
+                body.append(
+                    menu_button(
+                        label,
+                        lambda btn, f=field, t=typ, n=name: self._edit(f, t, n),
+                    )
+                )
+
+        body.append(urwid.Divider())
+        body.append(menu_button("保存并返回主菜单", lambda btn: self._save_and_exit()))
+
+        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
+        self.original_widget = urwid.LineBox(listbox)
+
+    def _on_bool_toggle(self, field: str, new_state: bool):
+        """
+        当某个布尔选项被勾选/取消时触发：
+        - 更新对应的 config.<field> = new_state
+        - 针对 use_official_api 与 use_helloplhm_qwq_api 做互斥
+        - 如果启用了 helloplhm_qwq_api，则自动调整 max_workers、min_wait_time、max_wait_time
+        - 保存 config 并重建整张页面
+        """
+        cfg = self.app.config
+        setattr(cfg, field, new_state)
+
+        # —— 互斥逻辑：使用官方 API 与 使用 helloplhm_qwq API 不能同时为 True ——
+        if field == "use_official_api" and new_state:
+            cfg.use_helloplhm_qwq_api = False
+
+        if field == "use_helloplhm_qwq_api" and new_state:
+            cfg.use_official_api = False
+
+            # —— 当启用 helloplhm_qwq API 时，强制调整相关参数 ——
+            changed = False
+            if getattr(cfg, "max_workers", None) != 1:
+                cfg.max_workers = 1
+                changed = True
+            if getattr(cfg, "min_wait_time", 0) < 1000:
+                cfg.min_wait_time = 1000
+                changed = True
+            if getattr(cfg, "max_wait_time", 0) < 1200:
+                cfg.max_wait_time = 1200
+                changed = True
+
+            if changed:
+                self.app.show_popup(
+                    "启用 helloplhm_qwq API 时已自动调整：\n"
+                    "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
+                )
+
+        cfg.save()
+        # 重建整个面板以刷新所有 CheckBox 和按钮文字状态
+        self._build_view()
+
+    def _edit(self, field: str, value_type: type, display_name: str):
+        """
+        点击非布尔项时弹出一个编辑页面，允许用户输入新值：
+        保存时做类型转换与约束校验，再调用 cfg.save() 并回到完整配置页面。
+        """
+        cfg = self.app.config
+        cur_val = getattr(cfg, field)
+        caption = f"{display_name} (当前: {cur_val}) 新值: "
+        edit = urwid.Edit(caption, edit_text=str(cur_val))
+        save_btn = menu_button("保存", lambda btn: on_save())
+        cancel_btn = menu_button("取消", lambda btn: self._build_view())
+
+        pile = urwid.Pile([edit, urwid.Divider(), save_btn, cancel_btn])
+        fill = urwid.Filler(pile, valign="top")
+        self.original_widget = urwid.LineBox(fill)
+
+        def on_save():
+            raw = edit.edit_text.strip()
+            try:
+                # 1) 先做类型转换
+                if value_type is bool:
+                    new_val = raw.lower() in ("true", "1", "yes")
                 else:
-                    # 3. 作为书名处理，调用搜索接口获取book_id
-                    book_name = user_input
-                    found_id = network.search_book(book_name)
-                    if found_id and found_id == "0000":
-                        continue
-                    elif found_id:
-                        book_id = found_id
-                    else:
-                        logger.error("API获取信息异常!")
-                        continue
+                    new_val = value_type(raw)
 
-            # 获取保存路径
-            save_path = input(
-                f"保存路径（默认：{config.default_save_dir}）："
-            ).strip() or str(config.default_save_dir)
+                # 2) 约束：如果当前启用了 helloplhm_qwq_api，就检查某些字段是否合法
+                if getattr(cfg, "use_helloplhm_qwq_api", False):
+                    if field == "max_workers" and new_val != 1:
+                        raise ValueError("使用 helloplhm_qwq API 时最大线程数必须为 1")
+                    if field == "min_wait_time" and new_val < 1000:
+                        raise ValueError(
+                            "使用 helloplhm_qwq API 时最小等待时间需 ≥ 1000ms"
+                        )
+                    if field == "max_wait_time" and new_val < 1200:
+                        raise ValueError(
+                            "使用 helloplhm_qwq API 时最大等待时间需 ≥ 1200ms"
+                        )
 
-            book_name, author, description, tags, chapter_count = network.get_book_info(
-                book_id
-            )
-            if book_name is None:
+                # 3) 互斥逻辑：如果用户在这里编辑“use_official_api”或“use_helloplhm_qwq_api”
+                #    也要同步处理双方互斥，并在启用 helloplhm 时自动调整相关字段。
+                if field == "use_official_api" and new_val:
+                    cfg.use_helloplhm_qwq_api = False
+                if field == "use_helloplhm_qwq_api" and new_val:
+                    cfg.use_official_api = False
+                    if cfg.max_workers != 1:
+                        cfg.max_workers = 1
+                    if cfg.min_wait_time < 1000:
+                        cfg.min_wait_time = 1000
+                    if cfg.max_wait_time < 1200:
+                        cfg.max_wait_time = 1200
+                    self.app.show_popup(
+                        "由于启用 helloplhm_qwq API，已自动调整：\n"
+                        "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
+                    )
+
+                # 4) 通过校验后，设置新值、保存并返回配置菜单
+                setattr(cfg, field, new_val)
+                cfg.save()
+                self.app.show_popup(f"{display_name} 已保存为 {new_val}")
+                self._build_view()
+
+            except ValueError as ve:
+                self.app.show_popup(str(ve))
+
+    def _save_and_exit(self):
+        """
+        点击“保存并返回主菜单”时执行：config 已在每次改动时保存，直接回主菜单即可。
+        """
+        self.app.show_main()
+
+
+class UpdateMenu(urwid.WidgetPlaceholder):
+    """展示可更新小说列表，并选择一个后调用回调。"""
+
+    def __init__(self, app: "TNDApp"):
+        super().__init__(urwid.SolidFill())
+        self.app = app
+        self._choices: List[Tuple[str, str]] = []
+        self._build()
+
+    def _build(self):
+        cfg = self.app.config
+        save_dir = Path(cfg.default_save_dir)
+        subdirs = list_subdirs(save_dir)
+        choices_valid = False
+
+        for folder in subdirs:
+            if "_" not in folder:
                 continue
+            book_id, book_name = folder.split("_", 1)
+            try:
+                chapters = self.app.network.fetch_chapter_list(book_id)
+            except Exception as e:  # noqa: BLE001
+                self.app.logger.error(f"获取章节列表失败: {e}")
+                continue
+            status_path = save_dir / folder / f"chapter_status_{book_id}.json"
+            status = load_download_status(status_path)
+            downloaded = status.get("downloaded", {})
+            new_count = max(len(chapters) - len(downloaded), 0)
+            self._choices.append(
+                (book_id, f"《{book_name}》({book_id}) — 新章节: {new_count}")
+            )
+            choices_valid = True
 
-            folder_path = config.get_status_folder_path
-            cover_path = folder_path / f"{book_name}.jpg"
-            preview_ascii(cover_path)
-            logger.info(f"\n书名: {book_name}")
-            logger.info(f"作者: {author}")
-            logger.info(f"是否完结: {tags[0]} | 共 {chapter_count} 章")
-            logger.info(f"标签: {'|'.join(tags[1:])}")
-            logger.info(f"简介: {description[:50]}...")  # 显示前50字符
+        if not choices_valid:
+            self.app.show_popup("没有可更新的小说")
+            return
 
+        body: List[urwid.Widget] = [
+            urwid.Text(("title", "可更新小说列表 (q 返回)")),
+            urwid.Divider(),
+        ]
+        for bid, desc in self._choices:
+            body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
+        body.append(urwid.Divider())
+        body.append(menu_button("返回主菜单", lambda btn: self.app.show_main()))
+
+        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
+        self.original_widget = urwid.LineBox(listbox)
+
+    def _select(self, book_id: str):
+        self.app.start_download_flow(book_id)
+
+
+class InputPage(urwid.WidgetPlaceholder):
+    """首页输入：<BookID/链接/书名>，或选择其它操作。"""
+
+    def __init__(self, app: "TNDApp"):
+        super().__init__(urwid.SolidFill())
+        self.app = app
+        self._build()
+
+    def _build(self):
+        banner = f"欢迎使用番茄小说下载器 v{VERSION}\n项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader"
+        banner = urwid.Text(("title", banner))
+        prompt = urwid.Text(("title", "输入小说ID/链接/书名，或选择其它操作"))
+        self.edit = urwid.Edit("输入: ")
+        ok_button = menu_button("确定", lambda btn: self.on_submit())
+        cfg_button = menu_button("配置", lambda btn: self.app.show_config())
+        up_button = menu_button("更新", lambda btn: self.app.show_update())
+        about_button = menu_button("关于", lambda btn: self.app.show_about())
+        quit_button = menu_button("退出", lambda btn: raise_exit())
+
+        pile = urwid.Pile(
+            [
+                banner,
+                urwid.Divider(),
+                prompt,
+                urwid.Divider(),
+                self.edit,
+                urwid.Divider(),
+                ok_button,
+                cfg_button,
+                up_button,
+                about_button,
+                quit_button,
+            ]
+        )
+        fill = urwid.Filler(pile, valign="top")
+        self.original_widget = urwid.LineBox(fill)
+
+    def on_submit(self):
+        text = self.edit.edit_text.strip()
+        if text == "":
+            return
+        self.app.handle_user_input(text)
+
+    def keypress(self, size, key):
+        """
+        当焦点在 Edit 且按下 Enter 时，直接触发 on_submit()。
+        其他情况则按默认逻辑继续分发。
+        """
+        if key == "enter":
+            # 取出 LineBox 中的 Filler，再从 Filler.body 拿到 Pile
+            linebox = self.original_widget
+            fill = linebox.original_widget  # 这是我们当初传进去的 Filler(pile)
+            if isinstance(fill, urwid.Filler):
+                pile = fill.body  # pile 是 urwid.Pile
+                focus_widget = pile.get_focus()  # 仅返回当前焦点 Widget
+                if focus_widget is self.edit:
+                    self.on_submit()
+                    return None  # 吃掉这个按键，不再往下分发
+
+        # 其余按键交给上层或下层继续处理
+        return super().keypress(size, key)
+
+
+class SearchMenu(urwid.WidgetPlaceholder):
+    """
+    搜索结果列表页面，展示一组 {title, book_id, author}。
+    用户选中后，直接调用 app.start_download_flow(book_id)。
+    """
+
+    def __init__(self, app: "TNDApp", results: List[Dict[str, str]]):
+        super().__init__(urwid.SolidFill())
+        self.app = app
+        self.results = results
+        self._build()
+
+    def _build(self):
+        # 标题栏
+        body: List[urwid.Widget] = [
+            urwid.Text(("title", "搜索结果 (q 返回)")),
+            urwid.Divider(),
+        ]
+
+        # 如果没有结果
+        if not self.results:
+            body.append(urwid.Text("未找到结果"))
+        else:
+            # 遍历搜索结果，每条显示“书名 | ID | 作者”
+            for res in self.results:
+                label = f"书名: {res['title']}  |  ID: {res['book_id']}  |  作者: {res['author']}"
+                body.append(
+                    menu_button(label, lambda btn, b=res["book_id"]: self._select(b))
+                )
+
+        body.append(urwid.Divider())
+        body.append(menu_button("返回主菜单", lambda btn: self.app.show_main()))
+
+        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
+        self.original_widget = urwid.LineBox(listbox)
+
+    def _select(self, book_id: str):
+        # 用户选中后，直接进入下载流程
+        self.app.start_download_flow(book_id)
+
+
+class PreDownloadPage(urwid.WidgetWrap):
+    """
+    如果检测到已有下载记录，询问“继续下载剩余章节”还是“重新下载全部章节”，
+    如果没有下载记录，则直接跳转到 RangeSelectPage。
+    """
+
+    def __init__(self, app: "TNDApp", manager: BookManager, chapter_list: list[dict]):
+        self.app = app
+        self.manager = manager
+        self.chapter_list = chapter_list
+
+        # 构建内部内容，并传给 super().__init__
+        widget = self.build_widget()
+        super().__init__(widget)
+
+    def build_widget(self):
+        downloaded_failed = len(
+            [v for v in self.manager.downloaded.values() if v[1] == "Error"]
+        )
+        downloaded_count = len(self.manager.downloaded) - downloaded_failed
+        total = len(self.chapter_list)
+
+        # 如果没有任何下载记录，立即跳转到 RangeSelectPage
+        if downloaded_count == 0:
+            # 注意：这里不能在 __init__ 里直接调用 show_range_page，因为此时 PreDownloadPage
+            # 还没完成构造，UI 也还没显示；改为使用一个延迟的方式
+            urwid.emit_signal(self, "no_history")
+            return urwid.SolidFill()
+
+        # 否则根据历史记录构建提示 UI
+        header = urwid.Text(("title", "检测到已有下载记录"), align="center")
+        info = urwid.Text(
+            f"共 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
+        )
+        cont_btn = menu_button("继续下载剩余章节", lambda btn: self._continue())
+        redo_btn = menu_button("重新下载全部章节", lambda btn: self._redo())
+        cancel_btn = menu_button("取消，返回主菜单", lambda btn: self.app.show_main())
+
+        pile = urwid.Pile(
+            [
+                header,
+                urwid.Divider(),
+                info,
+                urwid.Divider(),
+                cont_btn,
+                redo_btn,
+                urwid.Divider(),
+                cancel_btn,
+            ]
+        )
+        fill = urwid.Filler(pile, valign="middle")
+        return urwid.LineBox(fill)
+
+    def _continue(self):
+        self.app.show_range_page(self.manager, self.chapter_list, reset_history=False)
+
+    def _redo(self):
+        self.manager.downloaded.clear()
+        self.app.show_range_page(self.manager, self.chapter_list, reset_history=True)
+
+
+class RangeSelectPage(urwid.WidgetWrap):
+    """
+    让用户选择“全部下载”还是“指定区间下载”。
+    如果 reset_history=True，则之前的下载记录已被清空；否则保留历史记录。
+    """
+
+    def __init__(
+        self,
+        app: "TNDApp",
+        manager: BookManager,
+        chapter_list: list[dict],
+        reset_history: bool,
+    ):
+        self.app = app
+        self.manager = manager
+        self.chapter_list_full = chapter_list
+        self.reset_history = reset_history
+
+        widget = self.build_widget()
+        super().__init__(widget)
+
+    def build_widget(self):
+        # 先统计“待下载”章节列表
+        if self.reset_history:
+            # 如果是“重新下载”，那就全部章节都是待下载
+            pending = self.chapter_list_full.copy()
+        else:
+            # 否则把已经成功下载的章节剔除
+            pending = []
+            for ch in self.chapter_list_full:
+                cid = ch["id"]
+                status = self.manager.downloaded.get(cid)
+                # 只要 status 存在且 status[1] != "Error"，就说明已成功下载，应跳过
+                if status is not None and status[1] != "Error":
+                    continue
+                pending.append(ch)
+
+        # 如果没有待下载章节，就提示并返回一个占位，这种情况一般不会进入本页面
+        if not pending:
+            # 直接弹出提示，后续会自动回到主菜单
+            self.app.show_popup("没有章节需要下载，操作结束")
+            return urwid.SolidFill()
+
+        # 计算显示用的数值
+        pending_count = len(pending)
+        # “起始章节序号”取 pending 列表中第一个元素的 index + 1
+        first_idx = int(pending[0]["index"]) + 1
+        # “最后章节序号”就是完整列表的长度
+        total = len(self.chapter_list_full)
+
+        header = urwid.Text(("title", "请选择下载方式"), align="center")
+        info = urwid.Text(
+            f"可下载章节共 {pending_count} 章（从 {first_idx} 到 {total}）"
+        )
+
+        self.lo_edit = urwid.Edit("起始章节号 (如 1): ")
+        self.hi_edit = urwid.Edit("结束章节号 (如 50): ")
+
+        all_btn = menu_button("全部下载", lambda btn: self._on_all(pending))
+        range_btn = menu_button("按区间下载", lambda btn: self._on_range(pending))
+        cancel_btn = menu_button("取消，返回主菜单", lambda btn: self.app.show_main())
+
+        pile = urwid.Pile(
+            [
+                header,
+                urwid.Divider(),
+                info,
+                urwid.Divider(),
+                self.lo_edit,
+                self.hi_edit,
+                urwid.Divider(),
+                all_btn,
+                range_btn,
+                urwid.Divider(),
+                cancel_btn,
+            ]
+        )
+        fill = urwid.Filler(pile, valign="middle")
+        return urwid.LineBox(fill)
+
+    def _on_all(self, pending):
+        """
+        全部下载：直接把 pending 列表传给下载逻辑
+        """
+        downloader = ChapterDownloader(self.manager.book_id, self.app.network)
+        self.app.run_terminal_download(self.manager, downloader, pending)
+
+    def _on_range(self, pending):
+        lo_text = self.lo_edit.edit_text.strip()
+        hi_text = self.hi_edit.edit_text.strip()
+        try:
+            lo = int(lo_text)
+            hi = int(hi_text)
+            # 验证范围在 first_idx 到 total 之间
+            total = len(self.chapter_list_full)
+            first_idx = int(pending[0]["index"]) + 1
+            if not (first_idx <= lo <= hi <= total):
+                raise ValueError
+        except:
+            self.app.show_popup(
+                f"请输入有效的章节范围，范围应在 {first_idx} 到 {total} 之间"
+            )
+            return
+
+        # 根据用户输入过滤出要下载的 pending 子集
+        filtered = []
+        for ch in pending:
+            idx = int(ch["index"])
+            if lo - 1 <= idx <= hi - 1:
+                filtered.append(ch)
+
+        if not filtered:
+            self.app.show_popup("未找到符合该范围的章节")
+            return
+
+        downloader = ChapterDownloader(self.manager.book_id, self.app.network)
+        self.app.run_terminal_download(self.manager, downloader, filtered)
+
+
+class TNDApp:
+    """终端 UI 主应用封装。"""
+
+    def __init__(self):
+        # ================= 原上下文 =================
+        self.logger = GlobalContext.get_logger()
+        self.config: Config = GlobalContext.get_config()
+        self.network = NetworkClient()
+        self.update_mgr = UpdateManager()
+        # 初始化时可检查更新（可注释掉）
+        self.update_mgr.check_for_updates()
+
+        # ================= urwid 相关 ================
+        self.main_placeholder = urwid.WidgetPlaceholder(urwid.SolidFill())
+        self.loop = urwid.MainLoop(
+            self.main_placeholder,
+            palette=PALETTE,
+            unhandled_input=self._global_key_handler,
+        )
+        self.show_main()
+
+    # --------------------------------------------------------
+    # 页面切换方法
+    # --------------------------------------------------------
+    def show_main(self):
+        self.main_placeholder.original_widget = InputPage(self)
+
+    def show_config(self):
+        self.main_placeholder.original_widget = ConfigMenu(self)
+
+    def show_update(self):
+        self.main_placeholder.original_widget = UpdateMenu(self)
+
+    def show_about(self):
+        self.main_placeholder.original_widget = AboutPage(self)
+
+    def show_popup(self, text: str):
+        """
+        显示临时弹窗，按 q / Enter / Esc 即可关闭并返回到调用此弹窗之前的界面。
+        """
+        # 1. 先把当前正在显示的主界面 widget 保存下来
+        prev_widget = self.main_placeholder.original_widget
+
+        # 2. 定义一个 on_close 回调，让弹窗关闭时恢复到 prev_widget
+        def on_close():
+            self.main_placeholder.original_widget = prev_widget
+
+        # 3. 创建带回调的 MessagePopup
+        popup = MessagePopup(text, on_close)
+
+        # 4. 把 popup 以 Overlay 方式盖在原来的 prev_widget 之上
+        overlay = urwid.Overlay(
+            popup,  # 顶层是弹窗
+            prev_widget,  # 底层是之前的主界面
+            align="center",  # 水平居中
+            width=("relative", 60),  # 宽度占终端宽度的 60%
+            valign="middle",  # 垂直居中
+            height=("relative", 40),  # 高度占终端高度的 40%
+        )
+
+        # 5. 把 Overlay 赋给 main_placeholder，立刻切换到弹窗界面
+        self.main_placeholder.original_widget = overlay
+
+    def show_cover_preview(self, book_name: str):
+        """
+        暂时退出 Urwid 界面，打印整屏 ASCII 封面，用户按任意键后恢复到原来的 UI。
+        """
+        # 1. 找到封面图片路径
+        cover_path = Path(self.config.get_status_folder_path) / f"{book_name}.jpg"
+        if not cover_path.exists():
+            # 如果没有封面文件，跳出一个弹窗提示
+            self.show_popup("未找到封面图片，无法预览")
+            return
+
+        # 2. 先把 Urwid 界面画面清掉，恢复到普通终端模式
+        self.loop.screen.clear()
+        # 这一行会立刻刷新屏幕，让 Urwid 的内容消失
+        self.loop.screen.set_terminal_properties(colors=256)
+
+        # 3. 调用 preview_ascii，打印封面 ASCII 到屏幕
+        preview_ascii(cover_path)
+
+        # 4. 等待用户按任意键（因为我们现在已经不在 Urwid 的 MainLoop 里）
+        try:
+            input("\n\n<按回车键返回>")
+        except Exception:
+            pass
+
+        # 5. 用户按回车后，重新绘制原先的 TUI 界面
+        # 先清屏，然后告诉 Urwid 画一次当前画面
+        self.loop.screen.clear()
+        self.loop.draw_screen()
+
+    def show_pre_download_page(self, manager: BookManager, chapter_list: list[dict]):
+        """
+        直接在 _download 中被调用，
+        如果 manager.downloaded 非空，则显示 PreDownloadPage，
+        否则直接跳到 RangeSelectPage。
+        """
+        downloaded_failed = len([v for v in manager.downloaded.values() if v[1] == "Error"])
+        downloaded_count = len(manager.downloaded) - downloaded_failed
+        if downloaded_count == 0:
+            # 无历史记录，直接跳到 RangeSelectPage (reset_history=False)
+            self.show_range_page(manager, chapter_list, reset_history=False)
+        else:
+            # 有历史记录，显示 PreDownloadPage
+            self.main_placeholder.original_widget = PreDownloadPage(self, manager, chapter_list)
+
+    def show_range_page(self, manager: BookManager, chapter_list: list[dict], reset_history: bool):
+        """
+        由 PreDownloadPage 调用，也可直接调用：
+        如果用户在 PreDownloadPage 里选了“继续”或“重置”，就会来到这里。
+        """
+        self.main_placeholder.original_widget = RangeSelectPage(
+            self, manager, chapter_list, reset_history
+        )
+
+    # --------------------------------------------------------
+    # 全局按键处理（如 q 返回）
+    # --------------------------------------------------------
+    def _global_key_handler(self, key: str):  # noqa: D401, N802
+        if key in ("q", "Q"):
+            current = self.main_placeholder.original_widget
+            # 如果当前在主菜单，则退出程序
+            if isinstance(current, InputPage):
+                raise urwid.ExitMainLoop()
+            # 否则返回主菜单
+            self.show_main()
+
+    # --------------------------------------------------------
+    # 解析用户输入并启动下载流程
+    # --------------------------------------------------------
+    def handle_user_input(self, text: str):
+        book_id: Optional[str] = None
+
+        # ① 尝试从 URL 中提取 book_id
+        urls = re.findall(r"(https?://[^\s]+)", text)
+        if urls:
+            url_str = urls[0]
+            parsed = urlparse(url_str)
+            m = re.search(r"/page/(\d+)", parsed.path)
+            if m:
+                book_id = m.group(1)
+            else:
+                qs = parse_qs(parsed.query)
+                bid_list = qs.get("book_id") or qs.get("bookId")
+                if bid_list:
+                    book_id = bid_list[0]
+            if not book_id:
+                self.show_popup("无法从链接中解析 book_id")
+                return
+
+        # ② 如果全数字，则直接当作 book_id
+        elif text.isdigit():
+            book_id = text
+
+        # ③ 作为书名搜索
+        else:
+            try:
+                # 调用改后的 search_book，得到一个列表
+                results = self.network.search_book(text)
+            except Exception:
+                results = []
+
+            # 如果列表为空
+            if not results:
+                self.show_popup("未搜索到对应书籍 / API 异常")
+                return
+
+            # 让用户在新页面里选择一本
+            self.main_placeholder.original_widget = SearchMenu(self, results)
+            return
+
+        # 如果前面已经拿到 book_id，直接启动下载
+        self.start_download_flow(book_id)
+
+    # --------------------------------------------------------
+    # 下载流程入口：先选择保存路径
+    # --------------------------------------------------------
+    def start_download_flow(self, book_id: str):
+        save_path = self.config.default_save_dir
+        ask = urwid.Edit(f"保存路径 (默认: {save_path}): ")
+        ok_btn = menu_button("确定", lambda btn: on_path())
+        pile = urwid.Pile([ask, urwid.Divider(), ok_btn])
+        fill = urwid.Filler(pile, valign="top")
+        self.main_placeholder.original_widget = urwid.LineBox(fill)
+
+        def on_path():
+            path = ask.edit_text.strip() or str(save_path)
+            self._download(book_id, path)
+
+    # 修改 _download，让它先进入“检查历史/选择范围”流程
+    def _download(self, book_id: str, save_path: str):
+        logger = self.logger
+        cfg = self.config
+        network = self.network
+
+        # 获取书籍信息（保持不变）
+        book_info = network.get_book_info(book_id)
+        if book_info[0] is None:
+            self.show_popup("获取书籍信息失败")
+            return
+        book_name, author, description, tags, chapter_count = book_info
+
+        # 显示书籍信息 + 按钮 (不变，只改变开始下载的回调)
+        info_lines = [
+            f"书名: {book_name}",
+            f"作者: {author}",
+            f"是否完结: {tags[0]} | 共 {chapter_count} 章",
+            f"标签: {' | '.join(tags[1:])}",
+            f"简介: {description[:50]}…",
+            "\n请选择：",
+        ]
+        txt = urwid.Text("\n".join(info_lines))
+        preview_btn = menu_button(
+            "预览封面", lambda btn: self.show_cover_preview(book_name)
+        )
+        ok_btn = menu_button("开始下载", lambda btn: on_confirm())
+        cancel_btn = menu_button("返回主菜单", lambda btn: self.show_main())
+
+        pile = urwid.Pile(
+            [txt, urwid.Divider(), preview_btn, urwid.Divider(), ok_btn, cancel_btn]
+        )
+        self.main_placeholder.original_widget = urwid.LineBox(urwid.Filler(pile, "top"))
+
+        def on_confirm():
             manager = BookManager(
                 save_path, book_id, book_name, author, tags, description
             )
-
-            log_system.add_safe_exit_func(manager.save_download_status)
-
-            # 用户确认
-            chapter_count_list = []
-            confirm = (
-                input(
-                    "\n是否开始下载？(Y/n [输入数字xx~xx可选定下载章节范围(分卷章节从全书最开始累加计算)]): "
-                )
-                .strip()
-                .lower()
-            )
-            if confirm not in ("", "y", "yes") and "~" not in confirm:
-                if cover_path.exists():
-                    os.remove(cover_path)
-                    logger.debug(f"封面文件已清理！{cover_path}")
-                    if FileCleaner.is_empty_dir(folder_path):
-                        FileCleaner.clean_dump_folder(folder_path)
-                continue
-            elif "~" in confirm:
-                chapter_count_list = list(map(int, confirm.split("~")))
-
-            chapter_list = network.fetch_chapter_list(book_id)
-            if chapter_count_list:
-                chapter_list_for = chapter_list.copy()
-                chapter_list = []
-                for chapter in chapter_list_for:
-                    if (
-                        chapter_count_list[0] - 1
-                        <= int(chapter["index"])
-                        <= chapter_count_list[1] - 1
-                    ):
-                        chapter_list.append(chapter)
-            if chapter_list is None:
-                continue
-
-            total = len(chapter_list)
-            keys = [
-                key
-                for key, value in manager.downloaded.items()
-                if value == [key, "Error"]
-            ]
-            downloaded_failed = len(keys)
-            downloaded_count = len(manager.downloaded) - len(keys)
-            logger.info(
-                f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
-            )
-            # 检查已有下载
-            if downloaded_count > 0:
-                choice = input(
-                    "检测到已有下载记录：\n1. 继续下载\n2. 重新下载\n请选择(默认1): "
-                ).strip()
-                if choice == "2":
-                    manager.downloaded.clear()
-                    logger.info("已清除下载记录，将重新下载全部章节")
-
-            # --- 执行下载 ---
-            logger.info("\n开始下载...")
-            start_time = time.time()
-
             downloader = ChapterDownloader(book_id, network)
-            # 执行下载流程
-            result = downloader.download_book(manager, book_name, chapter_list)
+            chapter_list = network.fetch_chapter_list(book_id)
+            # 进入“检查历史/选择范围”的流程
+            self.show_pre_download_page(manager, chapter_list)
 
-            # 显示统计信息
-            time_cost = time.time() - start_time
-            logger.info(f"\n下载完成！用时 {time_cost:.1f} 秒")
-            logger.info(f"成功: {result['success']} 章")
-            logger.info(f"失败: {result['failed']} 章")
-            logger.info(f"取消: {result['canceled']} 章")
+    def run_terminal_download(
+        self, manager: BookManager, downloader: ChapterDownloader, chapters: list[dict]
+    ):
+        """
+        切换到“终端模式”运行 download_book，等下载结束后再恢复 UI。
+        """
+        # 1. 用空白覆盖 Urwid 并刷新
+        try:
+            self.main_placeholder.original_widget = urwid.SolidFill()
+            self.loop.draw_screen()
+        except:
+            pass
 
-            while True and not result is None:
-                if result["failed"] > 0:
-                    num = input("是否重新下载错误章节？[Y/n]: ").lower()
-                    if num == "n":
-                        logger.warning("失败章节已保存到缓存文件")
-                        break
-                    result = downloader.download_book(manager, book_name, chapter_list)
-                else:
-                    break
+        # 3. 让 tqdm 读到最新终端宽度
+        cols, _ = shutil.get_terminal_size(fallback=(80, 24))
+        os.environ["COLUMNS"] = str(cols)
 
-    except (KeyboardInterrupt, EOFError):
-        logger.info("\n操作已取消")
-        sys.exit(0)
+        # 4. 第一次下载
+        try:
+            result = downloader.download_book(manager, manager.book_name, chapters)
+        except Exception as e:
+            print(f"\n下载异常中止: {e}\n")
+            input("按回车返回 TUI …")
+            sys.stdout.write("\x1b[2J\x1b[H")
+            sys.stdout.flush()
+            self.show_main()
+            return
+
+        # 如果有失败章节，询问是否重试
+        if result.get("failed", 0) > 0:
+            # 列出所有失败的章节 ID
+            failed_ids = [
+                cid for cid, status in manager.downloaded.items() if status[1] == "Error"
+            ]
+            print(f"\n共有 {len(failed_ids)} 章下载失败。")
+            retry_input = input("是否重试下载失败章节？(Y/n): ").strip().lower()
+            if retry_input in ("", "y", "yes"):
+                # 构造只包含失败章节的列表：与原章信息匹配
+                failed_chapters = [ch for ch in chapters if ch["id"] in failed_ids]
+                if failed_chapters:
+                    print("\n开始重试下载失败章节…")
+                    # 再次清屏以便日志整洁
+                    sys.stdout.write("\x1b[2J\x1b[H")
+                    sys.stdout.flush()
+                    # 重新调用 download_book，只下载失败的那几章
+                    try:
+                        retry_result = downloader.download_book(
+                            manager, manager.book_name, failed_chapters
+                        )
+                    except Exception as e2:
+                        print(f"\n重试时出现异常：{e2}\n")
+                    else:
+                        # 将两次结果合并展示
+                        total_failed = retry_result.get("failed", 0)
+                        total_success = retry_result.get("success", 0)
+                        print(
+                            f"\n重试完成！本次重试成功 {total_success} 章，仍失败 {total_failed} 章。\n"
+                        )
+
+        # 5. 最终提示并等回车
+        # 重新统计一次当前 manager 中的成功/失败情况
+        all_success = len([v for v in manager.downloaded.values() if v[1] == "Success"])
+        all_failed = len([v for v in manager.downloaded.values() if v[1] == "Error"])
+        print(f"\n最终结果：成功 {all_success} 章，失败 {all_failed} 章。\n")
+        input("按回车返回 TUI …")
+
+        # 6. ANSI 再清屏 + 恢复 Urwid 主界面
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.flush()
+        self.show_main()
+
+    # --------------------------------------------------------
+    # 启动应用
+    # --------------------------------------------------------
+    def run(self):
+        # 欢迎 Banner（打印到日志中，同时可见于终端）
+        banner = (
+            f"欢迎使用番茄小说下载器 v{VERSION}\n"
+            "项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader\n"
+            "(q 退出, Enter 选择)\n"
+        )
+        self.logger.info(banner)
+        self.loop.run()
+
+
+def raise_exit():
+    """用于按钮回调中直接退出程序。"""
+    raise urwid.ExitMainLoop()
+
+
+def main():
+    """应用入口。"""
+    try:
+        app = TNDApp()
+        app.run()
+    except urwid.ExitMainLoop:
+        print("\n再见！")

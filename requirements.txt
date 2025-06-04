@@ -17,3 +17,4 @@ tqdm
 typing_extensions
 urllib3
 portalocker
+urwid

@@ -61,22 +61,16 @@ class NetworkClient:
             headers["Cookie"] = cookie
         return headers
 
-    def search_book(self, book_name: str) -> str:
+    def search_book(self, book_name: str) -> List[Dict[str, str]]:
         search_datas = search_api(book_name)
-        book_id_list = []
+        book_list = []
         for num, search_res in enumerate(search_datas):
-            self.logger.info(
-                f"{num + 1}. 书名: {search_res['title']} | ID: {search_res['book_id']} | 作者: {search_res['author']}"
-            )
-            book_id_list.append(search_res["book_id"])
-        while True:
-            num = input("请输入序号 (输入q返回重新搜索)：")
-            if num == "q":
-                return "0000"
-            if 1 <= int(num) <= len(book_id_list):
-                return book_id_list[int(num) - 1]
-            else:
-                self.logger.warning("输入错误!")
+            book_list.append({
+                "title": search_res["title"],
+                "book_id": search_res["book_id"],
+                "author": search_res["author"],
+            })
+        return book_list
 
     def get_book_info(self, book_id: str) -> tuple:
         book_info_url = f"https://fanqienovel.com/page/{book_id}"
@@ -137,7 +131,7 @@ class NetworkClient:
             raise ValueError(f"API错误: {response_data.get('message')}")
 
         chapters = response_data["data"]["allItemIds"]
-        self.logger.info(f"解析到{len(chapters)}个章节ID，示例: {chapters[:3]}...")
+        self.logger.debug(f"解析到{len(chapters)}个章节ID，示例: {chapters[:3]}...")
         return [
             {"id": chapter_id, "title": f"第{idx+1}章", "index": idx}
             for idx, chapter_id in enumerate(chapters)

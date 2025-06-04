@@ -4,6 +4,7 @@
 # -------------------------------
 import time
 import requests
+import shutil
 import random
 import threading
 import signal
@@ -178,7 +179,14 @@ class ChapterDownloader:
 
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             futures = get_submit(exe)
-            with tqdm(total=len(futures), desc=desc) as pbar:
+            cols, _ = shutil.get_terminal_size(fallback=(80, 24))
+            with tqdm(
+                total=len(futures),
+                desc=desc,
+                ncols=cols,
+                dynamic_ncols=False,
+                leave=True,
+            ) as pbar:
                 self.log_system.enable_tqdm_handler(pbar)
 
                 for future in as_completed(futures):

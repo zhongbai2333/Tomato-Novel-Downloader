@@ -16,11 +16,17 @@ from logging import Formatter
 class TqdmLoggingHandler(logging.StreamHandler):
     def __init__(self, tqdm_instance):
         super().__init__()
-        self.tqdm_instance = tqdm_instance  # 绑定到特定tqdm实例
+        self.tqdm_instance = tqdm_instance
 
     def emit(self, record):
         msg = self.format(record)
-        self.tqdm_instance.write(msg)  # 通过实例的write方法输出
+        try:
+            self.tqdm_instance.clear()      # ← 新增：抹掉旧条行
+            self.tqdm_instance.write(msg)   # 原来就有：写日志 + 重新画条
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:
+            pass
 
 
 class ColoredMultiLineFormatter(Formatter):
