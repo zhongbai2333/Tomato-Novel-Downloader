@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 from ..base_system.context import GlobalContext
 from ..base_system.storge_system import FileCleaner
@@ -32,7 +32,7 @@ class BookManager(object):
         self.logger = GlobalContext.get_logger()
 
         # 缓存
-        self.downloaded: Dict[list] = {}
+        self.downloaded: Dict[str, List[str]] = {}
 
         # 状态文件路径
         filename = f"chapter_status_{book_id}.json"
@@ -144,10 +144,12 @@ class BookManager(object):
                     )
                     for chapter in chapters:
                         chapter_id = chapter["id"]
-                        f.write(
-                            f"\n\n{self.downloaded.get(chapter_id, [chapter["title"], None])[0]}\n"
-                            f"{self.downloaded.get(chapter_id, [None, "Download Faild or Didn't Download Finish!"])[1]}"
-                        )
+                        title = self.downloaded.get(chapter_id, [chapter["title"], None])[0]
+                        content = self.downloaded.get(
+                            chapter_id,
+                            [None, "Download Faild or Didn't Download Finish!"],
+                        )[1]
+                        f.write(f"\n\n{title}\n{content}")
                 self.logger.info(f"TXT生成完成: {output_file}")
         if result == 0 and self.config.auto_clear_dump and self.end:
             cover_path = self.status_folder / f"{self.book_name}.jpg"
