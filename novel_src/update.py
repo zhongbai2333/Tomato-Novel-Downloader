@@ -209,10 +209,6 @@ class UpdateManager(object):
         except Exception as e:
             raise RuntimeError(f"无法写入 Windows 更新脚本 {bat_path}：{e}")
         try:
-            env = os.environ.copy()
-            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"     # 关键！
-            env.pop("_PYI_APPLICATION_HOME_DIR", None)     # 保险起见
-            env.pop("_MEIPASS2", None)
             subprocess.Popen(
                 f'"{bat_path}"',
                 shell=True,
@@ -252,6 +248,8 @@ class UpdateManager(object):
             sys.exit(0)
         else:
             self.logger.info("[UpdateManager] 更新完成，正在重启程序...")
+            env = os.environ.copy()
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"  # 关键！
             os.execv(new_executable, [str(new_executable)] + sys.argv[1:])
 
     def check_for_updates(self, auto_ture: bool = False) -> None:
