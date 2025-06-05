@@ -32,19 +32,21 @@
 
     **仅限安卓设备**可以正常运行，为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
 
-    下载termux(链接:(<https://github.com/termux/termux-app/releases/tag/v0.118.1> )，用文件管理器，找到自己下载的可执行文件(TomatoNovelDownloader-Linux_arm64-*)，复制当前的目录，返回termux，输入以下命令（填空区域请按照自己情况填写）
+    下载termux(链接:(<https://github.com/termux/termux-app/releases>) 并安装，然后运行部署脚本：
 
     ```sh
-    cd [复制的目录]
-    chmod a+x TomatoNovelDownloader-Linux_arm64-[当前版本号]
-    ./TomatoNovelDownloader-Linux_arm64-[当前版本号]
+    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
 
 3. 电脑端该如何运行？
 
     `Windows` 双击运行`TomatoNovelDownloader-Win64-[当前版本号].exe`
 
-    `Linux` 和 `MacOS` 使用终端运行，运行方式类似手机端
+    `Linux` 和 `MacOS` 使用终端运行，可以使用一键部署脚本：
+
+    ```sh
+    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
 
 4. 小说id是什么？在哪里获取？
 
