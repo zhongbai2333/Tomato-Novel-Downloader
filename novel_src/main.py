@@ -74,23 +74,45 @@ def menu_button(label: str, on_press: Callable[[urwid.Button], None]):
 
 class MessagePopup(urwid.WidgetWrap):
     """
-    简单弹窗：显示一段文本，按 q / Enter / Esc 时会调用 on_close 回调。
+    简单弹窗：显示一段文本，以下操作都会关闭弹窗并调用 on_close():
+      - 按 q/Q/Enter/Esc
+      - 鼠标在任何位置点击
     """
 
     def __init__(self, text: str, on_close: Callable[[], None], width: int = 60):
         self.on_close = on_close
-        body = urwid.Filler(urwid.Text(text + "\n\n<按 q 返回>"), valign="top")
-        frame = urwid.LineBox(body)
-        # Overlay 的底部会由外部传入
-        super().__init__(urwid.AttrMap(frame, None))
 
-    def keypress(self, size, key):  # noqa: D401, N802
+        # 文本 + 提示
+        txt = urwid.Text(
+            text + "\n\n<按 q/Q/Enter/Esc 或 点击任意处 关闭弹窗>", align="center"
+        )
+        filler = urwid.Filler(txt, valign="top")
+        frame = urwid.LineBox(filler)
+        super().__init__(frame)
+
+    def selectable(self) -> bool:
+        # 让 urwid 把焦点给它，从而能接收 keypress
+        return True
+
+    def keypress(self, size, key):
+        # q/Q/Enter/Esc 都关闭
         if key in ("q", "Q", "enter", "esc"):
-            # 调用关闭回调，恢复到原来的界面
             self.on_close()
             return None
-        # 其他按键仍然按 Urwid 默认行为处理
-        return super().keypress(size, key)
+        # 其余按键也不冒泡
+        return None
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        """
+        捕获任何鼠标点击（通常 event == 'mouse press'，button >= 1）都关闭弹窗。
+        返回 True 表示“该事件已被处理”，不再往下传递。
+        """
+        # event 格式往往是 "mouse press"、"mouse release"、"mouse drag" 等
+        if event.startswith("mouse press"):
+            self.on_close()
+            return True
+        # 其他鼠标事件也不想让往下冒泡
+        return True
 
 
 # ------------------------------------------------------------
@@ -694,30 +716,33 @@ class TNDApp:
 
     def show_popup(self, text: str):
         """
-        显示临时弹窗，按 q / Enter / Esc 即可关闭并返回到调用此弹窗之前的界面。
+        在当前界面叠加一个 MessagePopup 弹窗，按 q/Q/Enter/Esc 时仅关闭弹窗并恢复到弹前界面。
         """
-        # 1. 先把当前正在显示的主界面 widget 保存下来
-        prev_widget = self.main_placeholder.original_widget
 
-        # 2. 定义一个 on_close 回调，让弹窗关闭时恢复到 prev_widget
+        # 1. 先把“弹窗之前”的界面保存起来
+        old_widget = self.main_placeholder.original_widget
+
+        # 2. 定义关闭回调：把界面恢复到 old_widget，并强制重绘
         def on_close():
-            self.main_placeholder.original_widget = prev_widget
+            self.main_placeholder.original_widget = old_widget
+            self.loop.draw_screen()
 
-        # 3. 创建带回调的 MessagePopup
-        popup = MessagePopup(text, on_close)
+        # 3. 创建一个新的 MessagePopup，把 on_close() 传进去
+        popup = MessagePopup(text, on_close=on_close, width=60)
 
-        # 4. 把 popup 以 Overlay 方式盖在原来的 prev_widget 之上
+        # 4. 叠加：让 popup 直接处于最顶层
         overlay = urwid.Overlay(
-            popup,  # 顶层是弹窗
-            prev_widget,  # 底层是之前的主界面
-            align="center",  # 水平居中
-            width=("relative", 60),  # 宽度占终端宽度的 60%
-            valign="middle",  # 垂直居中
-            height=("relative", 40),  # 高度占终端高度的 40%
+            popup,  # 顶层 widget，一定是 MessagePopup 实例本身
+            old_widget,  # 底层原界面
+            align="center",
+            width=("relative", 60),
+            valign="middle",
+            height=("relative", 40),
         )
 
-        # 5. 把 Overlay 赋给 main_placeholder，立刻切换到弹窗界面
+        # 5. 直接把 overlay 放到 main_placeholder 上，让它立即生效
         self.main_placeholder.original_widget = overlay
+        self.loop.draw_screen()
 
     def show_cover_preview(self, book_name: str):
         """
