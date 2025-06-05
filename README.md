@@ -38,6 +38,12 @@
     bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
 
+    国内用户可使用：
+
+    ```sh
+    bash <(curl -sL https://github.moeyy.xyz/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
 3. 电脑端该如何运行？
 
     `Windows` 双击运行`TomatoNovelDownloader-Win64-[当前版本号].exe`
@@ -46,6 +52,12 @@
 
     ```sh
     bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
+    国内用户可使用：
+
+    ```sh
+    bash <(curl -sL https://github.moeyy.xyz/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
 
 4. 小说id是什么？在哪里获取？
