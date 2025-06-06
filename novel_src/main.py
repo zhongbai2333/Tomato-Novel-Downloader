@@ -688,7 +688,8 @@ class TNDApp:
         self.network = NetworkClient()
         self.update_mgr = UpdateManager()
         # 初始化时可检查更新（可注释掉）
-        self.update_mgr.check_for_updates()
+        if not GlobalContext.get_log_system().debug:
+            self.update_mgr.check_for_updates()
 
         # ================= urwid 相关 ================
         self.main_placeholder = urwid.WidgetPlaceholder(urwid.SolidFill())
@@ -765,7 +766,9 @@ class TNDApp:
 
         # 4. 等待用户按任意键（因为我们现在已经不在 Urwid 的 MainLoop 里）
         try:
+            self._pause_mouse_tracking()
             input("\n\n<按回车键返回>")
+            self._resume_mouse_tracking()
         except Exception:
             pass
 
@@ -809,6 +812,25 @@ class TNDApp:
                 raise urwid.ExitMainLoop()
             # 否则返回主菜单
             self.show_main()
+    
+    def _pause_mouse_tracking(self):
+        """
+        暂停鼠标捕获，让 input() 只接收键盘，不会把鼠标左右键当输入字符。
+        """
+        try:
+            # Urwid 的 screen 对象提供 set_mouse_tracking(False)
+            self.loop.screen.set_mouse_tracking(False)
+        except Exception:
+            pass
+
+    def _resume_mouse_tracking(self):
+        """
+        恢复鼠标捕获，让 Urwid 继续处理鼠标事件。
+        """
+        try:
+            self.loop.screen.set_mouse_tracking(True)
+        except Exception:
+            pass
 
     # --------------------------------------------------------
     # 解析用户输入并启动下载流程
@@ -921,69 +943,79 @@ class TNDApp:
         """
         切换到“终端模式”运行 download_book，等下载结束后再恢复 UI。
         """
-        # 1. 用空白覆盖 Urwid 并刷新
+        # 1. 用空白覆盖 Urwid 并刷新（保持 UI 仍在后台，只是马上清屏）
         try:
             self.main_placeholder.original_widget = urwid.SolidFill()
             self.loop.draw_screen()
         except:
             pass
 
-        # 3. 让 tqdm 读到最新终端宽度
+        # 2. 让 tqdm 读到最新终端宽度
         cols, _ = shutil.get_terminal_size(fallback=(80, 24))
         os.environ["COLUMNS"] = str(cols)
 
-        # 4. 第一次下载
+        # 3. 第一次下载
         try:
             result = downloader.download_book(manager, manager.book_name, chapters)
         except Exception as e:
+            # 异常时也先暂停鼠标捕获，再做 input
+            self._pause_mouse_tracking()
             print(f"\n下载异常中止: {e}\n")
-            input("按回车返回 TUI …")
-            sys.stdout.write("\x1b[2J\x1b[H")
-            sys.stdout.flush()
+            choice = input("按回车返回 TUI …")
+            # input 结束后再重新开启鼠标（如果需要的话）
+            self._resume_mouse_tracking()
+            # 清屏并把 Urwid 主界面重新绘制
+            os.system("cls" if os.name == "nt" else "clear")
             self.show_main()
             return
 
-        # 如果有失败章节，询问是否重试
+        # 4. 如果有失败章节，询问是否重试
         if result.get("failed", 0) > 0:
-            # 列出所有失败的章节 ID
             failed_ids = [
-                cid for cid, status in manager.downloaded.items() if status[1] == "Error"
+                cid
+                for cid, status in manager.downloaded.items()
+                if status[1] == "Error"
             ]
+
+            # 暂停鼠标捕获，让 input() 只接收键盘
+            self._pause_mouse_tracking()
             print(f"\n共有 {len(failed_ids)} 章下载失败。")
             retry_input = input("是否重试下载失败章节？(Y/n): ").strip().lower()
+            # 恢复鼠标捕获，以便后续仍能点击返回 TUI
+            self._resume_mouse_tracking()
+
             if retry_input in ("", "y", "yes"):
-                # 构造只包含失败章节的列表：与原章信息匹配
                 failed_chapters = [ch for ch in chapters if ch["id"] in failed_ids]
                 if failed_chapters:
-                    print("\n开始重试下载失败章节…")
-                    # 再次清屏以便日志整洁
-                    sys.stdout.write("\x1b[2J\x1b[H")
-                    sys.stdout.flush()
-                    # 重新调用 download_book，只下载失败的那几章
+                    # 再次清屏，以便日志整洁
+                    os.system("cls" if os.name == "nt" else "clear")
                     try:
-                        retry_result = downloader.download_book(
+                        result = downloader.download_book(
                             manager, manager.book_name, failed_chapters
                         )
                     except Exception as e2:
+                        # 再次出错时，把鼠标再暂停输入
+                        self._pause_mouse_tracking()
                         print(f"\n重试时出现异常：{e2}\n")
+                        input("按回车继续 …")
+                        self._resume_mouse_tracking()
                     else:
-                        # 将两次结果合并展示
-                        total_failed = retry_result.get("failed", 0)
-                        total_success = retry_result.get("success", 0)
                         print(
-                            f"\n重试完成！本次重试成功 {total_success} 章，仍失败 {total_failed} 章。\n"
+                            f"\n重试完成！本次重试成功 {result['success']} 章，取消 {result['canceled']} 章，仍失败 {result['failed']} 章。\n"
                         )
+                        input("按回车继续 …")
 
         # 5. 最终提示并等回车
-        # 重新统计一次当前 manager 中的成功/失败情况
-        all_success = len([v for v in manager.downloaded.values() if v[1] == "Success"])
-        all_failed = len([v for v in manager.downloaded.values() if v[1] == "Error"])
-        print(f"\n最终结果：成功 {all_success} 章，失败 {all_failed} 章。\n")
+        # 同样暂停鼠标捕获，再让用户回车，然后恢复鼠标
+        self._pause_mouse_tracking()
+        print(
+            f"\n最终结果：成功 {result['success']} 章，取消 {result['canceled']} 章，失败 {result['failed']} 章。\n"
+        )
         input("按回车返回 TUI …")
+        self._resume_mouse_tracking()
 
-        # 6. ANSI 再清屏 + 恢复 Urwid 主界面
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.flush()
+        # 6. 清屏并恢复Urwid主界面
+        os.system("cls" if os.name == "nt" else "clear")
         self.show_main()
 
     # --------------------------------------------------------
