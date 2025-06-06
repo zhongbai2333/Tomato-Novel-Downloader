@@ -596,17 +596,14 @@ class RangeSelectPage(urwid.WidgetWrap):
                     continue
                 pending.append(ch)
 
-        # 如果没有待下载章节，就提示并返回一个占位，这种情况一般不会进入本页面
+        # 如果没有待下载章节，就提示并返回一个占位
         if not pending:
-            # 直接弹出提示，后续会自动回到主菜单
             self.app.show_popup("没有章节需要下载，操作结束")
             return urwid.SolidFill()
 
-        # 计算显示用的数值
+        # 计算显示用的数值：在外面提前计算，以便在异常提示时使用
         pending_count = len(pending)
-        # “起始章节序号”取 pending 列表中第一个元素的 index + 1
         first_idx = int(pending[0]["index"]) + 1
-        # “最后章节序号”就是完整列表的长度
         total = len(self.chapter_list_full)
 
         header = urwid.Text(("title", "请选择下载方式"), align="center")
@@ -618,7 +615,9 @@ class RangeSelectPage(urwid.WidgetWrap):
         self.hi_edit = urwid.Edit("结束章节号 (如 50): ")
 
         all_btn = menu_button("全部下载", lambda btn: self._on_all(pending))
-        range_btn = menu_button("按区间下载", lambda btn: self._on_range(pending))
+        range_btn = menu_button(
+            "按区间下载", lambda btn: self._on_range(pending, first_idx, total)
+        )
         cancel_btn = menu_button("取消，返回主菜单", lambda btn: self.app.show_main())
 
         pile = urwid.Pile(
@@ -646,27 +645,39 @@ class RangeSelectPage(urwid.WidgetWrap):
         downloader = ChapterDownloader(self.manager.book_id, self.app.network)
         self.app.run_terminal_download(self.manager, downloader, pending)
 
-    def _on_range(self, pending):
+    def _on_range(self, pending, first_idx: int, total: int):
+        """
+        按区间下载：
+        - pending：待下载章节列表
+        - first_idx & total：在 build_widget 时已经计算好，可以在异常提示时使用
+        """
         lo_text = self.lo_edit.edit_text.strip()
         hi_text = self.hi_edit.edit_text.strip()
+
+        # —— 第一步：检查输入是否为空 ——
+        if lo_text == "" or hi_text == "":
+            self.app.show_popup(f"请输入章节范围，范围应在 {first_idx} 到 {total} 之间")
+            return
+
+        # —— 第二步：尝试转换为整数 & 验证数值合法性 ——
         try:
             lo = int(lo_text)
             hi = int(hi_text)
-            # 验证范围在 first_idx 到 total 之间
-            total = len(self.chapter_list_full)
-            first_idx = int(pending[0]["index"]) + 1
-            if not (first_idx <= lo <= hi <= total):
-                raise ValueError
-        except:
+        except ValueError:
+            self.app.show_popup(f"请输入有效数字，范围应在 {first_idx} 到 {total} 之间")
+            return
+
+        # —— 第三步：验证范围是否在 [first_idx, total] 之间 且 lo <= hi ——
+        if not (first_idx <= lo <= hi <= total):
             self.app.show_popup(
-                f"请输入有效的章节范围，范围应在 {first_idx} 到 {total} 之间"
+                f"范围不合法，应在 {first_idx} 到 {total} 之间，且 起始 ≤ 结束"
             )
             return
 
-        # 根据用户输入过滤出要下载的 pending 子集
+        # —— 第四步：根据用户输入过滤出要下载的 pending 子集 ——
         filtered = []
         for ch in pending:
-            idx = int(ch["index"])
+            idx = int(ch["index"])  # ch["index"] 是 0-based，需要 lo-1 对应
             if lo - 1 <= idx <= hi - 1:
                 filtered.append(ch)
 
@@ -674,6 +685,7 @@ class RangeSelectPage(urwid.WidgetWrap):
             self.app.show_popup("未找到符合该范围的章节")
             return
 
+        # —— 第五步：调用下载逻辑 ——
         downloader = ChapterDownloader(self.manager.book_id, self.app.network)
         self.app.run_terminal_download(self.manager, downloader, filtered)
 
