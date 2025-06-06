@@ -1051,8 +1051,16 @@ def raise_exit():
 
 def main():
     """应用入口。"""
+    app = TNDApp()
     try:
-        app = TNDApp()
         app.run()
     except urwid.ExitMainLoop:
-        print("\n再见！")
+        # 捕获 Urwid 的退出信号，不在这里输出任何内容
+        pass
+    finally:
+        # 程序无论是正常退出还是异常触发，都主动清屏一次
+        # 用 Linux/Unix 下的 clear 命令；如果你未来要兼容 Windows，可用 "cls"
+        os.system("clear" if os.name != "nt" else "cls")
+
+    # 退出前可以再输出一句“再见”，这时已经是清空后的屏幕
+    print("再见！")
