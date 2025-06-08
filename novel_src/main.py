@@ -20,6 +20,7 @@ from .network_parser.network import NetworkClient  # noqa: E402
 from .network_parser.downloader import ChapterDownloader  # noqa: E402
 from .update import UpdateManager  # noqa: E402
 from .constants import VERSION  # noqa: E402
+from .old_main import main as old_main
 
 # ------------------------------------------------------------
 # 通用工具函数（与 UI 无关）
@@ -744,6 +745,8 @@ class TNDApp:
             self.update_mgr.check_for_updates()
 
         # ================= urwid 相关 ================
+        self._o_count = 0
+        self._should_restart = False
         self.main_placeholder = urwid.WidgetPlaceholder(urwid.SolidFill())
         self.loop = urwid.MainLoop(
             self.main_placeholder,
@@ -862,13 +865,37 @@ class TNDApp:
     # --------------------------------------------------------
     # 全局按键处理（如 q 返回）
     # --------------------------------------------------------
-    def _global_key_handler(self, key: str):  # noqa: D401, N802
+    def _global_key_handler(self, key: str):
+        # 跟踪连续三次小写 o
+        if key == "o":
+            self._o_count += 1
+            if self._o_count >= 3:
+                # 1) 发出提示音
+                try:
+                    if sys.platform.startswith("win"):
+                        import winsound
+                        # 1000Hz，持续200ms
+                        winsound.Beep(1000, 200)
+                    else:
+                        # ASCII BEL
+                        sys.stdout.write("\a")
+                        sys.stdout.flush()
+                except Exception:
+                    pass
+                # 连续 3 次 o，打标记并退出主循环
+                self.config.old_cli = True
+                self.config.save()
+                self._should_restart = True
+                raise urwid.ExitMainLoop()
+                return
+        else:
+            self._o_count = 0
+
+        # 原有的 q/Q 逻辑
         if key in ("q", "Q"):
             current = self.main_placeholder.original_widget
-            # 如果当前在主菜单，则退出程序
             if isinstance(current, InputPage):
                 raise urwid.ExitMainLoop()
-            # 否则返回主菜单
             self.show_main()
 
     def _pause_mouse_tracking(self):
@@ -894,6 +921,25 @@ class TNDApp:
     # 解析用户输入并启动下载流程
     # --------------------------------------------------------
     def handle_user_input(self, text: str):
+        if text == "ooo":
+            # 1) 发出提示音
+            try:
+                if sys.platform.startswith("win"):
+                    import winsound
+                    # 1000Hz，持续200ms
+                    winsound.Beep(1000, 200)
+                else:
+                    # ASCII BEL
+                    sys.stdout.write("\a")
+                    sys.stdout.flush()
+            except Exception:
+                pass
+            self.config.old_cli = True
+            self.config.save()
+            self._should_restart = True
+            raise urwid.ExitMainLoop()
+            return
+
         book_id: Optional[str] = None
 
         # ① 尝试从 URL 中提取 book_id
@@ -1089,16 +1135,22 @@ def raise_exit():
 
 def main():
     """应用入口。"""
-    app = TNDApp()
-    try:
-        app.run()
-    except urwid.ExitMainLoop:
-        # 捕获 Urwid 的退出信号，不在这里输出任何内容
-        pass
-    finally:
-        # 程序无论是正常退出还是异常触发，都主动清屏一次
-        # 用 Linux/Unix 下的 clear 命令；如果你未来要兼容 Windows，可用 "cls"
-        os.system("clear" if os.name != "nt" else "cls")
+    if not GlobalContext.get_config().old_cli:
+        app = TNDApp()
+        try:
+            app.run()
+        except urwid.ExitMainLoop:
+            # 捕获 Urwid 的退出信号，不在这里输出任何内容
+            pass
+        finally:
+            # 程序无论是正常退出还是异常触发，都主动清屏一次
+            # 用 Linux/Unix 下的 clear 命令；如果你未来要兼容 Windows，可用 "cls"
+            os.system("clear" if os.name != "nt" else "cls")
+        
+        if getattr(app, "_should_restart", False):
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    else:
+        old_main()
 
     # 退出前可以再输出一句“再见”，这时已经是清空后的屏幕
     print("再见！")

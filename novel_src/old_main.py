@@ -55,6 +55,11 @@ def show_config_menu(config: Config):
             "field": "bulk_files",
             "type": bool,
         },
+        "D": {
+            "name": "是否使用老版本命令行界面[True/False] (需自行重启)",
+            "field": "old_cli",
+            "type": bool,
+        },
         "0": {"name": "返回主菜单"},
     }
 
@@ -241,7 +246,8 @@ def main() -> None:
     manager = None
     downloader = None
 
-    update.check_for_updates()
+    if not log_system.debug:
+        update.check_for_updates()
 
     logger.info(
         f"""欢迎使用番茄小说下载器! v{VERSION}
