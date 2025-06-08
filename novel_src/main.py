@@ -542,8 +542,10 @@ class SearchMenu(urwid.WidgetPlaceholder):
 
 class PreDownloadPage(urwid.WidgetWrap):
     """
-    如果检测到已有下载记录，询问“继续下载剩余章节”还是“重新下载全部章节”，
-    如果没有下载记录，则直接跳转到 RangeSelectPage。
+    如果检测到已有下载记录，询问“继续下载剩余章节”还是“重新下载全部章节”。
+    “继续下载”会使用原有缓存并只下载新章节，最终输出包含旧章节 + 新章节；
+    “重新下载”会清空缓存，然后下载全部章节。
+    如果没有下载记录，则跳转到 RangeSelectPage。
     """
 
     def __init__(self, app: "TNDApp", manager: BookManager, chapter_list: list[dict]):
@@ -551,7 +553,6 @@ class PreDownloadPage(urwid.WidgetWrap):
         self.manager = manager
         self.chapter_list = chapter_list
 
-        # 构建内部内容，并传给 super().__init__
         widget = self.build_widget()
         super().__init__(widget)
 
@@ -562,20 +563,21 @@ class PreDownloadPage(urwid.WidgetWrap):
         downloaded_count = len(self.manager.downloaded) - downloaded_failed
         total = len(self.chapter_list)
 
-        # 如果没有任何下载记录，立即跳转到 RangeSelectPage
+        # 如果没有任何下载记录，直接进入 RangeSelectPage
         if downloaded_count == 0:
-            # 注意：这里不能在 __init__ 里直接调用 show_range_page，因为此时 PreDownloadPage
-            # 还没完成构造，UI 也还没显示；改为使用一个延迟的方式
+            # 发出 no_history 信号后，TNDApp 会切到 RangeSelectPage
             urwid.emit_signal(self, "no_history")
             return urwid.SolidFill()
 
-        # 否则根据历史记录构建提示 UI
+        # 构建提示 UI
         header = urwid.Text(("title", "检测到已有下载记录"), align="center")
         info = urwid.Text(
             f"共 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
         )
-        cont_btn = menu_button("继续下载剩余章节", lambda btn: self._continue())
-        redo_btn = menu_button("重新下载全部章节", lambda btn: self._redo())
+        cont_btn = menu_button(
+            "继续下载剩余章节", lambda btn: self._continue_download()
+        )
+        redo_btn = menu_button("重新下载全部章节", lambda btn: self._redo_download())
         cancel_btn = menu_button("取消，返回主菜单", lambda btn: self.app.show_main())
 
         pile = urwid.Pile(
@@ -593,11 +595,20 @@ class PreDownloadPage(urwid.WidgetWrap):
         fill = urwid.Filler(pile, valign="middle")
         return urwid.LineBox(fill)
 
-    def _continue(self):
-        self.app.show_range_page(self.manager, self.chapter_list, reset_history=False)
+    def _continue_download(self):
+        """
+        继续下载：直接下载剩余章节，不进入范围选择。
+        """
+        downloader = ChapterDownloader(self.manager.book_id, self.app.network)
+        self.app.run_terminal_download(self.manager, downloader, self.chapter_list)
 
-    def _redo(self):
+    def _redo_download(self):
+        """
+        重新下载：清空历史记录后进入 RangeSelectPage，让用户选择下载范围。
+        """
+        # 清空已有缓存记录
         self.manager.downloaded.clear()
+        # reset_history=True 表示重新下载全部章节，可在 RangeSelectPage 里选择具体区间
         self.app.show_range_page(self.manager, self.chapter_list, reset_history=True)
 
 
