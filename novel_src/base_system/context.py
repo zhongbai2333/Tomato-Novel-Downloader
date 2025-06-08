@@ -14,6 +14,9 @@ from .log_system import LogSystem
 class Config(BaseConfig):
     """Config 配置文件"""
 
+    # 程序配置
+    old_cli: bool = Field(default=False, description="是否使用老版本命令行界面")
+
     # 网络配置
     max_workers: int = Field(default=1, description="最大并发线程数")
     request_timeout: int = Field(default=15, description="请求超时时间（秒）")

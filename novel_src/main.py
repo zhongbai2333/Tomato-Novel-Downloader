@@ -115,6 +115,21 @@ class MessagePopup(urwid.WidgetWrap):
         return True
 
 
+class EnterEdit(urwid.Edit):
+    def __init__(
+        self, caption: str, edit_text: str = "", on_enter: Callable[[], None] = None
+    ):
+        super().__init__(caption, edit_text=edit_text)
+        self.on_enter = on_enter
+
+    def keypress(self, size, key):
+        # 按回车时，调用回调（如果有），不再冒泡
+        if key == "enter" and callable(self.on_enter):
+            self.on_enter()
+            return None
+        return super().keypress(size, key)
+
+
 # ------------------------------------------------------------
 # 各页面 widget
 # ------------------------------------------------------------
@@ -155,6 +170,33 @@ def menu_button(label: str, callback):
     btn = urwid.Button(label)
     urwid.connect_signal(btn, "click", callback)
     return urwid.AttrMap(btn, None, focus_map="reversed")
+
+
+class SavePathPage(urwid.WidgetWrap):
+    """让用户输入保存路径，回车就等同点击“确定”"""
+
+    def __init__(self, app: "TNDApp", book_id: str):
+        self.app = app
+        self.book_id = book_id
+        default = app.config.default_save_dir
+        # 输入框
+        self.edit = urwid.Edit(f"保存路径 (默认: {default}): ")
+        # 确定按钮
+        ok_btn = menu_button("确定", lambda btn: self.on_confirm())
+        pile = urwid.Pile([self.edit, urwid.Divider(), ok_btn])
+        fill = urwid.Filler(pile, valign="top")
+        super().__init__(urwid.LineBox(fill))
+
+    def keypress(self, size, key):
+        # 在输入框或按钮上按回车，都触发 on_confirm()
+        if key == "enter":
+            self.on_confirm()
+            return None
+        return super().keypress(size, key)
+
+    def on_confirm(self):
+        path = self.edit.edit_text.strip() or str(self.app.config.default_save_dir)
+        self.app._download(self.book_id, path)
 
 
 class ConfigMenu(urwid.WidgetPlaceholder):
@@ -562,7 +604,9 @@ class PreDownloadPage(urwid.WidgetWrap):
 class RangeSelectPage(urwid.WidgetWrap):
     """
     让用户选择“全部下载”还是“指定区间下载”。
-    如果 reset_history=True，则之前的下载记录已被清空；否则保留历史记录。
+    如果用户在输入框中按回车：
+      · 起始+结束都填了 → 自动执行区间下载；
+      · 否则 → 自动执行全部下载。
     """
 
     def __init__(
@@ -574,50 +618,45 @@ class RangeSelectPage(urwid.WidgetWrap):
     ):
         self.app = app
         self.manager = manager
-        self.chapter_list_full = chapter_list
-        self.reset_history = reset_history
 
-        widget = self.build_widget()
-        super().__init__(widget)
-
-    def build_widget(self):
-        # 先统计“待下载”章节列表
-        if self.reset_history:
-            # 如果是“重新下载”，那就全部章节都是待下载
-            pending = self.chapter_list_full.copy()
+        # 计算待下载列表
+        if reset_history:
+            self.pending = chapter_list.copy()
         else:
-            # 否则把已经成功下载的章节剔除
-            pending = []
-            for ch in self.chapter_list_full:
-                cid = ch["id"]
-                status = self.manager.downloaded.get(cid)
-                # 只要 status 存在且 status[1] != "Error"，就说明已成功下载，应跳过
-                if status is not None and status[1] != "Error":
-                    continue
-                pending.append(ch)
+            self.pending = [
+                ch
+                for ch in chapter_list
+                if not (
+                    ch["id"] in manager.downloaded
+                    and manager.downloaded[ch["id"]][1] != "Error"
+                )
+            ]
 
-        # 如果没有待下载章节，就提示并返回一个占位
-        if not pending:
+        # 记录总数与首章号
+        self.total = len(chapter_list)
+        self.first_idx = int(chapter_list[0]["index"]) + 1 if chapter_list else 1
+
+        # 构造界面
+        super().__init__(self._build_widget())
+
+    def _build_widget(self):
+        if not self.pending:
+            # 没有待下载章节
             self.app.show_popup("没有章节需要下载，操作结束")
             return urwid.SolidFill()
 
-        # 计算显示用的数值：在外面提前计算，以便在异常提示时使用
-        pending_count = len(pending)
-        first_idx = int(pending[0]["index"]) + 1
-        total = len(self.chapter_list_full)
-
         header = urwid.Text(("title", "请选择下载方式"), align="center")
         info = urwid.Text(
-            f"可下载章节共 {pending_count} 章（从 {first_idx} 到 {total}）"
+            f"可下载章节共 {len(self.pending)} 章（从 {self.first_idx} 到 {self.total}）"
         )
 
-        self.lo_edit = urwid.Edit("起始章节号 (如 1): ")
-        self.hi_edit = urwid.Edit("结束章节号 (如 50): ")
+        # 使用 EnterEdit，让它回车时跑 self._on_enter()
+        self.lo_edit = EnterEdit("起始章节号 (如 1): ", on_enter=self._on_enter)
+        self.hi_edit = EnterEdit("结束章节号 (如 50): ", on_enter=self._on_enter)
 
-        all_btn = menu_button("全部下载", lambda btn: self._on_all(pending))
-        range_btn = menu_button(
-            "按区间下载", lambda btn: self._on_range(pending, first_idx, total)
-        )
+        # 仍保留按钮，鼠标/焦点切换后也可点击
+        all_btn = menu_button("全部下载", lambda btn: self._on_all())
+        range_btn = menu_button("按区间下载", lambda btn: self._on_range())
         cancel_btn = menu_button("取消，返回主菜单", lambda btn: self.app.show_main())
 
         pile = urwid.Pile(
@@ -638,54 +677,44 @@ class RangeSelectPage(urwid.WidgetWrap):
         fill = urwid.Filler(pile, valign="middle")
         return urwid.LineBox(fill)
 
-    def _on_all(self, pending):
+    def _on_enter(self):
         """
-        全部下载：直接把 pending 列表传给下载逻辑
+        回车统一入口：如果两个框都填了，就按区间下载，
+        否则一律全部下载。
         """
-        downloader = ChapterDownloader(self.manager.book_id, self.app.network)
-        self.app.run_terminal_download(self.manager, downloader, pending)
+        lo = self.lo_edit.edit_text.strip()
+        hi = self.hi_edit.edit_text.strip()
+        if lo and hi:
+            self._on_range()
+        else:
+            self._on_all()
 
-    def _on_range(self, pending, first_idx: int, total: int):
-        """
-        按区间下载：
-        - pending：待下载章节列表
-        - first_idx & total：在 build_widget 时已经计算好，可以在异常提示时使用
-        """
+    def _on_all(self):
+        downloader = ChapterDownloader(self.manager.book_id, self.app.network)
+        self.app.run_terminal_download(self.manager, downloader, self.pending)
+
+    def _on_range(self):
         lo_text = self.lo_edit.edit_text.strip()
         hi_text = self.hi_edit.edit_text.strip()
-
-        # —— 第一步：检查输入是否为空 ——
-        if lo_text == "" or hi_text == "":
-            self.app.show_popup(f"请输入章节范围，范围应在 {first_idx} 到 {total} 之间")
-            return
-
-        # —— 第二步：尝试转换为整数 & 验证数值合法性 ——
         try:
-            lo = int(lo_text)
-            hi = int(hi_text)
+            lo, hi = int(lo_text), int(hi_text)
         except ValueError:
-            self.app.show_popup(f"请输入有效数字，范围应在 {first_idx} 到 {total} 之间")
-            return
-
-        # —— 第三步：验证范围是否在 [first_idx, total] 之间 且 lo <= hi ——
-        if not (first_idx <= lo <= hi <= total):
             self.app.show_popup(
-                f"范围不合法，应在 {first_idx} 到 {total} 之间，且 起始 ≤ 结束"
+                f"请输入有效数字，范围应在 {self.first_idx} 到 {self.total} 之间"
             )
             return
 
-        # —— 第四步：根据用户输入过滤出要下载的 pending 子集 ——
-        filtered = []
-        for ch in pending:
-            idx = int(ch["index"])  # ch["index"] 是 0-based，需要 lo-1 对应
-            if lo - 1 <= idx <= hi - 1:
-                filtered.append(ch)
+        if not (self.first_idx <= lo <= hi <= self.total):
+            self.app.show_popup(
+                f"范围不合法，应在 {self.first_idx} 到 {self.total} 之间，且 起始 ≤ 结束"
+            )
+            return
 
+        filtered = [ch for ch in self.pending if lo - 1 <= int(ch["index"]) <= hi - 1]
         if not filtered:
             self.app.show_popup("未找到符合该范围的章节")
             return
 
-        # —— 第五步：调用下载逻辑 ——
         downloader = ChapterDownloader(self.manager.book_id, self.app.network)
         self.app.run_terminal_download(self.manager, downloader, filtered)
 
@@ -795,16 +824,22 @@ class TNDApp:
         如果 manager.downloaded 非空，则显示 PreDownloadPage，
         否则直接跳到 RangeSelectPage。
         """
-        downloaded_failed = len([v for v in manager.downloaded.values() if v[1] == "Error"])
+        downloaded_failed = len(
+            [v for v in manager.downloaded.values() if v[1] == "Error"]
+        )
         downloaded_count = len(manager.downloaded) - downloaded_failed
         if downloaded_count == 0:
             # 无历史记录，直接跳到 RangeSelectPage (reset_history=False)
             self.show_range_page(manager, chapter_list, reset_history=False)
         else:
             # 有历史记录，显示 PreDownloadPage
-            self.main_placeholder.original_widget = PreDownloadPage(self, manager, chapter_list)
+            self.main_placeholder.original_widget = PreDownloadPage(
+                self, manager, chapter_list
+            )
 
-    def show_range_page(self, manager: BookManager, chapter_list: list[dict], reset_history: bool):
+    def show_range_page(
+        self, manager: BookManager, chapter_list: list[dict], reset_history: bool
+    ):
         """
         由 PreDownloadPage 调用，也可直接调用：
         如果用户在 PreDownloadPage 里选了“继续”或“重置”，就会来到这里。
@@ -824,7 +859,7 @@ class TNDApp:
                 raise urwid.ExitMainLoop()
             # 否则返回主菜单
             self.show_main()
-    
+
     def _pause_mouse_tracking(self):
         """
         暂停鼠标捕获，让 input() 只接收键盘，不会把鼠标左右键当输入字符。
@@ -895,16 +930,8 @@ class TNDApp:
     # 下载流程入口：先选择保存路径
     # --------------------------------------------------------
     def start_download_flow(self, book_id: str):
-        save_path = self.config.default_save_dir
-        ask = urwid.Edit(f"保存路径 (默认: {save_path}): ")
-        ok_btn = menu_button("确定", lambda btn: on_path())
-        pile = urwid.Pile([ask, urwid.Divider(), ok_btn])
-        fill = urwid.Filler(pile, valign="top")
-        self.main_placeholder.original_widget = urwid.LineBox(fill)
-
-        def on_path():
-            path = ask.edit_text.strip() or str(save_path)
-            self._download(book_id, path)
+        """用 SavePathPage 代替原来的内联 Edit+按钮"""
+        self.main_placeholder.original_widget = SavePathPage(self, book_id)
 
     # 修改 _download，让它先进入“检查历史/选择范围”流程
     def _download(self, book_id: str, save_path: str):
@@ -936,7 +963,7 @@ class TNDApp:
         cancel_btn = menu_button("返回主菜单", lambda btn: self.show_main())
 
         pile = urwid.Pile(
-            [txt, urwid.Divider(), preview_btn, urwid.Divider(), ok_btn, cancel_btn]
+            [txt, urwid.Divider(), ok_btn, urwid.Divider(), preview_btn, cancel_btn]
         )
         self.main_placeholder.original_widget = urwid.LineBox(urwid.Filler(pile, "top"))
 
