@@ -6,6 +6,7 @@ import sys
 import json
 import urwid
 import shutil
+import pyperclip
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Dict
 from urllib.parse import urlparse, parse_qs
@@ -13,8 +14,6 @@ from ascii_magic import AsciiArt
 
 # =============== 原项目内部依赖 ===============
 from .base_system.context import GlobalContext, Config  # noqa: E402
-from .base_system.log_system import LogSystem  # noqa: E402
-from .base_system.storge_system import FileCleaner  # noqa: E402
 from .book_parser.book_manager import BookManager  # noqa: E402
 from .network_parser.network import NetworkClient  # noqa: E402
 from .network_parser.downloader import ChapterDownloader  # noqa: E402
@@ -116,11 +115,24 @@ class MessagePopup(urwid.WidgetWrap):
         return True
 
 
-class EnterEdit(urwid.Edit):
+class PasteableEdit(urwid.Edit):
+    def keypress(self, size, key):
+        # 检测 Ctrl+V (urwid 中为 'ctrl v')
+        if key.lower() == 'ctrl v':
+            try:
+                text = pyperclip.paste()
+                self.insert_text(text)
+            except Exception:
+                pass
+            return None
+        return super().keypress(size, key)
+
+
+class EnterEdit(PasteableEdit):
     def __init__(
         self, caption: str, edit_text: str = "", on_enter: Callable[[], None] = None
     ):
-        super().__init__(caption, edit_text=edit_text)
+        super().__init__(caption, edit_text, on_enter=on_enter)
         self.on_enter = on_enter
 
     def keypress(self, size, key):
@@ -181,7 +193,7 @@ class SavePathPage(urwid.WidgetWrap):
         self.book_id = book_id
         default = app.config.default_save_dir
         # 输入框
-        self.edit = urwid.Edit(f"保存路径 (默认: {default}): ")
+        self.edit = PasteableEdit(f"保存路径 (默认: {default}): ")
         # 确定按钮
         ok_btn = menu_button("确定", lambda btn: self.on_confirm())
         pile = urwid.Pile([self.edit, urwid.Divider(), ok_btn])
@@ -321,7 +333,7 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         cfg = self.app.config
         cur_val = getattr(cfg, field)
         caption = f"{display_name} (当前: {cur_val}) 新值: "
-        edit = urwid.Edit(caption, edit_text=str(cur_val))
+        edit = PasteableEdit(caption, edit_text=str(cur_val))
         save_btn = menu_button("保存", lambda btn: on_save())
         cancel_btn = menu_button("取消", lambda btn: self._build_view())
 
@@ -449,7 +461,7 @@ class InputPage(urwid.WidgetPlaceholder):
         banner = f"欢迎使用番茄小说下载器 v{VERSION}\n项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader"
         banner = urwid.Text(("title", banner))
         prompt = urwid.Text(("title", "输入小说ID/链接/书名，或选择其它操作"))
-        self.edit = urwid.Edit("输入: ")
+        self.edit = PasteableEdit("输入: ")
         ok_button = menu_button("确定", lambda btn: self.on_submit())
         cfg_button = menu_button("配置", lambda btn: self.app.show_config())
         up_button = menu_button("更新", lambda btn: self.app.show_update())

@@ -11,7 +11,7 @@ from urllib.parse import urlparse, parse_qs
 from ascii_magic import AsciiArt
 
 from .base_system.context import GlobalContext, Config
-from .base_system.storge_system import FileCleaner
+from .base_system.storage_system import FileCleaner
 from .book_parser.book_manager import BookManager
 from .network_parser.network import NetworkClient
 from .network_parser.downloader import ChapterDownloader

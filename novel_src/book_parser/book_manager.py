@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 
 from ..base_system.context import GlobalContext
-from ..base_system.storge_system import FileCleaner
+from ..base_system.storage_system import FileCleaner
 from .epub_generator import EpubGenerator
 
 class BookManager(object):
