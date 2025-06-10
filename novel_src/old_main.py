@@ -129,6 +129,31 @@ def show_config_menu(config: Config):
         elif field == "save_path":
             converted = converted.rstrip("/")
 
+        # —— 新增：API 互斥与自动调整 —— 
+        # 如果启用了官方 API，则关闭 helloplhm_qwq API
+        if field == "use_official_api" and converted:
+            if getattr(config, "use_helloplhm_qwq_api", False):
+                config.use_helloplhm_qwq_api = False
+                print("检测到启用 官方 API，已自动关闭 helloplhm_qwq API")
+
+        # 如果启用了 helloplhm_qwq API，则关闭官方 API，并自动调整相关参数
+        if field == "use_helloplhm_qwq_api" and converted:
+            msgs = []
+            if getattr(config, "use_official_api", False):
+                config.use_official_api = False
+                msgs.append("已关闭 官方 API")
+            if converted and getattr(config, "max_workers", None) != 1:
+                config.max_workers = 1
+                msgs.append("最大线程数 = 1")
+            if converted and getattr(config, "min_wait_time", 0) < 1000:
+                config.min_wait_time = 1000
+                msgs.append("最小等待时间 ≥ 1000ms")
+            if converted and getattr(config, "max_wait_time", 0) < 1200:
+                config.max_wait_time = 1200
+                msgs.append("最大等待时间 ≥ 1200ms")
+            if msgs:
+                print("由于启用 helloplhm_qwq API，" + "；".join(msgs) + "。")
+
         # 更新配置
         setattr(config, field, converted)
         print(f"{opt['name']} 已更新为 {converted}")
@@ -264,8 +289,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
 
     try:
         while True:
+            # 先清空上一轮的 book_id，避免 UnboundLocalError
+            book_id: Optional[str] = None
+
             user_input = input(
-                "\n请输入 小说ID/书本链接（分享链接）/书本名字 （输入s进入配置菜单 输入u进入更新菜单 输入q退出）："
+                "\n请输入 小说ID/书本链接（分享链接）/书本名字 "
+                "（输入s进入配置菜单 输入u进入更新菜单 输入q退出）："
             ).strip()
 
             if user_input == "":
@@ -276,49 +305,64 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
                 show_config_menu(config)
                 continue
 
-            book_id = None
-
+            # 更新菜单
             if user_input.lower() == "u":
                 book_id = update_menu(config, logger, network)
                 if book_id is None:
+                    # 用户取消更新，回到循环开头
                     continue
 
+            # 如果还没拿到 ID，就尝试从分享链接中提取
             if not book_id:
-                # 1. 首先尝试从文本中提取 URL
                 urls = re.findall(r"(https?://[^\s]+)", user_input)
                 if urls:
-                    url_str = urls[0]  # 取第一个找到的链接
+                    url_str = urls[0]
                     parsed = urlparse(url_str)
-                    # 尝试解析 /page/<book_id> 模式
                     m = re.search(r"/page/(\d+)", parsed.path)
                     if m:
                         book_id = m.group(1)
                     else:
-                        # 从 query 参数中尝试获取 book_id 或 bookId
                         qs = parse_qs(parsed.query)
                         bid_list = qs.get("book_id") or qs.get("bookId")
                         if bid_list:
                             book_id = bid_list[0]
-
                     if not book_id:
                         logger.info("错误：无法从链接中解析出 book_id，请检查链接格式")
                         continue
 
-            # 2. 如果没有提取到 URL，再判断是否为纯数字 ID
+            # 如果还是没有 ID，而且输入全为数字，就当作纯数字 ID
+            if not book_id and user_input.isdigit():
+                book_id = user_input
+
+            # 走到这里，如果还没拿到 book_id，就当作书名，调用新版 search_book 返回多条结果
             if not book_id:
-                if user_input.isdigit():
-                    book_id = user_input
-                else:
-                    # 3. 作为书名处理，调用搜索接口获取book_id
-                    book_name = user_input
-                    found_id = network.search_book(book_name)
-                    if found_id and found_id == "0000":
-                        continue
-                    elif found_id:
-                        book_id = found_id
-                    else:
-                        logger.error("API获取信息异常!")
-                        continue
+                book_name = user_input
+                try:
+                    results = network.search_book(book_name)
+                except Exception as e:
+                    logger.error(f"搜索小说失败：{e}")
+                    continue
+
+                if not results:
+                    logger.info("未搜索到对应书籍")
+                    continue
+
+                # 打印搜索结果，让用户选择
+                print("\n===== 搜索结果 =====")
+                for idx, item in enumerate(results, start=1):
+                    print(
+                        f"{idx}. {item['title']} | 作者: {item['author']} | ID: {item['book_id']}"
+                    )
+                print("q. 取消")
+
+                sel = input("请输入编号选择要下载的书籍：").strip().lower()
+                if sel == "q":
+                    continue
+                if not sel.isdigit() or not (1 <= int(sel) <= len(results)):
+                    print("输入编号无效，已取消本次搜索")
+                    continue
+
+                book_id = results[int(sel) - 1]["book_id"]
 
             # 获取保存路径
             save_path = input(

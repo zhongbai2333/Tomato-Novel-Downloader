@@ -132,7 +132,7 @@ class EnterEdit(PasteableEdit):
     def __init__(
         self, caption: str, edit_text: str = "", on_enter: Callable[[], None] = None
     ):
-        super().__init__(caption, edit_text, on_enter=on_enter)
+        super().__init__(caption, edit_text)
         self.on_enter = on_enter
 
     def keypress(self, size, key):
