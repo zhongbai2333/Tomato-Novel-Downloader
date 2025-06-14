@@ -24,7 +24,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展 ───────────────────
       - name: Checkout private repo B
@@ -107,7 +107,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展 ───────────────────
       - name: Checkout private repo B
@@ -188,7 +188,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展（Windows 环境） ─────
       - name: Checkout private repo B
@@ -285,7 +285,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展（macOS 环境） ────────
       - name: Checkout private repo B

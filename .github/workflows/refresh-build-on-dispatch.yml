@@ -45,7 +45,7 @@ jobs:
       - name: Setup Python (Linux)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux)
         uses: actions/checkout@v4
@@ -124,7 +124,7 @@ jobs:
       - name: Setup Python (Linux ARM64)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux ARM64)
         uses: actions/checkout@v4
@@ -203,7 +203,7 @@ jobs:
       - name: Setup Python (Windows)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Windows)
         uses: actions/checkout@v4
@@ -294,7 +294,7 @@ jobs:
       - name: Setup Python (macOS)
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.13.3'
 
       - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS)
         uses: actions/checkout@v4
