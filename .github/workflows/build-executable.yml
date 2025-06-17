@@ -9,7 +9,6 @@ on:
       - 'requirements.txt'  # 依赖清单
       - 'img/**'            # 图标资源目录
       - '.github/workflows/build-executable.yml' # 工作流文件本身的变化
-  pull_request:
   workflow_dispatch:
 
 jobs:
