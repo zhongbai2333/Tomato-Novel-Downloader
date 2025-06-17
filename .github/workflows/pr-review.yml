@@ -379,18 +379,17 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const pr = context.payload.pull_request;
             // 回复构建完成
-            await github.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-              body: `✅ 多平台构建完成，已生成可执行文件。`
+            await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                body:         '✅ 多平台构建完成，已生成可执行文件。'
             });
             // 删除触发标签
-            await github.issues.removeLabel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-              name: context.payload.label.name
+            await github.rest.issues.removeLabel({
+                issue_number: context.issue.number,
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                name:         context.payload.label.name
             });
