@@ -119,9 +119,8 @@ class BookManager(object):
                 )
 
                 epub.add_chapter(
-                    "简介",
-                    f"<h1>简介</h1><p>{self.tags}</p><p>{self.description}</p>",
-                    "description.xhtml",
+                    "书籍简介",
+                    f"<h1>书籍简介</h1><p><small>{self.tags}</small></p><p>{self.description.replace('\n','</p><p>')}</p>",
                 )
 
                 for chapter in chapters:

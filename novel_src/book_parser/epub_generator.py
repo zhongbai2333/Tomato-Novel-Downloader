@@ -41,7 +41,8 @@ class EpubGenerator:
         except Exception as e:
             GlobalContext.get_logger().error(f"读取封面失败: {str(e)}")
             cover_content = b""
-        self.book.set_cover("cover.jpg", cover_content)
+        self.book.set_cover("cover.jpg", cover_content, False)
+        #self.book.get_item_with_id("cover").title = "封面"
 
         # 添加可选元数据
         if author:
@@ -51,24 +52,10 @@ class EpubGenerator:
         if description:
             self.book.add_metadata("DC", "description", description)
 
-        style = """
-        @namespace epub "http://www.idpf.org/2007/ops";
-        body { font-family: "Noto Serif CJK SC", SimSun, serif; }
-        h1 { text-align: center; margin: 1em 0; }
-        p { text-indent: 2em; margin: 0.5em 0; }
-        """
-        nav_css = epub.EpubItem(
-            uid="style_nav",
-            file_name="style/nav.css",
-            media_type="text/css",
-            content=style,
-        )
-        self.book.add_item(nav_css)
-
         self.chapters = []
-        self._file_counter = 1  # 用于生成自动文件名
+        self._file_counter = 0  # 用于生成自动文件名
 
-    def add_chapter(self, title, content, file_name=None):
+    def add_chapter(self, title, content, file_name=None, id=None):
         """
         添加章节到书籍
         :param title: 章节标题
@@ -77,7 +64,7 @@ class EpubGenerator:
         """
         # 生成自动文件名（如果未提供）
         if not file_name:
-            file_name = f"chap_{self._file_counter:02d}.xhtml"
+            file_name = f"chapter_{self._file_counter}.xhtml"
             self._file_counter += 1
 
         # 创建章节对象
@@ -105,7 +92,8 @@ class EpubGenerator:
         )
         self.book.add_item(img_item)
         # 2. （可选）加入 manifest，确保 toc/导航也能识别
-        self.book.spine.append(img_item)
+        # self.book.spine.append(img_item) 
+        # 無用，因後續已複寫 self.book.spine
 
     def generate(self, output_path, toc=None):
         """
@@ -119,18 +107,17 @@ class EpubGenerator:
         for file in img_list:
             self.add_img(str(img_path / file))
 
+        # 添加导航文件 (NCX and Nav) - 需要在TOC和Spine设置之前添加
+        self.book.add_item(epub.EpubNcx())
+        self.book.add_item(epub.EpubNav(title="目录")) # 設默認物件 title 為 "目录" 
+
         # 设置默认目录（如果未提供）
         if not toc:
-            self.book.toc = [(epub.Section("目录"), self.chapters)]
+            self.book.toc = self.chapters
         else:
             self.book.toc = toc
 
-        # 添加导航文件
-        self.book.add_item(epub.EpubNcx())
-        self.book.add_item(epub.EpubNav())
-
-        # 设置书脊（spine）
-        self.book.spine = ["nav"] + self.chapters
+        self.book.spine = self.chapters
 
         # 生成文件
         epub.write_epub(output_path, self.book)
