@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 from typing import Dict, List
 
@@ -120,7 +121,7 @@ class BookManager(object):
 
                 epub.add_chapter(
                     "书籍简介",
-                    f"<h1>书籍简介</h1><p><small>{self.tags}</small></p><p>{self.description.replace('\n','</p><p>')}</p>",
+                    f"<h1>书籍简介</h1><p><small>{self.tags}</small></p><p>{re.sub(r'\n+', '</p><p>', self.description)}</p>",
                 )
 
                 for chapter in chapters:
