@@ -5,6 +5,16 @@ on:
     types: [labeled]
 
 jobs:
+  cancel_if_unrelated:
+    runs-on: ubuntu-latest
+    # 只保留 run-build，其它标签添加则取消
+    if: github.event.label.name != 'run-build'
+    steps:
+      - name: 非目标标签，取消本次 Workflow
+        uses: styfle/cancel-workflow-action@0.9.1
+        with:
+          access_token: ${{ secrets.GITHUB_TOKEN }}
+
   build-linux:
     if: github.event.label.name == 'run-build'
     runs-on: ubuntu-latest
