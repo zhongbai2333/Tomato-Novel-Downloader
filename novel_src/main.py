@@ -397,56 +397,98 @@ class ConfigMenu(urwid.WidgetPlaceholder):
 
 
 class UpdateMenu(urwid.WidgetPlaceholder):
-    """展示可更新小说列表，并选择一个后调用回调。"""
+    """展示可更新小说列表，并将无更新的书籍放置到子菜单中"""
 
     def __init__(self, app: "TNDApp"):
         super().__init__(urwid.SolidFill())
         self.app = app
-        self._choices: List[Tuple[str, str]] = []
+        # 分别存储有更新和无更新的书籍
+        self._update_choices: List[Tuple[str, str]] = []
+        self._no_update_choices: List[Tuple[str, str]] = []
         self._build()
 
     def _build(self):
         cfg = self.app.config
         save_dir = Path(cfg.default_save_dir)
         subdirs = list_subdirs(save_dir)
-        choices_valid = False
 
+        # 清空上次的记录
+        self._update_choices.clear()
+        self._no_update_choices.clear()
+
+        # 遍历所有子目录，分类
         for folder in subdirs:
             if "_" not in folder:
                 continue
             book_id, book_name = folder.split("_", 1)
             try:
                 chapters = self.app.network.fetch_chapter_list(book_id)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 self.app.logger.error(f"获取章节列表失败: {e}")
                 continue
+
             status_path = save_dir / folder / f"chapter_status_{book_id}.json"
             status = load_download_status(status_path)
             downloaded = status.get("downloaded", {})
             new_count = max(len(chapters) - len(downloaded), 0)
-            self._choices.append(
-                (book_id, f"《{book_name}》({book_id}) — 新章节: {new_count}")
-            )
-            choices_valid = True
+            desc = f"《{book_name}》({book_id}) — 新章节: {new_count}"
 
-        if not choices_valid:
-            self.app.show_popup("没有可更新的小说")
+            if new_count > 0:
+                self._update_choices.append((book_id, desc))
+            else:
+                self._no_update_choices.append((book_id, desc))
+
+        # 如果两个列表都为空，则提示没有任何小说
+        if not self._update_choices and not self._no_update_choices:
+            self.app.show_popup("没有可更新或无更新的小说")
             return
 
+        # 构建菜单主体
         body: List[urwid.Widget] = [
-            urwid.Text(("title", "可更新小说列表 (q 返回)")),
+            urwid.Text(("title", "小说更新菜单 (q 返回)")),
             urwid.Divider(),
         ]
-        for bid, desc in self._choices:
-            body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
-        body.append(urwid.Divider())
+
+        # 有更新的书籍列表
+        if self._update_choices:
+            body.append(urwid.Text("有新章节的书籍："))
+            for bid, desc in self._update_choices:
+                body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
+            body.append(urwid.Divider())
+
+        # 无更新的书籍子菜单入口
+        if self._no_update_choices:
+            count = len(self._no_update_choices)
+            body.append(
+                menu_button(
+                    f"无更新 ({count})", lambda btn: self._show_no_update_menu()
+                )
+            )
+            body.append(urwid.Divider())
+
+        # 返回主菜单
         body.append(menu_button("返回主菜单", lambda btn: self.app.show_main()))
 
         listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
         self.original_widget = urwid.LineBox(listbox)
 
     def _select(self, book_id: str):
+        """开始下载流程"""
         self.app.start_download_flow(book_id)
+
+    def _show_no_update_menu(self):
+        """显示无更新书籍的子菜单"""
+        body: List[urwid.Widget] = [
+            urwid.Text(("title", "无更新的书籍 (q 返回)")),
+            urwid.Divider(),
+        ]
+        for bid, desc in self._no_update_choices:
+            body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
+        body.append(urwid.Divider())
+        body.append(menu_button("返回更新菜单", lambda btn: self._build()))
+
+        listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
+        self.original_widget = urwid.LineBox(listbox)
 
 
 class InputPage(urwid.WidgetPlaceholder):
