@@ -188,17 +188,18 @@ def update_menu(
     返回选中书籍的 book_id，或在取消/无可更新时返回 None。
     """
     save_dir: Path = Path(config.default_save_dir)
-    subdirs = list_subdirs(save_dir)  # 假设返回的都是子文件夹名列表
+    subdirs = list_subdirs(save_dir)
 
     if not subdirs:
         logger.info("没有可供更新的小说")
         return None
 
-    choices: List[Tuple[str, str]] = []
+    # 分离有更新和无更新列表
+    update_choices: List[Tuple[str, str]] = []
+    no_update_choices: List[Tuple[str, str]] = []
     for folder in subdirs:
         if "_" not in folder:
             continue
-
         book_id, book_name = folder.split("_", 1)
         try:
             chapters = network.fetch_chapter_list(book_id)
@@ -210,34 +211,71 @@ def update_menu(
         status = load_download_status(status_path)
         downloaded = status.get("downloaded", {})
         new_count = max(len(chapters) - len(downloaded), 0)
+        desc = f"《{book_name}》({book_id}) — 新章节：{new_count}"
 
-        choices.append((book_id, f"《{book_name}》({book_id}) — 新章节：{new_count}"))
+        if new_count > 0:
+            update_choices.append((book_id, desc))
+        else:
+            no_update_choices.append((book_id, desc))
 
-    if not choices:
-        logger.info("没有合法格式且可更新的小说")
+    if not update_choices and not no_update_choices:
+        logger.info("没有合法格式的小说")
         return None
 
-    logger.info("===== 可供更新的小说列表 =====")
-    for idx, (_id, desc) in enumerate(choices, start=1):
-        logger.info(f"{idx}. {desc}")
+    def select_from_list(choices: List[Tuple[str, str]], title: str) -> Optional[str]:
+        """通用子菜单选择函数"""
+        while True:
+            logger.info(f"===== {title} =====")
+            for idx, (_id, desc) in enumerate(choices, start=1):
+                logger.info(f"{idx}. {desc}")
+            logger.info("q. 取消并返回上级菜单")
+            user_input = input("请输入编号：").strip().lower()
+            if user_input == "q":
+                return None
+            if not user_input.isdigit():
+                print("错误：请输入数字编号或 q 返回。")
+                continue
+            idx = int(user_input)
+            if 1 <= idx <= len(choices):
+                logger.info(f"已选择：{choices[idx-1][1]}")
+                return choices[idx - 1][0]
+            print(f"错误：请输入 1 到 {len(choices)} 之间的数字，或 q 返回。")
 
+    # 主菜单循环
     while True:
-        user_input = input("请输入编号 (输入 q 退出)：").strip().lower()
+        logger.info("===== 可供更新的小说列表 =====")
+        for idx, (_id, desc) in enumerate(update_choices, start=1):
+            logger.info(f"{idx}. {desc}")
+        opt_no_update = None
+        if no_update_choices:
+            opt_no_update = len(update_choices) + 1
+            logger.info(f"{opt_no_update}. 无更新 ({len(no_update_choices)})")
+        logger.info("q. 退出")
+
+        user_input = input("请输入编号：").strip().lower()
         if user_input == "q":
             logger.info("已取消更新")
             return None
-
         if not user_input.isdigit():
             print("错误：请输入数字编号或 q 退出。")
             continue
 
-        idx = int(user_input)
-        if 1 <= idx <= len(choices):
-            selected_id = choices[idx - 1][0]
-            logger.info(f"已选择更新：{choices[idx - 1][1]}")
-            return selected_id
+        sel = int(user_input)
+        # 选择有更新的书
+        if 1 <= sel <= len(update_choices):
+            logger.info(f"已选择更新：{update_choices[sel-1][1]}")
+            return update_choices[sel - 1][0]
+        # 进入无更新子菜单
+        if opt_no_update and sel == opt_no_update:
+            picked = select_from_list(no_update_choices, "无更新的书籍")
+            if picked:
+                return picked
+            # 返回主菜单，继续循环
+            continue
 
-        print(f"错误：请输入 1 到 {len(choices)} 之间的数字。")
+        print(
+            f"错误：请输入 1 到 {opt_no_update or len(update_choices)} 之间的数字，或 q 退出。"
+        )
 
 
 def list_subdirs(path):
