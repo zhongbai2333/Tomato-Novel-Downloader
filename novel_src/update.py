@@ -84,14 +84,35 @@ class UpdateManager(object):
 
         for asset in latest_release.get("assets", []):
             if self._detect_platform_keyword() in asset["name"]:
+                original_url = asset.get("browser_download_url")
+                # 通过笒鬼鬼 API 获取加速下载地址
+                api_url = (
+                    "https://api.cenguigui.cn/api/github/"
+                    "?type=json"
+                    f"&url={original_url}"
+                )
+                download_url = original_url  # 默认使用原始地址
+                try:
+                    resp = requests.get(api_url, timeout=10)
+                    resp.raise_for_status()
+                    json_data = resp.json()
+                    download_url = (
+                        json_data.get("data", {})
+                                 .get("downUrl", original_url)
+                    )
+                except Exception as e:
+                    self.logger.warning(
+                        f"[UpdateManager] 获取加速下载地址失败，使用原始地址：{e}"
+                    )
+
                 return {
                     "name": latest_release["name"],
                     "tag_name": latest_release["tag_name"],
-                    "browser_download_url": "https://github.moeyy.xyz/"
-                    + asset["browser_download_url"],
+                    "browser_download_url": download_url,
                     "size": asset["size"],
                     "sha256": asset.get("digest", "").split(":")[-1],
                 }
+        return {}
 
     def _download_asset(self, tmp_dir: Path, size: str, url: str) -> Path:
         """
