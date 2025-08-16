@@ -40,14 +40,16 @@ class UpdateManager(object):
     def _detect_platform_keyword() -> str:
         """
         返回平台和架构关键字，用于匹配 release 资产名：
-        - Linux 上返回 "Linux_amd64" 或 "Linux_arm64" 等
-        - Windows 上返回 "Win64"
-        - macOS 上返回 "macOS_arm64"（这里假设都是 arm64，若要兼容 intel 可再做判断）
+        - Linux:  Linux_amd64 / Linux_arm64
+        - Windows: Win64
+        - macOS:  macOS_arm64 / macOS_amd64 (新增 Intel 支持)
+          （如果需要将来支持 universal，可扩展为 macOS_universal）
+        其他平台直接返回 system 名称
         """
         system = platform.system()
         machine = platform.machine().lower()
 
-        # 判断架构
+        # 归一化架构
         if machine in ("x86_64", "amd64"):
             arch_key = "amd64"
         elif machine in ("aarch64", "arm64"):
@@ -60,13 +62,18 @@ class UpdateManager(object):
         if system == "Windows":
             return "Win64"
         if system == "Darwin":
-            return "macOS_arm64"
-        # 其他平台直接返回 system 名称
+            # 区分 Apple Silicon 与 Intel
+            if arch_key == "amd64":
+                return "macOS_amd64"
+            if arch_key == "arm64":
+                return "macOS_arm64"
+            # 兜底：如果出现其它（很少见），保留架构名
+            return f"macOS_{arch_key}"
         return system
 
     def _fetch_latest_release(self) -> Optional[Dict[str, Any]]:
         """调用 GitHub API，获取最新 Release 信息。出现错误时返回 None"""
-        url = f"https://api.github.com/repos/zhongbai2333/Tomato-Novel-Downloader/releases/latest"
+        url = "https://api.github.com/repos/zhongbai2333/Tomato-Novel-Downloader/releases/latest"
         headers = {"Accept": "application/vnd.github+json"}
         try:
             resp = requests.get(url, headers=headers, timeout=10)
@@ -77,13 +84,16 @@ class UpdateManager(object):
             return None
 
     def _get_latest_release(self) -> Dict[str, str]:
-        """获取最新 Release 的所有资产，并按平台关键字分类"""
+        """获取最新 Release 的当前平台匹配资产信息。匹配不到返回空 dict"""
         latest_release = self._fetch_latest_release()
         if not latest_release:
             return {}
 
+        platform_key = self._detect_platform_keyword()
+
         for asset in latest_release.get("assets", []):
-            if self._detect_platform_keyword() in asset["name"]:
+            name = asset.get("name", "")
+            if platform_key in name:
                 original_url = asset.get("browser_download_url")
                 # 通过笒鬼鬼 API 获取加速下载地址
                 api_url = (
@@ -96,54 +106,66 @@ class UpdateManager(object):
                     resp = requests.get(api_url, timeout=10)
                     resp.raise_for_status()
                     json_data = resp.json()
-                    download_url = (
-                        json_data.get("data", {})
-                                 .get("downUrl", original_url)
+                    download_url = json_data.get("data", {}).get(
+                        "downUrl", original_url
                     )
                 except Exception as e:
                     self.logger.warning(
                         f"[UpdateManager] 获取加速下载地址失败，使用原始地址：{e}"
                     )
 
+                # SHA256: 目前 Release 资产没有标准 digest 字段时可能为空
+                sha256_val = asset.get("digest", "")
+                if sha256_val:
+                    sha256_val = sha256_val.split(":")[-1]
+                else:
+                    # 若没有 digest，可考虑在将来提供一个 <asset>.sha256 文件，
+                    # 或者跳过严格校验（这里保持兼容，返回空字符串）
+                    sha256_val = ""
+
                 return {
-                    "name": latest_release["name"],
-                    "tag_name": latest_release["tag_name"],
+                    "name": latest_release.get("name", ""),
+                    "tag_name": latest_release.get("tag_name", ""),
                     "browser_download_url": download_url,
-                    "size": asset["size"],
-                    "sha256": asset.get("digest", "").split(":")[-1],
+                    "size": asset.get("size", 0),
+                    "sha256": sha256_val,
                 }
         return {}
 
-    def _download_asset(self, tmp_dir: Path, size: str, url: str) -> Path:
+    def _download_asset(self, tmp_dir: Path, size: str | int, url: str) -> Path:
         """
         下载 asset，并显示 tqdm 进度条。返回下载到本地的临时文件路径。
         如果下载过程中出错，会抛出 RuntimeError。
         """
         try:
-            # 发起 GET 请求，不立刻读取全部内容，stream=True 以便分块下载
             response = requests.get(url, stream=True, timeout=60)
             response.raise_for_status()
         except Exception as e:
             raise RuntimeError(f"[UpdateManager] 下载资产时出错：{url}，{e}")
 
-        # 从 headers 中获取文件总大小（字节），用于进度条
-        total_size = response.headers.get("Content-Length")
-        if total_size is None:
-            # 无法获取 Content-Length，就按原来方式全量写入（不显示进度）
-            total_size = int(size)
+        total_size_header = response.headers.get("Content-Length")
+        if total_size_header is not None:
+            try:
+                total_size = int(total_size_header)
+            except ValueError:
+                total_size = (
+                    int(size)
+                    if isinstance(size, (int, str)) and str(size).isdigit()
+                    else 0
+                )
         else:
-            total_size = int(total_size)
+            total_size = (
+                int(size) if isinstance(size, (int, str)) and str(size).isdigit() else 0
+            )
 
         fname = Path(url).name
         tmp_file = tmp_dir / fname
 
         try:
-            # chunk_size 每次读 8192 字节
             chunk_size = 8192
             with tmp_file.open("wb") as f:
-                # 使用 tqdm 展示进度条，单位是字节
                 with tqdm(
-                    total=total_size,
+                    total=total_size if total_size > 0 else None,
                     unit="B",
                     unit_scale=True,
                     desc=f"Downloading {fname}",
@@ -151,10 +173,10 @@ class UpdateManager(object):
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if chunk:
                             f.write(chunk)
-                            pbar.update(len(chunk))
+                            if total_size > 0:
+                                pbar.update(len(chunk))
             return tmp_file
         except Exception as e:
-            # 写入过程中出错，尝试删除残留文件并抛异常
             try:
                 tmp_file.unlink()
             except Exception:
@@ -162,18 +184,24 @@ class UpdateManager(object):
             raise RuntimeError(f"[UpdateManager] 写入下载临时文件失败：{tmp_file}，{e}")
 
     def _download_and_verify(
-        self, tmp_dir: Path, size: str, url: str, expected_sha256: str
+        self, tmp_dir: Path, size: str | int, url: str, expected_sha256: str
     ) -> Path:
         """
-        下载 asset 并校验 sha256，一旦校验不通过则删除并抛异常。
+        下载 asset 并校验 sha256：
+        - 如果 expected_sha256 为空则跳过校验（兼容没有提供 digest 的情况）
+        - 校验失败抛出异常
         """
         tmp_file = self._download_asset(tmp_dir, size, url)
-        actual_sha256 = self._compute_file_sha256(tmp_file)
-        if actual_sha256.lower() != expected_sha256.lower():
-            tmp_file.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"SHA256 校验失败：下载文件 {tmp_file} 的哈希 {actual_sha256} 与期望 {expected_sha256} 不符"
-            )
+        if expected_sha256:
+            actual_sha256 = self._compute_file_sha256(tmp_file)
+            if actual_sha256.lower() != expected_sha256.lower():
+                tmp_file.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"SHA256 校验失败：下载文件 {tmp_file} 的哈希 {actual_sha256} 与期望 {expected_sha256} 不符"
+                )
+        else:
+            # 没有 expected_sha256 时仅提示
+            pass
         return tmp_file
 
     def _unix_apply(self, tmp_file: Path) -> Path:
@@ -283,7 +311,10 @@ class UpdateManager(object):
                 "[UpdateManager] 无法获取最新版本信息，可能网络异常或 GitHub API 出错。"
             )
             return
-        if latest_release["tag_name"] != current_version:
+        if (
+            latest_release.get("tag_name")
+            and latest_release["tag_name"] != current_version
+        ):
             self.logger.info(
                 f"[UpdateManager] 检测到新版本：{latest_release['tag_name']}，当前：{current_version}"
             )
@@ -301,9 +332,16 @@ class UpdateManager(object):
             self.logger.info(
                 f"[UpdateManager] 本地版本 ({current_version}) 与最新相同，检查热补丁..."
             )
-            if self._get_self_hash() != latest_release["sha256"].lower():
-                self.logger.info("[UpdateManager] 检测到热补丁更新，正在应用...")
+            # 如果没有提供 sha256（为空），跳过热补丁校验
+            if latest_release.get("sha256"):
                 try:
-                    self._start_update(latest_release)
+                    if self._get_self_hash() != latest_release["sha256"].lower():
+                        self.logger.info(
+                            "[UpdateManager] 检测到热补丁更新，正在应用..."
+                        )
+                        try:
+                            self._start_update(latest_release)
+                        except Exception as e:
+                            self.logger.error(f"[UpdateManager] 热补丁更新失败：{e}")
                 except Exception as e:
-                    self.logger.error(f"[UpdateManager] 热补丁更新失败：{e}")
+                    self.logger.warning(f"[UpdateManager] 热补丁校验过程出现问题：{e}")

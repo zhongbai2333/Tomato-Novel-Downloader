@@ -9,7 +9,7 @@
 #        (2) 笒鬼鬼 API（https://api.cenguigui.cn/api/github）解析加速
 #   4. 可在用户选择使用笒鬼鬼 API 且未安装 jq 时，交互式尝试安装 jq（支持常见包管理器），失败继续使用纯 Bash 兜底解析
 #   5. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh
-#   6. Linux/macOS 下下载对应架构二进制并赋予执行权限
+#   6. Linux / macOS (arm64 & Intel x86_64) 下下载对应架构二进制并赋予执行权限
 #
 # 使用方法：
 #   chmod +x installer.sh
@@ -223,8 +223,10 @@ case "$PLATFORM" in
     Darwin)
         if [[ "$ARCH" == "arm64" ]]; then
             BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
+        elif [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
+            BINARY_NAME="TomatoNovelDownloader-macOS_amd64-v${VERSION}"
         else
-            log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64。"
+            log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64 / x86_64。"
             exit 1
         fi
         ;;
