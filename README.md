@@ -47,7 +47,7 @@
     国内用户可使用：
 
     ```sh
-    RAW_URL=https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh; DL_URL=$(curl -fsSL "https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL" | sed -n 's/.*"downUrl":"\([^"]*\)".*/\1/p'); [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; curl -fsSL "$DL_URL" | bash
+    RAW_URL="https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh"; API="https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL"; DL_URL="$(curl -fsSL "$API" | sed -n 's/.*\"downUrl\":\"\([^\"]*\)\".*/\1/p')"; DL_URL="${DL_URL//\\//}"; [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; bash <(curl -fsSL "$DL_URL")
     ```
 
 3. 电脑端该如何运行？
@@ -63,7 +63,7 @@
     国内用户可使用：
 
     ```sh
-    RAW_URL=https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh; DL_URL=$(curl -fsSL "https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL" | sed -n 's/.*"downUrl":"\([^"]*\)".*/\1/p'); [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; curl -fsSL "$DL_URL" | bash
+    RAW_URL="https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh"; API="https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL"; DL_URL="$(curl -fsSL "$API" | sed -n 's/.*\"downUrl\":\"\([^\"]*\)\".*/\1/p')"; DL_URL="${DL_URL//\\//}"; [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; bash <(curl -fsSL "$DL_URL")
     ```
 
 4. 小说id是什么？在哪里获取？

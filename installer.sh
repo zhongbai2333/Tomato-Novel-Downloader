@@ -7,8 +7,9 @@
 #   3. 支持 2 种下载方式：
 #        (1) 直连 GitHub
 #        (2) 笒鬼鬼 API（https://api.cenguigui.cn/api/github）解析加速
-#   4. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh
-#   5. Linux/macOS 下下载对应架构二进制并赋予执行权限
+#   4. 可在用户选择使用笒鬼鬼 API 且未安装 jq 时，交互式尝试安装 jq（支持常见包管理器），失败继续使用纯 Bash 兜底解析
+#   5. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh
+#   6. Linux/macOS 下下载对应架构二进制并赋予执行权限
 #
 # 使用方法：
 #   chmod +x installer.sh
@@ -26,49 +27,94 @@ log_error() { printf "\033[1;31m[ERR ]\033[0m %s\n" "$*" >&2; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-# URL 编码函数（尽量不依赖外部命令；若有 python/perl/node/jq 任选其一）
+# 纯 Bash URL 编码（保留 / : - _ . ~ 方便阅读；其余编码）
 urlencode() {
     local raw="${1:?}"
-    if command_exists python3; then
-        python3 - <<EOF
-import urllib.parse,sys
-print(urllib.parse.quote(sys.argv[1], safe=''))
-EOF
-        return
-    elif command_exists python; then
-        python - <<EOF
-import urllib,sys
-print(urllib.quote(sys.argv[1], safe=''))
-EOF
-        return
-    elif command_exists perl; then
-        perl -MURI::Escape -e 'print uri_escape($ARGV[0]);' "$raw"
-        return
-    elif command_exists node; then
-        node -pe 'encodeURIComponent(process.argv[1])' "$raw"
-        return
-    fi
-    # 兜底（不严格，但多数情况可用）
-    local length="${#raw}" i c out=""
-    for (( i=0; i<length; i++ )); do
+    local out="" c
+    local i len=${#raw}
+    for (( i=0; i<len; i++ )); do
         c="${raw:i:1}"
         case "$c" in
-            [a-zA-Z0-9._~-]) out+="$c" ;;
+            [a-zA-Z0-9._~/:=-]) out+="$c" ;;
             *) printf -v hex '%%%02X' "'$c"; out+="$hex" ;;
         esac
     done
-    printf "%s" "$out"
+    printf '%s' "$out"
 }
 
-# 尝试解析 JSON 字段（优先 jq）
+# JSON 字段提取（优先 jq，失败则使用简单 grep+sed 兜底）
 json_get_field() {
     local json="$1" field="$2"
     if command_exists jq; then
         printf "%s" "$json" | jq -r --arg f "$field" '.[$f] // .data[$f] // empty' 2>/dev/null || true
         return
     fi
-    # 简易 grep + sed（不可靠，但做兜底）
-    printf "%s" "$json" | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n1 | sed -E 's/.*:"([^"]*)".*/\1/'
+    printf "%s" "$json" \
+      | grep -o "\"$field\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
+      | head -n1 \
+      | sed -E 's/.*:"([^"]*)".*/\1/'
+}
+
+# 询问并尝试安装 jq（仅在用户选择 cenguigui 且缺 jq 时调用）
+maybe_install_jq() {
+    if command_exists jq; then
+        return 0
+    fi
+    echo ""
+    log_warn "未检测到 jq，将使用 sed/grep 兜底解析（可能不够稳健）。"
+    echo "是否尝试自动安装 jq？[Y/n]（macOS 无 Homebrew 会自动放弃安装）"
+    read -r REPLY_JQ
+    REPLY_JQ="${REPLY_JQ:-y}"
+    if [[ ! "$REPLY_JQ" =~ ^([Yy][Ee][Ss]|[Yy])$ ]]; then
+        log_info "跳过 jq 安装。"
+        return 0
+    fi
+
+    # 检测各平台包管理器
+    local install_cmd="" need_root=true
+    if command_exists pkg && $IS_TERMUX; then
+        install_cmd="pkg update -y && pkg install -y jq"
+        need_root=false
+    elif command_exists apt-get; then
+        install_cmd="apt-get update -y && apt-get install -y jq"
+    elif command_exists apt; then
+        install_cmd="apt update -y && apt install -y jq"
+    elif command_exists dnf; then
+        install_cmd="dnf install -y jq"
+    elif command_exists yum; then
+        install_cmd="yum install -y jq"
+    elif command_exists pacman; then
+        install_cmd="pacman -Sy --noconfirm jq"
+    elif command_exists apk; then
+        install_cmd="apk add --no-cache jq"
+    elif command_exists brew; then
+        install_cmd="brew install jq"
+        need_root=false
+    else
+        log_warn "未识别到可用包管理器，无法自动安装 jq。继续使用兜底解析。"
+        return 0
+    fi
+
+    # 判断是否需要 sudo
+    if $need_root && [ "$EUID" -ne 0 ]; then
+        if command_exists sudo; then
+            install_cmd="sudo sh -c '$install_cmd'"
+        else
+            log_warn "需要 root 权限安装 jq，但未检测到 sudo。请手动安装后重运行。"
+            return 0
+        fi
+    fi
+
+    log_info "尝试自动安装 jq ..."
+    if bash -c "$install_cmd"; then
+        if command_exists jq; then
+            log_info "jq 安装成功。"
+        else
+            log_warn "执行安装命令后仍未检测到 jq。"
+        fi
+    else
+        log_warn "jq 安装命令执行失败，继续使用兜底解析。"
+    fi
 }
 
 #####################################
@@ -135,19 +181,22 @@ log_info "最新版本：${TAG_NAME}（VERSION=${VERSION}）"
 echo ""
 echo "请选择下载方式（输入序号，默认 1）："
 echo "  1) 直连 GitHub"
-echo "  2) 使用 moeyy 代理（前缀 https://github.moeyy.xyz/）"
-echo "  3) 使用 笒鬼鬼 API (api.cenguigui.cn) 自动解析 downUrl"
+echo "  2) 使用 笒鬼鬼 API (api.cenguigui.cn) 自动解析 downUrl"
 read -r ACCEL_CHOICE
 ACCEL_CHOICE="${ACCEL_CHOICE:-1}"
 
 case "$ACCEL_CHOICE" in
-    1) ACCEL_METHOD="direct";;
-    2) ACCEL_METHOD="moeyy";;
-    3) ACCEL_METHOD="cenguigui";;
-    *) log_warn "无效输入，使用默认直连。"; ACCEL_METHOD="direct";;
+    1) ACCEL_METHOD="direct" ;;
+    2) ACCEL_METHOD="cenguigui" ;;
+    *) log_warn "无效输入，使用默认直连。"; ACCEL_METHOD="direct" ;;
 esac
 
 log_info "选择的下载方式：${ACCEL_METHOD}"
+
+# 如果用户选择 cenguigui 且 jq 缺失，尝试安装（可跳过）
+if [ "$ACCEL_METHOD" = "cenguigui" ] && ! command_exists jq; then
+    maybe_install_jq
+fi
 
 #####################################
 # 5. 检测系统与架构
@@ -157,7 +206,7 @@ ARCH="$(uname -m)"
 BINARY_NAME=""
 
 case "$PLATFORM" in
-    "Linux")
+    Linux)
         if $IS_TERMUX; then
             BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
         else
@@ -171,7 +220,7 @@ case "$PLATFORM" in
             fi
         fi
         ;;
-    "Darwin")
+    Darwin)
         if [[ "$ARCH" == "arm64" ]]; then
             BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
         else
@@ -193,6 +242,7 @@ DOWNLOAD_URL="$ORIGINAL_URL"
 
 resolve_cenguigui_url() {
     local orig="$1"
+    # URL 编码（虽然当前 orig 不含空格，但为稳健保留）
     local enc
     enc="$(urlencode "$orig")"
     local api="https://api.cenguigui.cn/api/github/?type=json&url=${enc}"
@@ -200,43 +250,39 @@ resolve_cenguigui_url() {
     local json=""
     if command_exists curl; then
         json=$(curl -s --connect-timeout 10 "$api" || true)
-    elif command_exists wget; then
-        json=$(wget -qO- "$api" || true)
     else
-        log_warn "无 curl/wget，无法使用笒鬼鬼 API。"
-        return 1
+        json=$(wget -qO- "$api" || true)
     fi
     if [ -z "$json" ]; then
         log_warn "笒鬼鬼 API 无响应。"
         return 1
     fi
-    # 尝试解析 code
     local code
     code=$(json_get_field "$json" "code")
     if [ "$code" != "200" ]; then
-        log_warn "笒鬼鬼 API 返回异常 code=${code:-空}，JSON：$json"
+        log_warn "笒鬼鬼 API 返回异常 code=${code:-空}"
         return 1
     fi
     local downUrl
     downUrl=$(json_get_field "$json" "downUrl")
+    downUrl="${downUrl//\\//}"  # 去除可能的转义反斜杠
     if [ -z "$downUrl" ]; then
         log_warn "未获取到 downUrl 字段。"
         return 1
     fi
     printf "%s" "$downUrl"
-    return 0
 }
 
 case "$ACCEL_METHOD" in
-    "direct")
+    direct)
         log_info "使用直连：$ORIGINAL_URL"
         ;;
-    "cenguigui")
+    cenguigui)
         if RESOLVED_URL=$(resolve_cenguigui_url "$ORIGINAL_URL"); then
             DOWNLOAD_URL="$RESOLVED_URL"
             log_info "笒鬼鬼 API 解析成功：$DOWNLOAD_URL"
         else
-            log_warn "笒鬼鬼 API 解析失败，回退到直连。"
+            log_warn "笒鬼鬼 API 解析失败，回退直连。"
             DOWNLOAD_URL="$ORIGINAL_URL"
         fi
         ;;
@@ -288,8 +334,7 @@ if $IS_TERMUX; then
     echo ""
     log_info "检测到 Termux 环境，安装 glibc-repo 与 glibc-runner..."
     pkg update -y
-    pkg install glibc-repo -y
-    pkg install glibc-runner -y
+    pkg install -y glibc-repo glibc-runner
 
     echo ""
     log_info "生成 run.sh..."
