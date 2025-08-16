@@ -8,7 +8,7 @@ on:
       - '**.py'
       - 'requirements.txt'
       - 'img/**'
-      - '.github/workflows/auto_build_executable.yml'
+      - '.github/workflows/build_executable.yml'
   workflow_dispatch:
 
 jobs:
