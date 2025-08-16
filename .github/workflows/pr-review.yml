@@ -26,17 +26,15 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ─── 2. 设置 Python 环境 ────────────────────────────────────────
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13.3'
 
-      # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展 ───────────────────
       - name: Checkout private repo B
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper        # ← 改成你真正的 “owner/B”
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
           token: ${{ secrets.PYD_PAT }}
           path: B
 
@@ -51,15 +49,13 @@ jobs:
       - name: Build Cython extension from B (Linux)
         run: |
           cd B
-          python setup.py build_ext --inplace
+            python setup.py build_ext --inplace
           cd ..
 
       - name: Copy compiled B extension into A's root (Linux)
         run: |
-          # 假设 B 编译出的 Cython 模块名以 client_mod 开头，并且后缀是 .so
           cp B/client_mod.*.so . || true
 
-      # ─── 4. 缓存 A 仓库的 pip 依赖 ────────────────────────────────────
       - name: Cache Dependencies (Linux)
         uses: actions/cache@v4
         with:
@@ -68,23 +64,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # ─── 5. 安装 A 仓库所需依赖（含 pyinstaller） ───────────────────────
       - name: Install Dependencies (Linux)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pyinstaller
 
-      # ─── 6. 使用 PyInstaller 打包成可执行文件 ─────────────────────────
       - name: Build Executable (Linux)
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
+              VERSION="${{ github.ref_name }}"
           else
-            VERSION="sha-${{ github.sha }}"
+              VERSION="sha-${{ github.sha }}"
           fi
-
-          # PyInstaller 会把与 main.py 同目录下的 .so 一并打包
           pyinstaller \
             --onefile \
             --strip \
@@ -97,7 +89,6 @@ jobs:
             --clean \
             main.py
 
-      # ─── 7. 上传产物 ────────────────────────────────────────────────
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -106,7 +97,7 @@ jobs:
 
   build-linux-arm64:
     if: github.event.label.name == 'run-build'
-    runs-on: ubuntu-24.04-arm  # ARM64 架构
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout PR 源分支代码
         uses: actions/checkout@v4
@@ -120,11 +111,10 @@ jobs:
         with:
           python-version: '3.13.3'
 
-      # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展 ───────────────────
       - name: Checkout private repo B
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper        # ← 改成你真正的 “owner/B”
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
           token: ${{ secrets.PYD_PAT }}
           path: B
 
@@ -139,14 +129,13 @@ jobs:
       - name: Build Cython extension from B (Linux ARM64)
         run: |
           cd B
-          python setup.py build_ext --inplace
+            python setup.py build_ext --inplace
           cd ..
 
       - name: Copy compiled B extension into A's root (Linux ARM64)
         run: |
           cp B/client_mod.*.so . || true
 
-      # ─── 4. 缓存 A 仓库的 pip 依赖 ────────────────────────────────────
       - name: Cache Dependencies (Linux ARM64)
         uses: actions/cache@v4
         with:
@@ -155,22 +144,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # ─── 5. 安装 A 仓库所需依赖（含 pyinstaller） ───────────────────────
       - name: Install Dependencies (Linux ARM64)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pyinstaller
 
-      # ─── 6. 使用 PyInstaller 打包成可执行文件 ─────────────────────────
       - name: Build Executable (Linux ARM64)
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
+              VERSION="${{ github.ref_name }}"
           else
-            VERSION="sha-${{ github.sha }}"
+              VERSION="sha-${{ github.sha }}"
           fi
-
           pyinstaller \
             --onefile \
             --strip \
@@ -183,13 +169,12 @@ jobs:
             --clean \
             main.py
 
-      # ─── 7. 上传产物 ────────────────────────────────────────────────
       - name: Upload Linux ARM64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
-  
+
   build-windows:
     if: github.event.label.name == 'run-build'
     runs-on: windows-latest
@@ -206,11 +191,10 @@ jobs:
         with:
           python-version: '3.13.3'
 
-      # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展（Windows 环境） ─────
       - name: Checkout private repo B
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper        # ← 改成你真正的 “owner/B”
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
           token: ${{ secrets.PYD_PAT }}
           path: B
 
@@ -232,11 +216,9 @@ jobs:
 
       - name: Copy compiled B extension into A's root (Windows)
         run: |
-          # 假设 B 编译出的 Cython 模块名以 client_mod 开头，并且后缀是 .pyd
           Copy-Item "B\\client_mod*.pyd" "." -Force
         shell: powershell
 
-      # ─── 4. 缓存 A 仓库的 pip 依赖 ────────────────────────────────────
       - name: Cache Dependencies (Windows)
         uses: actions/cache@v4
         with:
@@ -245,7 +227,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # ─── 5. 安装 A 仓库所需依赖（含 pyinstaller） ───────────────────────
       - name: Install Dependencies (Windows)
         run: |
           python -m pip install --upgrade pip
@@ -260,21 +241,17 @@ jobs:
           Expand-Archive -Path upx.zip -DestinationPath upx
         shell: powershell
 
-      # ─── 6. 使用 PyInstaller 打包成可执行文件 ─────────────────────────
       - name: Build Executable (Windows)
         run: |
           $upxDir = "$pwd\upx\upx-5.0.0-win64"
-        
           if (Test-Path "$upxDir\upx.exe") {
               icacls "$upxDir\upx.exe" /grant Everyone:F
           }
-
           if ("${{ github.ref_type }}" -eq "tag") {
             $version = "${{ github.ref_name }}"
           } else {
             $version = "sha-${{ github.sha }}"
           }
-        
           pyinstaller --onefile `
             --upx-dir "$upxDir" `
             --collect-data fake_useragent `
@@ -285,7 +262,6 @@ jobs:
             main.py
         shell: powershell
 
-      # ─── 7. 上传产物 ────────────────────────────────────────────────
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -308,15 +284,14 @@ jobs:
         with:
           python-version: '3.13.3'
 
-      # ─── 3. Checkout 私有仓库 B，并编译 Cython 扩展（macOS 环境） ────────
       - name: Checkout private repo B
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper        # ← 改成你真正的 “owner/B”
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
           token: ${{ secrets.PYD_PAT }}
           path: B
 
-      - name: Install B's build dependencies (macOS)
+      - name: Install B's build dependencies (macOS arm64)
         run: |
           python -m pip install --upgrade pip
           pip install Cython
@@ -324,18 +299,17 @@ jobs:
             pip install -r B/requirements.txt
           fi
 
-      - name: Build Cython extension from B (macOS)
+      - name: Build Cython extension from B (macOS arm64)
         run: |
           cd B
-          python setup.py build_ext --inplace
+            python setup.py build_ext --inplace
           cd ..
 
-      - name: Copy compiled B extension into A's root (macOS)
+      - name: Copy compiled B extension into A's root (macOS arm64)
         run: |
           cp B/client_mod.*.so . || true
 
-      # ─── 4. 缓存 A 仓库的 pip 依赖 ────────────────────────────────────
-      - name: Cache Dependencies (macOS)
+      - name: Cache Dependencies (macOS arm64)
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/pip
@@ -343,22 +317,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      # ─── 5. 安装 A 仓库所需依赖（含 pyinstaller） ───────────────────────
-      - name: Install Dependencies (macOS)
+      - name: Install Dependencies (macOS arm64)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pyinstaller
 
-      # ─── 6. 使用 PyInstaller 打包成可执行文件 ─────────────────────────
-      - name: Build Executable (macOS)
-        run: |         
+      - name: Build Executable (macOS arm64)
+        run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
+              VERSION="${{ github.ref_name }}"
           else
-            VERSION="sha-${{ github.sha }}"
+              VERSION="sha-${{ github.sha }}"
           fi
-
           pyinstaller \
             --onefile \
             --strip \
@@ -371,35 +342,111 @@ jobs:
             --clean \
             main.py
 
-      # ─── 7. 上传产物 ────────────────────────────────────────────────
-      - name: Upload macOS Artifact
+      - name: Upload macOS arm64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
           path: dist/TomatoNovelDownloader-macOS_arm64-*
 
+  build-macos-intel:
+    if: github.event.label.name == 'run-build'
+    runs-on: macos-13   # Intel x86_64 runner
+    steps:
+      - name: Checkout PR 源分支代码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.3'
+
+      - name: Checkout private repo B
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
+      - name: Install B's build dependencies (macOS Intel)
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if [ -f B/requirements.txt ]; then
+            pip install -r B/requirements.txt
+          fi
+
+      - name: Build Cython extension from B (macOS Intel)
+        run: |
+          cd B
+            python setup.py build_ext --inplace
+          cd ..
+
+      - name: Copy compiled B extension into A's root (macOS Intel)
+        run: |
+          cp B/client_mod.*.so . || true
+
+      - name: Cache Dependencies (macOS Intel)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Dependencies (macOS Intel)
+        run: |
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pyinstaller
+
+      - name: Build Executable (macOS Intel)
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+              VERSION="${{ github.ref_name }}"
+          else
+              VERSION="sha-${{ github.sha }}"
+          fi
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            --hidden-import=portalocker \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-macOS_amd64-$VERSION \
+            --clean \
+            main.py
+
+      - name: Upload macOS Intel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-build
+          path: dist/TomatoNovelDownloader-macOS_amd64-*
+
   build-on-label:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos]
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-macos-intel]
     if: github.event.label.name == 'run-build'
     runs-on: ubuntu-latest
-
     steps:
       - name: 评论 & 删除标签
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // 回复构建完成
             await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner:        context.repo.owner,
-                repo:         context.repo.repo,
-                body:         '✅ 多平台构建完成，已生成可执行文件。'
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ 多平台构建完成（含 macOS Intel），已生成可执行文件。'
             });
-            // 删除触发标签
             await github.rest.issues.removeLabel({
-                issue_number: context.issue.number,
-                owner:        context.repo.owner,
-                repo:         context.repo.repo,
-                name:         context.payload.label.name
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: context.payload.label.name
             });

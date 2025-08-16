@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 jobs:
-  ## ── 第一步：获取最新 Tag 并删除对应 Release 下的旧资产 ──
   fetch_and_clean:
     name: 获取最新 Tag
     runs-on: ubuntu-latest
@@ -24,12 +23,10 @@ jobs:
       - name: 获取最新 Tag
         id: get_latest_tag
         run: |
-          # 按创建时间排序，取最新 Tag
           LATEST_TAG=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags | head -n 1)
           echo "Tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           echo "获取到最新 Tag: $LATEST_TAG"
-        
-  ## ── 并行构建：Linux AMD64 ──
+
   build-linux:
     name: 构建 Linux AMD64 可执行文件
     needs: fetch_and_clean
@@ -40,7 +37,7 @@ jobs:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+          ref: ${{ env.BUILD_TAG }}
 
       - name: Setup Python (Linux)
         uses: actions/setup-python@v5
@@ -58,9 +55,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
+          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
 
       - name: 编译 Cython 扩展 (Linux)
         run: |
@@ -69,8 +64,7 @@ jobs:
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
-        run: |
-          cp B/client_mod.*.so . || true
+        run: cp B/client_mod.*.so . || true
 
       - name: 缓存 A 仓库的 pip 依赖 (Linux)
         uses: actions/cache@v4
@@ -99,8 +93,6 @@ jobs:
             --name=TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
@@ -108,7 +100,6 @@ jobs:
           name: linux-build
           path: dist/TomatoNovelDownloader-*
 
-  ## ── 并行构建：Linux ARM64 ──
   build-linux-arm64:
     name: 构建 Linux ARM64 可执行文件
     needs: fetch_and_clean
@@ -119,7 +110,7 @@ jobs:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+          ref: ${{ env.BUILD_TAG }}
 
       - name: Setup Python (Linux ARM64)
         uses: actions/setup-python@v5
@@ -137,9 +128,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
+          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
 
       - name: 编译 Cython 扩展 (Linux ARM64)
         run: |
@@ -148,8 +137,7 @@ jobs:
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
-        run: |
-          cp B/client_mod.*.so . || true
+        run: cp B/client_mod.*.so . || true
 
       - name: 缓存 A 仓库的 pip 依赖 (Linux ARM64)
         uses: actions/cache@v4
@@ -178,8 +166,6 @@ jobs:
             --name=TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
       - name: Upload Linux ARM64 Artifact
         uses: actions/upload-artifact@v4
@@ -187,7 +173,6 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
-  ## ── 并行构建：Windows ──
   build-windows:
     name: 构建 Windows 可执行文件
     needs: fetch_and_clean
@@ -198,7 +183,7 @@ jobs:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+          ref: ${{ env.BUILD_TAG }}
 
       - name: Setup Python (Windows)
         uses: actions/setup-python@v5
@@ -217,9 +202,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install Cython
-          if (Test-Path "B\\requirements.txt") {
-            pip install -r B\\requirements.txt
-          }
+          if (Test-Path "B\\requirements.txt") { pip install -r B\\requirements.txt }
 
       - name: 编译 Cython 扩展 (Windows)
         shell: pwsh
@@ -259,9 +242,7 @@ jobs:
         shell: pwsh
         run: |
           $upxDir = "$pwd\upx\upx-5.0.0-win64"
-          if (Test-Path "$upxDir\upx.exe") {
-            icacls "$upxDir\upx.exe" /grant Everyone:F
-          }
+          if (Test-Path "$upxDir\upx.exe") { icacls "$upxDir\upx.exe" /grant Everyone:F }
           pyinstaller --onefile `
             --upx-dir "$upxDir" `
             --collect-data fake_useragent `
@@ -276,11 +257,9 @@ jobs:
         with:
           name: windows-build
           path: dist\TomatoNovelDownloader-*.exe
-    
 
-  ## ── 并行构建：macOS ──
   build-macos:
-    name: 构建 macOS 可执行文件
+    name: 构建 macOS (arm64) 可执行文件
     needs: fetch_and_clean
     runs-on: macos-latest
     env:
@@ -289,7 +268,7 @@ jobs:
       - name: Checkout 代码 (按最新 Tag)
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.fetch_and_clean.outputs.tag }}
+          ref: ${{ env.BUILD_TAG }}
 
       - name: Setup Python (macOS)
         uses: actions/setup-python@v5
@@ -307,9 +286,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
+          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
 
       - name: 编译 Cython 扩展 (macOS)
         run: |
@@ -318,8 +295,7 @@ jobs:
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
-        run: |
-          cp B/client_mod.*.so . || true
+        run: cp B/client_mod.*.so . || true
 
       - name: 缓存 A 仓库的 pip 依赖 (macOS)
         uses: actions/cache@v4
@@ -335,7 +311,7 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: 使用 PyInstaller 打包成可执行文件 (macOS)
+      - name: 使用 PyInstaller 打包成可执行文件 (macOS arm64)
         run: |
           pyinstaller \
             --onefile \
@@ -348,17 +324,86 @@ jobs:
             --name=TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }} \
             --clean \
             main.py
-        env:
-          RELEASE_TAG: ${{ env.BUILD_TAG }}
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
           path: dist/TomatoNovelDownloader-macOS_arm64-*
-  
 
-  ## ── 最后一步：一次性上传所有产物并删除“刷新提示”文件 ──
+  build-macos-intel:
+    name: 构建 macOS (Intel x86_64) 可执行文件
+    needs: fetch_and_clean
+    runs-on: macos-13
+    env:
+      BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_TAG }}
+
+      - name: Setup Python (macOS Intel)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13.3'
+
+      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS Intel)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
+      - name: 安装 B 的构建依赖 (macOS Intel)
+        run: |
+          python -m pip install --upgrade pip
+          pip install Cython
+          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
+
+      - name: 编译 Cython 扩展 (macOS Intel)
+        run: |
+          cd B
+          python setup.py build_ext --inplace
+          cd ..
+
+      - name: 将编译好的 .so 文件复制到仓库根目录 (macOS Intel)
+        run: cp B/client_mod.*.so . || true
+
+      - name: 缓存 A 仓库的 pip 依赖 (macOS Intel)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 安装 A 仓库所需依赖 (macOS Intel)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 使用 PyInstaller 打包成可执行文件 (macOS Intel)
+        run: |
+          pyinstaller \
+            --onefile \
+            --strip \
+            --exclude-module _bootlocale \
+            --exclude-module _cffi_backend \
+            --collect-data fake_useragent \
+            --hidden-import=portalocker \
+            -i img/Tomato-downlaoder-ico.ico \
+            --name=TomatoNovelDownloader-macOS_amd64-${{ env.BUILD_TAG }} \
+            --clean \
+            main.py
+
+      - name: Upload macOS Intel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-intel-build
+          path: dist/TomatoNovelDownloader-macOS_amd64-*
+
   upload_assets:
     name: 上传构建产物到 Release
     needs:
@@ -367,6 +412,7 @@ jobs:
       - build-linux-arm64
       - build-windows
       - build-macos
+      - build-macos-intel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout A Repository
@@ -376,7 +422,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
-    
+
       - name: 删除旧资产
         uses: andreaswilli/delete-release-assets-action@main
         with:
@@ -384,7 +430,7 @@ jobs:
           tag: ${{ needs.fetch_and_clean.outputs.tag }}
           deleteOnlyFromDrafts: false
 
-      - name: 上传所有构建产物 (使用 softprops/action-gh-release@v2)
+      - name: 上传所有构建产物 (softprops/action-gh-release@v2)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.fetch_and_clean.outputs.tag }}
@@ -393,5 +439,6 @@ jobs:
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
+            release-artifacts/macos-intel-build/TomatoNovelDownloader-macOS_amd64-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
