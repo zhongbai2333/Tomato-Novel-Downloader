@@ -358,7 +358,6 @@ class ChapterDownloader:
 
         start = time.time()
         # 直接传入 List[str]
-        print(id_list)
         raw = get_contents(id_list)
         parsed = ContentParser.extract_api_content(raw)
         # 统一构建输出，缺失或空内容标记为 Error

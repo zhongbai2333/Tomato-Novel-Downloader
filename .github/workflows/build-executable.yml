@@ -54,6 +54,8 @@ jobs:
         run: |
           cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
+          # Copy auxiliary python module required by fanqie_mod (TTEncrypt.py) from project source
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: Cache Dependencies (Linux)
         uses: actions/cache@v4
@@ -83,6 +85,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
             --clean \
@@ -136,6 +139,7 @@ jobs:
         run: |
           cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: Cache Dependencies (Linux ARM64)
         uses: actions/cache@v4
@@ -165,6 +169,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
             --clean \
@@ -220,6 +225,7 @@ jobs:
         run: |
           Get-ChildItem B\client_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
           Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
+          if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
         shell: powershell
 
       - name: Cache Dependencies (Windows)
@@ -259,6 +265,7 @@ jobs:
             --upx-dir "$upxDir" `
             --collect-data fake_useragent `
             --hidden-import=portalocker `
+            --hidden-import=TTEncrypt `
             -i img/Tomato-downlaoder-ico.ico `
             --name=TomatoNovelDownloader-Win64-$version `
             --clean `
@@ -313,6 +320,7 @@ jobs:
         run: |
           cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: Cache Dependencies (macOS arm64)
         uses: actions/cache@v4
@@ -342,6 +350,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
             --clean \
@@ -395,6 +404,7 @@ jobs:
         run: |
           cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: Cache Dependencies (macOS Intel)
         uses: actions/cache@v4
@@ -424,6 +434,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-macOS_amd64-$VERSION \
             --clean \
