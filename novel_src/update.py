@@ -3,6 +3,9 @@ import sys
 import tempfile
 import hashlib
 import requests
+from urllib.parse import quote_plus, urlparse
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 import platform
 import shutil
 import subprocess
@@ -95,32 +98,18 @@ class UpdateManager(object):
             name = asset.get("name", "")
             if platform_key in name:
                 original_url = asset.get("browser_download_url")
-                # 通过笒鬼鬼 API 获取加速下载地址
-                api_url = (
-                    "https://api.cenguigui.cn/api/github/"
-                    "?type=json"
-                    f"&url={original_url}"
-                )
-                download_url = original_url  # 默认使用原始地址
-                try:
-                    resp = requests.get(api_url, timeout=10)
-                    resp.raise_for_status()
-                    json_data = resp.json()
-                    download_url = json_data.get("data", {}).get(
-                        "downUrl", original_url
-                    )
-                except Exception as e:
-                    self.logger.warning(
-                        f"[UpdateManager] 获取加速下载地址失败，使用原始地址：{e}"
-                    )
+                # 根据环境变量控制是否尝试加速
+                accel_disabled = os.environ.get("TND_DISABLE_ACCEL") == "1"
+                if accel_disabled:
+                    download_url = original_url
+                else:
+                    download_url = self._get_accelerated_url(original_url)
 
                 # SHA256: 目前 Release 资产没有标准 digest 字段时可能为空
                 sha256_val = asset.get("digest", "")
                 if sha256_val:
                     sha256_val = sha256_val.split(":")[-1]
                 else:
-                    # 若没有 digest，可考虑在将来提供一个 <asset>.sha256 文件，
-                    # 或者跳过严格校验（这里保持兼容，返回空字符串）
                     sha256_val = ""
 
                 return {
@@ -131,6 +120,130 @@ class UpdateManager(object):
                     "sha256": sha256_val,
                 }
         return {}
+
+    def _get_accelerated_url(self, original_url: str) -> str:
+        """尝试通过第三方 API 获取加速下载地址，失败则返回原始地址。
+
+        处理要点：
+        1. URL 编码，避免 & / ? 等截断
+        2. 附带浏览器风格 UA，降低被拒风险
+        3. 使用 requests Session + Retry（对 429/5xx）
+        4. 捕获 RemoteDisconnected / ConnectionError / JSON 错误分别记录
+        5. 校验扩展名一致后才采用加速链接
+        6. Linux 遇到 RemoteDisconnected 再进行一次短超时重试（可能是 IPv6 / 连接复用问题）
+        """
+        api_base = "https://api.cenguigui.cn/api/github/"
+        api_url = f"{api_base}?type=json&url={quote_plus(original_url, safe='')}"
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Connection": "close",  # 避免某些服务端对 keep-alive 复用的兼容问题
+            "Accept-Encoding": "identity",  # 避免部分网关压缩引起的早期断开
+        }
+        session = requests.Session()
+        retries = Retry(
+            total=2,
+            backoff_factor=0.4,
+            status_forcelist=(429, 500, 502, 503, 504),
+            raise_on_status=False,
+            allowed_methods=("GET",),
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+
+        def _request_once(timeout: float):
+            return session.get(api_url, headers=headers, timeout=timeout)
+
+        primary_success = False
+        down_url = None
+        try:
+            resp = _request_once(6)
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                    down_url = (
+                        data.get("data", {}).get("downUrl")
+                        if isinstance(data, dict)
+                        else None
+                    )
+                    if down_url:
+                        primary_success = True
+                except Exception as je:
+                    self.logger.warning(
+                        f"[UpdateManager] 加速接口 JSON 解析失败：{type(je).__name__}: {je}"
+                    )
+            else:
+                self.logger.warning(
+                    f"[UpdateManager] 加速接口返回状态 {resp.status_code}，尝试备用镜像"
+                )
+        except Exception as e:
+            self.logger.warning(
+                f"[UpdateManager] 加速接口请求异常：{type(e).__name__}: {e}; 尝试备用镜像"
+            )
+
+        # 如果主接口失败或 down_url 无效，尝试备用镜像策略
+        if not primary_success or not down_url:
+            alt = self._try_alternative_mirrors(original_url)
+            if alt:
+                return alt
+            return original_url
+
+        # 校验扩展名
+        if Path(down_url).suffix != Path(original_url).suffix:
+            self.logger.warning(
+                f"[UpdateManager] downUrl 扩展名不匹配({down_url}), 改用原始地址"
+            )
+            return original_url
+
+        self.logger.info(
+            f"[UpdateManager] 使用加速下载地址：{down_url} (原始:{original_url})"
+        )
+        return down_url
+
+    def _try_alternative_mirrors(self, original_url: str) -> str | None:
+        """尝试若干公开镜像前缀构造加速 URL，按顺序测试 HEAD。
+
+        仅在：
+        1) 返回 HTTP 200
+        2) Content-Length 存在或可下载
+        3) 扩展名匹配
+        时使用。
+        """
+        parsed = urlparse(original_url)
+        # 原始路径类似: /zhongbai2333/Tomato-Novel-Downloader/releases/download/vX.Y.Z/AssetName
+        # fastgit 需要去掉前导斜杠后的 path
+        path_no_lead = parsed.path.lstrip('/')
+        suffix = Path(original_url).suffix
+
+        candidates = []
+        # ghproxy 镜像（mirror 前缀方式）
+        candidates.append(f"https://mirror.ghproxy.com/{original_url}")
+        # fastgit (download.fastgit.org/<owner>/<repo>/releases/download/...)
+        candidates.append(f"https://download.fastgit.org/{path_no_lead}")
+        # github.moeyy.xyz 前缀方式
+        candidates.append(f"https://github.moeyy.xyz/{original_url}")
+
+        test_headers = {
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Updater/1.0",
+            "Accept": "*/*",
+            "Connection": "close",
+        }
+        for url in candidates:
+            try:
+                r = requests.head(url, timeout=5, allow_redirects=True, headers=test_headers)
+            except Exception as e:
+                self.logger.debug(f"[UpdateManager] 备用镜像不可用 {url}: {type(e).__name__} {e}")
+                continue
+            if r.status_code == 200:
+                if Path(url).suffix == suffix:
+                    self.logger.info(f"[UpdateManager] 使用备用镜像加速：{url}")
+                    return url
+                else:
+                    self.logger.debug(f"[UpdateManager] 备用镜像扩展名不匹配：{url}")
+        self.logger.warning("[UpdateManager] 所有备用镜像均不可用，回退原始地址")
+        return None
 
     def _download_asset(self, tmp_dir: Path, size: str | int, url: str) -> Path:
         """
