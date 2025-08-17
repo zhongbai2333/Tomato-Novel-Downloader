@@ -112,7 +112,7 @@ class ChapterDownloader:
             ]
             # 按 50 章一组（原为 10）
             groups = [
-                to_download[i : i + 50] for i in range(0, len(to_download), 50)
+                to_download[i : i + 25] for i in range(0, len(to_download), 25)
             ]
             tasks_count = len(to_download)
             max_workers = self.config.max_workers
