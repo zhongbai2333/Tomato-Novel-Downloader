@@ -16,8 +16,7 @@ from typing import List, Dict, Optional, Tuple
 
 from .network import NetworkClient
 from client_mod import fetch_batch_chapter
-from ..offical_tools.downloader import spawn_iid
-from ..offical_tools.epub_downloader import fetch_chapter_for_epub
+from fanqie_mod import get_iid, get_contents
 from ..book_parser.book_manager import BookManager
 from ..book_parser.parser import ContentParser
 from ..base_system.context import GlobalContext
@@ -93,10 +92,6 @@ class ChapterDownloader:
           2. config.use_helloplhm_qwq_api → 新增 helloplhm_qwq 批量（每 300 章一组）
           3. 否则 → 非官方单章
         """
-        # 如果使用官方 API，需要先 spawn_iid
-        if self.config.use_official_api and not self.config.iid:
-            spawn_iid()
-
         # 备份并关闭非 tqdm handler
         orig_handlers = self.logger.handlers.copy()
         for h in orig_handlers:
@@ -107,7 +102,7 @@ class ChapterDownloader:
 
         # ============ 准备要下载的章节列表 & 分组 ============
 
-        # 1. 官方批量模式
+        # 1. 官方批量模式（修改：每 50 章一组；get_contents 接受 List[str]）
         if self.config.use_official_api:
             to_download = [
                 ch
@@ -115,8 +110,10 @@ class ChapterDownloader:
                 if (ch["id"] not in book_manager.downloaded)
                 or (book_manager.downloaded.get(ch["id"])[1] == "Error")
             ]
-            # 按 10 章一组
-            groups = [to_download[i : i + 10] for i in range(0, len(to_download), 10)]
+            # 按 50 章一组（原为 10）
+            groups = [
+                to_download[i : i + 50] for i in range(0, len(to_download), 50)
+            ]
             tasks_count = len(to_download)
             max_workers = self.config.max_workers
 
@@ -340,19 +337,37 @@ class ChapterDownloader:
         return "Error", chapter_id
 
     # --- 官方批量 10 章 下载 ---
-    def _download_official_batch(self, chapters: List[dict]) -> List[Tuple[str, str]]:
-        ids = ",".join(ch["id"] for ch in chapters)
-        req_id = f"{ids[:4]}-{random.randint(1000,9999)}"
-        self.logger.debug(f"[{req_id}] 批量下载 {len(chapters)} 章")
+    def _download_official_batch(
+        self, chapters: List[dict]
+    ) -> Dict[str, Tuple[str, str]]:
+        """
+        官方批量接口：现在一次最多 50 章，get_contents 接受 List[str]。
+        返回：{ chapter_id: (content 或 "Error", title) }
+        """
+        id_list = [ch["id"] for ch in chapters]
+        # 生成请求 ID 便于日志追踪（取第一个 ID 的前 4 位）
+        joined = "-".join(id_list)[:4]
+        req_id = f"{joined}-{random.randint(1000,9999)}"
+        self.logger.debug(f"[{req_id}] 批量下载 {len(id_list)} 章")
 
-        # 随机延迟
-        dt = random.randint(self.config.min_wait_time, self.config.max_wait_time)
+        # 随机延迟（官方接口最快 500ms，强制下限 500）
+        min_wait = max(500, self.config.min_wait_time)
+        max_wait = max(min_wait + 50, self.config.max_wait_time)  # 防止范围过小
+        dt = random.randint(min_wait, max_wait)
         time.sleep(dt / 1000)
 
         start = time.time()
-        d = fetch_chapter_for_epub(ids)
-        chapters_dict = ContentParser.extract_api_content(d)
-        out = chapters_dict
+        # 直接传入 List[str]
+        print(id_list)
+        raw = get_contents(id_list)
+        parsed = ContentParser.extract_api_content(raw)
+        # 统一构建输出，缺失或空内容标记为 Error
+        out: Dict[str, Tuple[str, str]] = {}
+        for cid in id_list:
+            if cid not in parsed or not parsed[cid][0]:
+                out[cid] = ("Error", cid)
+            else:
+                out[cid] = parsed[cid]
 
         elapsed = time.time() - start
         self.logger.info(f"[{req_id}] 批量完成 ({elapsed:.2f}s)")

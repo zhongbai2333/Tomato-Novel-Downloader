@@ -23,16 +23,44 @@ class ContentParser(object):
             dict: {章节ID: (清洗或格式化后的内容, 标题)}
         """
         chapters: Dict[str, Tuple[str, str]] = {}
-        data = response_data.get("data", {})
+        # 一般结构：{"code":0,"message":"success","data": { chapter_id: {content,title,...} }}
+        data = response_data.get("data")
+
+        # 兼容：如果没有 data 包装，且顶层就是 {id: {...}} 的形式
+        if not isinstance(data, dict) or not data:
+            # 过滤掉非章节键（如 code / message）
+            possible = {
+                k: v
+                for k, v in response_data.items()
+                if isinstance(v, dict) and ("content" in v or "title" in v)
+            }
+            if possible:
+                data = possible
+            else:
+                data = {}
+
         # 遍历所有章节项
         for cid, info in data.items():
-            raw_content = info.get("content", "")
-            title = info.get("title", "").strip()
-            if GlobalContext.get_config().novel_format == "txt":
-                processed = ContentParser._clean_content(raw_content)
-            else:
-                processed = ContentParser._clean_for_ebooklib(raw_content, title)
-            chapters[cid] = (processed, title)
+            try:
+                raw_content = info.get("content", "") if isinstance(info, dict) else ""
+                # 标题回退顺序：title -> origin_chapter_title -> 第一段截断
+                title = ""
+                if isinstance(info, dict):
+                    title = (
+                        info.get("title")
+                        or info.get("origin_chapter_title")
+                        or ""
+                    )
+                title = (title or f"章节 {cid}").strip()
+
+                if GlobalContext.get_config().novel_format == "txt":
+                    processed = ContentParser._clean_content(raw_content)
+                else:
+                    processed = ContentParser._clean_for_ebooklib(raw_content, title)
+                chapters[cid] = (processed, title)
+            except Exception:
+                # 单章解析失败，写入 Error 占位
+                chapters[cid] = ("", f"{title or cid}")
         return chapters
 
     @staticmethod
@@ -77,6 +105,15 @@ class ContentParser(object):
         if not article:
             # 如果没有 article，就仅返回标题
             return "\n".join(content_parts)
+
+        # 兼容：有些源在 <article> 里又嵌套一层 <html><head><body>...</body></html>
+        nested_html = article.find("html")
+        if nested_html and nested_html.find("body"):
+            body = nested_html.find("body")
+            # 用 body 的子节点替换整块嵌套结构
+            # unwrap 会把 nested_html 标签移除，保留其子节点
+            nested_html.replace_with(body)
+            body.unwrap()  # 再去掉 body 自身，只保留内部段落
 
         # 5. 递归地在 article 中找到所有 <img>、<p>、和带 data-fanqie-type 的 <div>
         #    注意：find_all(..., recursive=True) 会在任意嵌套深度都查到子孙节点

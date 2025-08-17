@@ -41,7 +41,7 @@ def show_config_menu(config: Config):
             "type": bool,
         },
         "A": {
-            "name": "是否使用官方API[功能不可用][True/False]",
+            "name": "是否使用官方API[True/False]",
             "field": "use_official_api",
             "type": bool,
         },

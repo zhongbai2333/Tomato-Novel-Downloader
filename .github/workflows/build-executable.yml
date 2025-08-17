@@ -38,15 +38,22 @@ jobs:
             pip install -r B/requirements.txt
           fi
 
-      - name: Build Cython extension from B (Linux)
+      - name: Build Cython extensions from B (Linux)
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
-      - name: Copy compiled B extension into A's root (Linux)
+      - name: Copy compiled B extensions into A's root (Linux)
         run: |
-          cp B/client_mod.*.so . || true
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
 
       - name: Cache Dependencies (Linux)
         uses: actions/cache@v4
@@ -113,15 +120,22 @@ jobs:
             pip install -r B/requirements.txt
           fi
 
-      - name: Build Cython extension from B (Linux ARM64)
+      - name: Build Cython extensions from B (Linux ARM64)
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
-      - name: Copy compiled B extension into A's root (Linux ARM64)
+      - name: Copy compiled B extensions into A's root (Linux ARM64)
         run: |
-          cp B/client_mod.*.so . || true
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
 
       - name: Cache Dependencies (Linux ARM64)
         uses: actions/cache@v4
@@ -189,16 +203,23 @@ jobs:
           }
         shell: powershell
 
-      - name: Build Cython extension from B (Windows)
+      - name: Build Cython extensions from B (Windows)
         run: |
           cd B
           python setup.py build_ext --inplace
+          if (Test-Path 'setup_offical.py') {
+            Write-Host 'Building fanqie_mod via setup_offical.py'
+            python setup_offical.py build_ext --inplace
+          } else {
+            Write-Host 'setup_offical.py missing (fanqie_mod not built)'
+          }
           cd ..
         shell: powershell
 
-      - name: Copy compiled B extension into A's root (Windows)
+      - name: Copy compiled B extensions into A's root (Windows)
         run: |
-          Copy-Item "B\client_mod*.pyd" "." -Force
+          Get-ChildItem B\client_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
+          Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
         shell: powershell
 
       - name: Cache Dependencies (Windows)
@@ -276,15 +297,22 @@ jobs:
             pip install -r B/requirements.txt
           fi
 
-      - name: Build Cython extension from B (macOS arm64)
+      - name: Build Cython extensions from B (macOS arm64)
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
-      - name: Copy compiled B extension into A's root (macOS arm64)
+      - name: Copy compiled B extensions into A's root (macOS arm64)
         run: |
-          cp B/client_mod.*.so . || true
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
 
       - name: Cache Dependencies (macOS arm64)
         uses: actions/cache@v4
@@ -351,15 +379,22 @@ jobs:
             pip install -r B/requirements.txt
           fi
 
-      - name: Build Cython extension from B (macOS Intel)
+      - name: Build Cython extensions from B (macOS Intel)
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
-      - name: Copy compiled B extension into A's root (macOS Intel)
+      - name: Copy compiled B extensions into A's root (macOS Intel)
         run: |
-          cp B/client_mod.*.so . || true
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
 
       - name: Cache Dependencies (macOS Intel)
         uses: actions/cache@v4

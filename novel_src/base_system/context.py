@@ -38,12 +38,10 @@ class Config(BaseConfig):
     save_path: str = Field(default="", description="保存路径")
 
     # API配置
-    use_official_api: bool = Field(default=False, description="使用官方API[功能不可用]")
+    use_official_api: bool = Field(default=True, description="使用官方API")
     use_helloplhm_qwq_api: bool = Field(
-        default=True, description="使用helloplhm_qwq API"
+        default=False, description="使用helloplhm_qwq API"
     )
-    iid: str = Field(default="", description="自动生成")
-    iid_spawn_time: str = Field(default="", description="iid生成时间戳")
     api_endpoints: list = Field(
         default=[],
         description="API列表",
