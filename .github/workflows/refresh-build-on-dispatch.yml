@@ -61,10 +61,19 @@ jobs:
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
-        run: cp B/client_mod.*.so . || true
+        run: |
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: 缓存 A 仓库的 pip 依赖 (Linux)
         uses: actions/cache@v4
@@ -89,6 +98,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }} \
             --clean \
@@ -134,10 +144,19 @@ jobs:
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
-        run: cp B/client_mod.*.so . || true
+        run: |
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: 缓存 A 仓库的 pip 依赖 (Linux ARM64)
         uses: actions/cache@v4
@@ -162,6 +181,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }} \
             --clean \
@@ -209,12 +229,20 @@ jobs:
         run: |
           cd B
           python setup.py build_ext --inplace
+          if (Test-Path 'setup_offical.py') {
+            Write-Host 'Building fanqie_mod via setup_offical.py'
+            python setup_offical.py build_ext --inplace
+          } else {
+            Write-Host 'setup_offical.py missing (fanqie_mod not built)'
+          }
           cd ..
 
       - name: 将编译好的 .pyd 文件复制到仓库根目录 (Windows)
         shell: pwsh
         run: |
-          Copy-Item "B\\client_mod*.pyd" "." -Force
+          Get-ChildItem B\client_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
+          Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
+          if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
 
       - name: 缓存 A 仓库的 pip 依赖 (Windows)
         uses: actions/cache@v4
@@ -247,6 +275,7 @@ jobs:
             --upx-dir "$upxDir" `
             --collect-data fake_useragent `
             --hidden-import=portalocker `
+            --hidden-import=TTEncrypt `
             -i img/Tomato-downlaoder-ico.ico `
             --name=TomatoNovelDownloader-Win64-${{ env.BUILD_TAG }} `
             --clean `
@@ -292,10 +321,19 @@ jobs:
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
-        run: cp B/client_mod.*.so . || true
+        run: |
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: 缓存 A 仓库的 pip 依赖 (macOS)
         uses: actions/cache@v4
@@ -320,6 +358,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }} \
             --clean \
@@ -365,10 +404,19 @@ jobs:
         run: |
           cd B
           python setup.py build_ext --inplace
+          if [ -f setup_offical.py ]; then
+            echo "Building fanqie_mod via setup_offical.py"
+            python setup_offical.py build_ext --inplace
+          else
+            echo "setup_offical.py missing (fanqie_mod not built)"
+          fi
           cd ..
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (macOS Intel)
-        run: cp B/client_mod.*.so . || true
+        run: |
+          cp B/client_mod.*.so . 2>/dev/null || true
+          cp B/fanqie_mod.*.so . 2>/dev/null || true
+          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
       - name: 缓存 A 仓库的 pip 依赖 (macOS Intel)
         uses: actions/cache@v4
@@ -393,6 +441,7 @@ jobs:
             --exclude-module _cffi_backend \
             --collect-data fake_useragent \
             --hidden-import=portalocker \
+            --hidden-import=TTEncrypt \
             -i img/Tomato-downlaoder-ico.ico \
             --name=TomatoNovelDownloader-macOS_amd64-${{ env.BUILD_TAG }} \
             --clean \

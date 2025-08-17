@@ -358,7 +358,7 @@ class ChapterDownloader:
 
         start = time.time()
         # 直接传入 List[str]
-        raw = get_contents(id_list)
+        raw = get_contents(id_list, epub=self.config.novel_format=="epub", get_status_folder_path=self.config.get_status_folder_path / "images")
         parsed = ContentParser.extract_api_content(raw)
         # 统一构建输出，缺失或空内容标记为 Error
         out: Dict[str, Tuple[str, str]] = {}
