@@ -336,7 +336,8 @@ if $IS_TERMUX; then
     echo ""
     log_info "检测到 Termux 环境，安装 glibc-repo 与 glibc-runner..."
     pkg update -y
-    pkg install -y glibc-repo glibc-runner
+    pkg install -y glibc-repo
+    pkg install -y glibc-runner
 
     echo ""
     log_info "生成 run.sh..."
