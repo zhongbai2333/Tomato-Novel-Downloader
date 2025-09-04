@@ -19,3 +19,8 @@ urllib3
 portalocker
 urwid
 pyperclip
+# Optional for auto model download and local LLM pipeline
+huggingface_hub
+onnxruntime
+llama-cpp-python
+hf_xet

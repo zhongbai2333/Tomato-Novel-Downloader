@@ -233,6 +233,25 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否使用官方API": ("use_official_api", bool),
         "是否使用 helloplhm_qwq API": ("use_helloplhm_qwq_api", bool),
         "是否以散装形式保存小说": ("bulk_files", bool),
+        # —— 文本后处理（演示） ——
+        "启用清洗/标点恢复": ("enable_postprocess", bool),
+        "标点密度阈值(0~1)": ("pp_punct_density_threshold", float),
+        "长句最小长度(字符)": ("pp_long_sentence_min_len", int),
+        "逗号插入步长(演示)": ("pp_insert_chunk", int),
+        # —— 本地 LLM 两级管线 ——
+        "启用LLM两级管线": ("enable_llm_pipeline", bool),
+        "LLM自动下载模型": ("llm_auto_model_download", bool),
+        "LLM模型缓存目录": ("llm_models_dir", str),
+        "HF镜像(域名或URL)": ("hf_endpoint", str),
+        "检测模型Repo": ("llm_detector_repo", str),
+        "检测模型文件名": ("llm_detector_filename", str),
+        "精修模型Repo": ("llm_refiner_repo", str),
+        "精修模型文件名": ("llm_refiner_filename", str),
+        "检测转发阈值(0~1)": ("llm_detector_threshold", float),
+        "B阶段比例上限(0~1)": ("llm_max_forward_ratio", float),
+        "LLM上下文窗口": ("llm_ctx_window", int),
+        "精修max_tokens": ("llm_max_tokens", int),
+        "精修温度": ("llm_temperature", float),
     }
 
     def __init__(self, app: "TNDApp"):

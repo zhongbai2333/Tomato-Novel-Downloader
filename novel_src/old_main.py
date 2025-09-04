@@ -60,6 +60,25 @@ def show_config_menu(config: Config):
             "field": "old_cli",
             "type": bool,
         },
+        # —— 文本后处理（演示） ——
+        "E": {"name": "启用清洗/标点恢复[True/False]", "field": "enable_postprocess", "type": bool},
+        "F": {"name": "标点密度阈值(0~1)", "field": "pp_punct_density_threshold", "type": float},
+        "G": {"name": "长句最小长度(字符)", "field": "pp_long_sentence_min_len", "type": int},
+        "H": {"name": "逗号插入步长(演示)", "field": "pp_insert_chunk", "type": int},
+        # —— 本地 LLM 两级管线 ——
+        "I": {"name": "启用LLM两级管线[True/False]", "field": "enable_llm_pipeline", "type": bool},
+        "J": {"name": "LLM自动下载模型[True/False]", "field": "llm_auto_model_download", "type": bool},
+        "K": {"name": "LLM模型缓存目录", "field": "llm_models_dir", "type": str},
+        "L": {"name": "检测模型Repo", "field": "llm_detector_repo", "type": str},
+        "M": {"name": "检测模型文件名", "field": "llm_detector_filename", "type": str},
+        "N": {"name": "精修模型Repo", "field": "llm_refiner_repo", "type": str},
+        "O": {"name": "精修模型文件名", "field": "llm_refiner_filename", "type": str},
+        "P": {"name": "检测转发阈值(0~1)", "field": "llm_detector_threshold", "type": float},
+        "Q": {"name": "B阶段比例上限(0~1)", "field": "llm_max_forward_ratio", "type": float},
+        "R": {"name": "LLM上下文窗口", "field": "llm_ctx_window", "type": int},
+        "S": {"name": "精修max_tokens", "field": "llm_max_tokens", "type": int},
+        "T": {"name": "精修温度", "field": "llm_temperature", "type": float},
+        "U": {"name": "HF镜像(域名或URL)", "field": "hf_endpoint", "type": str},
         "0": {"name": "返回主菜单"},
     }
 
@@ -109,7 +128,7 @@ def show_config_menu(config: Config):
             print(f"无效值类型，需要 {value_type.__name__}")
             continue
 
-        # 特殊验证逻辑
+    # 特殊验证逻辑
         if field == "max_workers":
             if converted < 1 or converted > 16:
                 print("线程数必须在1-16之间")
@@ -128,6 +147,42 @@ def show_config_menu(config: Config):
                 continue
         elif field == "save_path":
             converted = converted.rstrip("/")
+        # —— 新增：后处理与 LLM 参数的约束 ——
+        elif field == "pp_punct_density_threshold":
+            if not (0.0 <= converted <= 1.0):
+                print("标点密度阈值需在 0~1 之间")
+                continue
+        elif field == "llm_detector_threshold":
+            if not (0.0 <= converted <= 1.0):
+                print("检测转发阈值需在 0~1 之间")
+                continue
+        elif field == "llm_max_forward_ratio":
+            if not (0.0 <= converted <= 1.0):
+                print("B阶段比例上限需在 0~1 之间")
+                continue
+        elif field == "pp_long_sentence_min_len":
+            if converted < 1:
+                print("长句最小长度需为正整数")
+                continue
+        elif field == "pp_insert_chunk":
+            if converted < 1:
+                print("逗号插入步长需为正整数")
+                continue
+        elif field == "llm_ctx_window":
+            if converted < 256:
+                print("上下文窗口过小（至少 256）")
+                continue
+        elif field == "llm_max_tokens":
+            if converted < 1:
+                print("max_tokens 需为正整数")
+                continue
+        elif field == "llm_temperature":
+            if converted < 0.0:
+                print("温度不可为负数")
+                continue
+        elif field == "hf_endpoint":
+            # 允许为空；若非空，简单去除首尾空白
+            converted = converted.strip()
 
         # —— 新增：API 互斥与自动调整 —— 
         # 如果启用了官方 API，则关闭 helloplhm_qwq API

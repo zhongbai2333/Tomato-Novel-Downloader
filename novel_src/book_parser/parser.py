@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup
 from typing import Tuple, Dict
 
 from ..base_system.context import GlobalContext
+from ..text_postprocess.processor import TextPostProcessor
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
@@ -53,10 +54,37 @@ class ContentParser(object):
                     )
                 title = (title or f"章节 {cid}").strip()
 
-                if GlobalContext.get_config().novel_format == "txt":
+                cfg = GlobalContext.get_config()
+                if cfg.novel_format == "txt":
                     processed = ContentParser._clean_content(raw_content)
+                    # 解析阶段前置后处理（可选）
+                    if getattr(cfg, "enable_postprocess", False):
+                        try:
+                            processed = TextPostProcessor.process_content(
+                                processed,
+                                fmt="txt",
+                                punct_density_threshold=cfg.pp_punct_density_threshold,
+                                long_sentence_min_len=cfg.pp_long_sentence_min_len,
+                                insert_chunk=cfg.pp_insert_chunk,
+                                chapter_label=f"{cid}-{title}",
+                            )
+                        except Exception:
+                            # 忽略解析阶段后处理失败，避免中断
+                            pass
                 else:
                     processed = ContentParser._clean_for_ebooklib(raw_content, title)
+                    if getattr(cfg, "enable_postprocess", False):
+                        try:
+                            processed = TextPostProcessor.process_content(
+                                processed,
+                                fmt="epub",
+                                punct_density_threshold=cfg.pp_punct_density_threshold,
+                                long_sentence_min_len=cfg.pp_long_sentence_min_len,
+                                insert_chunk=cfg.pp_insert_chunk,
+                                chapter_label=f"{cid}-{title}",
+                            )
+                        except Exception:
+                            pass
                 chapters[cid] = (processed, title)
             except Exception:
                 # 单章解析失败，写入 Error 占位

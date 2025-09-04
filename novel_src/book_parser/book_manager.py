@@ -59,6 +59,9 @@ class BookManager(object):
 
     def save_chapter(self, chapter_id: str, title: str, content: str):
         """保存章节内容，支持散装保存（EPUB 下生成完整 XHTML）"""
+        # 下载后可选：文本清洗与纠错（规则 + 低标点密度演示级恢复）
+    # 已在解析阶段处理，这里不再做任何后处理
+
         self.downloaded[chapter_id] = [title, content]
         if self.config.bulk_files:
             bulk_dir = self.save_dir / self.book_name
