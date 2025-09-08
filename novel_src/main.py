@@ -6,6 +6,7 @@ import sys
 import json
 import urwid
 import shutil
+import time
 import pyperclip
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Dict
@@ -53,6 +54,32 @@ def preview_ascii(image_path: Path):
     except Exception as e:  # noqa: BLE001
         logger = GlobalContext.get_logger()
         logger.debug(f"生成 ASCII 预览失败: {e}")
+
+
+def _preflight_get_iid(max_retries: int = 5, delay: float = 1.0) -> str | None:
+    """在进入界面前尝试获取 fanqie_mod 的 install_id（get_iid），成功则返回并打印，失败重试最多 max_retries 次。"""
+    logger = GlobalContext.get_logger()
+    try:
+        from fanqie_mod import get_iid  # 本地二进制扩展
+    except Exception as ie:
+        logger.error(f"加载 fanqie_mod 失败：{ie}")
+        return None
+
+    last_err = None
+    for i in range(1, max_retries + 1):
+        try:
+            iid = get_iid()
+            if iid:
+                print(f"初始化 install_id 成功：{iid}")
+                logger.info(f"install_id 初始化成功：{iid}")
+                return str(iid)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            logger.debug(f"第 {i} 次获取 install_id 失败：{e}")
+        time.sleep(delay)
+    if last_err:
+        logger.error(f"多次获取 install_id 失败：{last_err}")
+    return None
 
 
 # ------------------------------------------------------------
@@ -233,6 +260,10 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否使用官方API": ("use_official_api", bool),
         "是否使用 helloplhm_qwq API": ("use_helloplhm_qwq_api", bool),
         "是否以散装形式保存小说": ("bulk_files", bool),
+        # 段评相关
+        "是否下载段评": ("enable_segment_comments", bool),
+        "段评每段最多条数": ("segment_comments_top_n", int),
+        "段评并发线程数": ("segment_comments_workers", int),
     }
 
     def __init__(self, app: "TNDApp"):
@@ -303,23 +334,23 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         if field == "use_helloplhm_qwq_api" and new_state:
             cfg.use_official_api = False
 
-            # —— 当启用 helloplhm_qwq API 时，强制调整相关参数 ——
-            changed = False
-            if getattr(cfg, "max_workers", None) != 1:
-                cfg.max_workers = 1
-                changed = True
-            if getattr(cfg, "min_wait_time", 0) < 1000:
-                cfg.min_wait_time = 1000
-                changed = True
-            if getattr(cfg, "max_wait_time", 0) < 1200:
-                cfg.max_wait_time = 1200
-                changed = True
+        # —— 当启用 helloplhm_qwq API 时，强制调整相关参数 ——
+        changed = False
+        if getattr(cfg, "max_workers", None) != 1:
+            cfg.max_workers = 1
+            changed = True
+        if getattr(cfg, "min_wait_time", 0) < 1000:
+            cfg.min_wait_time = 1000
+            changed = True
+        if getattr(cfg, "max_wait_time", 0) < 1200:
+            cfg.max_wait_time = 1200
+            changed = True
 
-            if changed:
-                self.app.show_popup(
-                    "启用 helloplhm_qwq API 时已自动调整：\n"
-                    "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
-                )
+        if changed:
+            self.app.show_popup(
+                "启用 helloplhm_qwq API 时已自动调整：\n"
+                "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
+            )
 
         cfg.save()
         # 重建整个面板以刷新所有 CheckBox 和按钮文字状态
@@ -342,29 +373,35 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         self.original_widget = urwid.LineBox(fill)
 
         def on_save():
-            raw = edit.edit_text.strip()
             try:
-                # 1) 先做类型转换
-                if value_type is bool:
-                    new_val = raw.lower() in ("true", "1", "yes")
+                raw = edit.edit_text.strip()
+                # 1) 类型转换
+                if value_type is int:
+                    new_val = int(raw)
+                elif value_type is str:
+                    new_val = raw
                 else:
-                    new_val = value_type(raw)
+                    new_val = raw
 
-                # 2) 约束：如果当前启用了 helloplhm_qwq_api，就检查某些字段是否合法
-                if getattr(cfg, "use_helloplhm_qwq_api", False):
-                    if field == "max_workers" and new_val != 1:
-                        raise ValueError("使用 helloplhm_qwq API 时最大线程数必须为 1")
-                    if field == "min_wait_time" and new_val < 1000:
-                        raise ValueError(
-                            "使用 helloplhm_qwq API 时最小等待时间需 ≥ 1000ms"
-                        )
-                    if field == "max_wait_time" and new_val < 1200:
-                        raise ValueError(
-                            "使用 helloplhm_qwq API 时最大等待时间需 ≥ 1200ms"
-                        )
+                # 2) 基础校验/约束
+                if field == "novel_format":
+                    if new_val not in ("txt", "epub"):
+                        raise ValueError("小说保存格式必须为 txt 或 epub")
+                if field in (
+                    "max_workers",
+                    "request_timeout",
+                    "max_retries",
+                    "min_wait_time",
+                    "max_wait_time",
+                    "segment_comments_top_n",
+                    "segment_comments_workers",
+                ):
+                    if int(new_val) < 0:
+                        raise ValueError("该数值不能为负数")
+                if field == "save_path" and new_val:
+                    Path(new_val).mkdir(parents=True, exist_ok=True)
 
-                # 3) 互斥逻辑：如果用户在这里编辑“use_official_api”或“use_helloplhm_qwq_api”
-                #    也要同步处理双方互斥，并在启用 helloplhm 时自动调整相关字段。
+                # 3) 互斥逻辑：官方API 与 helloplhm_qwq API
                 if field == "use_official_api" and new_val:
                     cfg.use_helloplhm_qwq_api = False
                 if field == "use_helloplhm_qwq_api" and new_val:
@@ -380,12 +417,11 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                         "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
                     )
 
-                # 4) 通过校验后，设置新值、保存并返回配置菜单
+                # 4) 保存并返回
                 setattr(cfg, field, new_val)
                 cfg.save()
                 self.app.show_popup(f"{display_name} 已保存为 {new_val}")
                 self._build_view()
-
             except ValueError as ve:
                 self.app.show_popup(str(ve))
 
@@ -421,10 +457,18 @@ class UpdateMenu(urwid.WidgetPlaceholder):
             if "_" not in folder:
                 continue
             book_id, book_name = folder.split("_", 1)
+            # 跳过无效 book_id
+            if not book_id or not book_id.isdigit():
+                self.app.logger.debug(f"跳过无效的本地目录（book_id无效）: {folder}")
+                continue
             try:
                 chapters = self.app.network.fetch_chapter_list(book_id)
             except Exception as e:
                 self.app.logger.error(f"获取章节列表失败: {e}")
+                continue
+            # 接口返回异常或空时跳过
+            if not chapters:
+                self.app.logger.debug(f"章节列表为空，跳过: {book_id}")
                 continue
 
             status_path = save_dir / folder / f"chapter_status_{book_id}.json"

@@ -47,6 +47,25 @@ class Config(BaseConfig):
         description="API列表",
     )
 
+    # 段评配置
+    enable_segment_comments: bool = Field(
+        default=False, description="是否下载段评（段落评论）"
+    )
+    segment_comments_top_n: int = Field(
+        default=10, description="每段最多保存的评论数"
+    )
+    segment_comments_workers: int = Field(
+        default=10, description="段评抓取的并发线程数（每章内）"
+    )
+    # 段评媒体配置
+    download_comment_images: bool = Field(
+        default=True, description="是否下载评论区图片（不含头像）"
+    )
+    blocked_media_domains: list = Field(
+        default=["p-passport-sign.bytedance.net"],
+        description="拒绝下载的图片域名（包含匹配）",
+    )
+
     @property
     def default_save_dir(self) -> Path:
         """获取默认保存目录路径对象"""

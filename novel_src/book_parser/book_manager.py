@@ -1,8 +1,13 @@
 import os
 import json
 import re
+import html
+import hashlib
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
 
 from ..base_system.context import GlobalContext
 from ..base_system.storage_system import FileCleaner
@@ -96,6 +101,21 @@ class BookManager(object):
 
         self.logger.debug(f"章节 {chapter_id} 缓存成功")
 
+    def save_segment_comments(self, chapter_id: str, payload: dict):
+        """
+        保存某个章节的段评数据到状态目录下的 JSON 文件。
+        文件路径: <status_folder>/segment_comments/<chapter_id>.json
+        """
+        try:
+            seg_dir = self.status_folder / "segment_comments"
+            seg_dir.mkdir(parents=True, exist_ok=True)
+            out_path = seg_dir / f"{chapter_id}.json"
+            with out_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self.logger.debug(f"段评已保存: {out_path}")
+        except Exception as e:
+            self.logger.debug(f"段评保存失败: {e}")
+
     def save_error_chapter(self, chapter_id, title):
         """保存下载错误章节"""
         self.downloaded[chapter_id] = [title, "Error"]
@@ -126,12 +146,75 @@ class BookManager(object):
 
                 for chapter in chapters:
                     chapter_id = chapter["id"]
+                    title = self.downloaded.get(chapter_id, [chapter["title"], None])[0]
+                    content = self.downloaded.get(
+                        chapter_id,
+                        [None, "<p>Download Faild or Didn't Download Finish!</p>"],
+                    )[1]
+
+                    # 若启用段评功能，尝试为该章节生成段评页面，并在章节末尾加入链接
+                    seg_link = ""
+                    # 为章节建立稳定文件名，便于段评页面回链
+                    chapter_file = f"chapter_{chapter_id}.xhtml"
+                    if getattr(self.config, "enable_segment_comments", False):
+                        seg_data = self._load_segment_comments_json(chapter_id)
+                        if seg_data is not None:
+                            # 预取评论图片与头像（仅每段前 N 条），并发下载，确保发起请求
+                            try:
+                                try:
+                                    top_n = int(getattr(self.config, "segment_comments_top_n", 10))
+                                except Exception:
+                                    top_n = 10
+                                self._prefetch_media(seg_data, top_n)
+                            except Exception:
+                                pass
+                            comments_file = f"comments_{chapter_id}.xhtml"
+                            comments_title = f"{title} - 段评"
+                            # 在修改正文之前，保留一份原始 HTML 供段标题提取首句
+                            _orig_html_for_snippet = content if isinstance(content, str) else ""
+                            comments_content = self._render_segment_comments_xhtml(
+                                title,
+                                chapter_id,
+                                seg_data,
+                                back_to_chapter=chapter_file,
+                                chapter_html=_orig_html_for_snippet,
+                            )
+                            try:
+                                # 生成辅助页面（不进 spine）
+                                epub.add_aux_page(comments_title, comments_content, comments_file)
+                                # 统计有评论的段数量，用于链接提示
+                                paras = seg_data.get("paras") if isinstance(seg_data, dict) else None
+                                seg_para_count = 0
+                                seg_counts = {}
+                                if isinstance(paras, dict):
+                                    for _k, _v in paras.items():
+                                        try:
+                                            c = int((_v or {}).get("count", 0))
+                                        except Exception:
+                                            c = 0
+                                        if c > 0:
+                                            seg_counts[str(_k)] = c
+                                            seg_para_count += 1
+                                hint = f"（{seg_para_count}段有评论）" if seg_para_count > 0 else ""
+                                seg_link = f"\n<p class=\"segment-comments-link\"><a href=\"{comments_file}\">查看本章段评{hint}</a></p>"
+                                # 将正文中“有评论的段落”转换为可点击区域，点击跳转到对应段评
+                                if isinstance(content, str) and isinstance(paras, dict) and seg_para_count > 0:
+                                    try:
+                                        # 将计数字典传入，便于在段尾追加灰色小数字
+                                        content = self._inject_segment_links(content, comments_file, seg_counts)
+                                    except Exception:
+                                        pass
+                            except Exception as e:
+                                # 段评失败不影响主流程
+                                self.logger.debug(f"段评页面生成失败: {e}")
+
+                    # 章节加入可点击的段评入口
+                    content_with_link = content + seg_link if isinstance(content, str) else content
+
                     epub.add_chapter(
-                        self.downloaded.get(chapter_id, [chapter["title"], None])[0],
-                        self.downloaded.get(
-                            chapter_id,
-                            [None, "<p>Download Faild or Didn't Download Finish!</p>"],
-                        )[1],
+                        title,
+                        content_with_link,
+                        file_name=chapter_file,
                     )
                 epub.generate(output_file)
                 self.logger.info(
@@ -176,3 +259,661 @@ class BookManager(object):
                     json.dump(data, f, ensure_ascii=False, indent=2)
             except Exception as e:
                 self.logger.warning(f"状态文件保存失败或无需保存: {e}")
+
+    # ================= 段评 → XHTML 渲染 =================
+    def _load_segment_comments_json(self, chapter_id: str):
+        """读取某章段评 JSON，存在则返回字典，不存在或异常返回 None。"""
+        try:
+            seg_path = self.status_folder / "segment_comments" / f"{chapter_id}.json"
+            if not seg_path.exists():
+                return None
+            with seg_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            self.logger.debug(f"段评JSON读取失败: {e}")
+            return None
+
+    def _safe_get(self, obj, keys, default=""):
+        """从 obj 中按 keys 顺序取第一个非空字段，keys 可为 ['a','b','c'] 或嵌套 'user.nick'。"""
+        for k in keys:
+            try:
+                cur = obj
+                for part in k.split('.'):
+                    if isinstance(cur, dict):
+                        cur = cur.get(part)
+                    else:
+                        cur = None
+                        break
+                if cur not in (None, ""):
+                    return cur
+            except Exception:
+                continue
+        return default
+
+    def _deep_find_str(self, obj, candidate_keys=("text", "message", "content", "title")):
+        """在嵌套 dict/list 中寻找第一个非空字符串，优先匹配指定 key 名。"""
+        try:
+            # 命中优先 key
+            if isinstance(obj, dict):
+                for k in candidate_keys:
+                    v = obj.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v
+                # 深搜
+                for v in obj.values():
+                    r = self._deep_find_str(v, candidate_keys)
+                    if isinstance(r, str) and r.strip():
+                        return r
+            elif isinstance(obj, list):
+                for v in obj:
+                    r = self._deep_find_str(v, candidate_keys)
+                    if isinstance(r, str) and r.strip():
+                        return r
+        except Exception:
+            pass
+        return ""
+
+    def _deep_find_int(self, obj, candidate_keys=("digg_count", "like_count", "praise_count", "likes")):
+        """在嵌套结构中寻找第一个可转为 int 的数值，优先匹配指定 key 名。"""
+        try:
+            if isinstance(obj, dict):
+                for k in candidate_keys:
+                    if k in obj:
+                        try:
+                            return int(obj[k])
+                        except Exception:
+                            pass
+                for v in obj.values():
+                    r = self._deep_find_int(v, candidate_keys)
+                    if isinstance(r, int) and r >= 0:
+                        return r
+            elif isinstance(obj, list):
+                for v in obj:
+                    r = self._deep_find_int(v, candidate_keys)
+                    if isinstance(r, int) and r >= 0:
+                        return r
+        except Exception:
+            pass
+        return 0
+
+    # ===== 表情与图片处理 =====
+    _EMOJI_MAP = {
+        "奸笑": "🤪",
+        "你细品": "🍵",
+        "微笑": "🙂",
+        "笑哭": "😂",
+        "大笑": "😄",
+        "偷笑": "🤭",
+        "苦笑": "😅",
+        "大哭": "😭",
+        "哭": "😢",
+        "再见": "👋",
+        "害羞": "😊",
+        "OK": "👌",
+        "OK手势": "👌",
+        "OK啦": "👌",
+        "赞": "👍",
+        "鼓掌": "👏",
+        "握手": "🤝",
+        "强": "💪",
+        "酷": "😎",
+        "色": "😘",
+        "亲亲": "😘",
+        "生气": "😠",
+        "发怒": "😡",
+        "惊讶": "😮",
+        "吐舌": "😛",
+        "捂脸": "🤦",
+        "思考": "🤔",
+        "睡": "😴",
+        "疑问": "❓",
+        "心": "❤️",
+        "心碎": "💔",
+    }
+
+    def _convert_bracket_emojis(self, text: str) -> str:
+        """将形如 [偷笑] 的表情代码替换为 emoji。"""
+        if not isinstance(text, str) or "[" not in text:
+            return text
+        def _repl(m):
+            key = m.group(1).strip()
+            return self._EMOJI_MAP.get(key, m.group(0))
+        try:
+            return re.sub(r"\[([^\[\]]+)\]", _repl, text)
+        except Exception:
+            return text
+
+    def _extract_image_urls(self, obj) -> List[str]:
+        """仅从段评内容的 content.image_data_list.image_data[*] 提取图片 URL，避免抓取头像/封面等无关链接。"""
+        urls: List[str] = []
+
+        def _add_candidate(s: str | None):
+            if isinstance(s, str) and s.startswith("http"):
+                urls.append(s)
+
+        try:
+            if not isinstance(obj, dict):
+                return []
+
+            # 优先从标准路径提取：comment.common.content.image_data_list
+            content = (
+                ((obj.get("comment") or {}).get("common") or {}).get("content")
+                if isinstance(obj.get("comment"), dict)
+                else None
+            )
+            if not isinstance(content, dict):
+                # 兼容位置：common.content / content
+                content = ((obj.get("common") or {}).get("content")) if isinstance(obj.get("common"), dict) else obj.get("content")
+
+            if isinstance(content, dict):
+                idl = content.get("image_data_list")
+                if isinstance(idl, dict):
+                    items = idl.get("image_data")
+                    if isinstance(items, list):
+                        for it in items:
+                            if isinstance(it, dict):
+                                _add_candidate(
+                                    it.get("expand_web_url")
+                                    or it.get("web_uri")
+                                    or it.get("url")
+                                    or it.get("src")
+                                )
+
+            # 去重
+            seen = set()
+            dedup = []
+            for u in urls:
+                if u not in seen:
+                    seen.add(u)
+                    dedup.append(u)
+            return dedup
+        except Exception:
+            return []
+
+    def _extract_avatar_url(self, item) -> str | None:
+        """从评论对象中提取用户头像 URL（若存在）。"""
+        try:
+            url = self._safe_get(
+                item,
+                [
+                    "comment.common.user_info.base_info.user_avatar",
+                    "common.user_info.base_info.user_avatar",
+                    "user_info.base_info.user_avatar",
+                    "comment.user_info.base_info.user_avatar",
+                    "user.avatar",
+                    "avatar_url",
+                    "avatar",
+                ],
+                "",
+            )
+            if isinstance(url, str) and url.startswith("http"):
+                return url
+        except Exception:
+            pass
+        return None
+
+    def _prefetch_media(self, seg_data: dict, top_n: int = 10) -> None:
+        """并发预取段评中的图片与头像，仅处理每段前 top_n 条评论。"""
+        try:
+            # 若配置不允许下载评论图片，仅预取头像
+            allow_images = bool(getattr(self.config, "download_comment_images", True))
+            paras = seg_data.get("paras") if isinstance(seg_data, dict) else None
+            if not isinstance(paras, dict):
+                return
+            urls = []
+            for _k, _meta in paras.items():
+                detail = (_meta or {}).get("detail") or {}
+                lst = detail.get("data_list") if isinstance(detail, dict) else None
+                if not isinstance(lst, list) or not lst:
+                    continue
+                for item in lst[: max(0, int(top_n))]:
+                    # 评论图片（受开关控制）
+                    if allow_images:
+                        for u in self._extract_image_urls(item):
+                            urls.append(u)
+                    # 头像
+                    av = self._extract_avatar_url(item)
+                    if av:
+                        urls.append(av)
+            # 去重
+            unique = []
+            seen = set()
+            for u in urls:
+                if u not in seen:
+                    seen.add(u)
+                    unique.append(u)
+            if not unique:
+                return
+            # 并发下载
+            try:
+                workers = int(getattr(self.config, "media_download_workers", 4))
+            except Exception:
+                workers = 4
+            with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+                futures = [ex.submit(self._download_comment_image, u) for u in unique]
+                for f in as_completed(futures):
+                    try:
+                        _ = f.result()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _download_comment_image(self, url: str) -> str | None:
+        """下载图片到状态目录 images 下，返回文件名（不含路径），失败返回 None。包含超时和重试。"""
+        try:
+            # 屏蔽域名
+            try:
+                blocked = list(getattr(self.config, "blocked_media_domains", []))
+            except Exception:
+                blocked = []
+            if any(b and (b in url) for b in blocked):
+                self.logger.debug(f"跳过被屏蔽域名的图片: {url}")
+                return None
+            img_dir: Path = self.status_folder / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            parsed = urlparse(url)
+            path = parsed.path or ""
+            ext = os.path.splitext(path)[1].lower()
+            if ext not in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
+                ext = ""
+            name = hashlib.sha1(url.encode("utf-8")).hexdigest()
+            if not ext:
+                ext = ".jpg"
+            file_name = f"{name}{ext}"
+            out_path = img_dir / file_name
+            if out_path.exists():
+                return file_name
+
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Referer": f"{parsed.scheme}://{parsed.netloc}/",
+            }
+
+            # 配置化超时与重试
+            try:
+                timeout = float(getattr(self.config, "media_download_timeout", 5.0))
+            except Exception:
+                timeout = 5.0
+            try:
+                max_retries = int(getattr(self.config, "media_download_retries", 4))
+            except Exception:
+                max_retries = 4
+            try:
+                backoff = float(getattr(self.config, "media_retry_backoff", 0.8))
+            except Exception:
+                backoff = 0.8
+
+            import time as _t
+            attempt = 0
+            last_err = None
+            while attempt < max_retries:
+                try:
+                    self.logger.debug(f"下载评论图片: {url} (尝试{attempt+1}/{max_retries})")
+                    resp = requests.get(url, headers=headers, timeout=timeout)
+                    sc = resp.status_code
+                    if sc == 200 and resp.content:
+                        # 修正扩展名
+                        ctype = resp.headers.get("Content-Type", "").lower()
+                        if ext == ".jpg" and "png" in ctype:
+                            file_name2 = f"{name}.png"; out_path2 = img_dir / file_name2
+                        elif ext == ".jpg" and "gif" in ctype:
+                            file_name2 = f"{name}.gif"; out_path2 = img_dir / file_name2
+                        elif ext == ".jpg" and "webp" in ctype:
+                            file_name2 = f"{name}.webp"; out_path2 = img_dir / file_name2
+                        else:
+                            file_name2 = file_name; out_path2 = out_path
+                        with open(out_path2, "wb") as f:
+                            f.write(resp.content)
+                        return file_name2
+                    # 可重试状态码
+                    if sc in (429, 500, 502, 503, 504):
+                        last_err = RuntimeError(f"status={sc}")
+                    else:
+                        self.logger.debug(f"图片下载失败 status={sc} url={url}")
+                        return None
+                except requests.Timeout as e:
+                    last_err = e
+                except Exception as e:
+                    last_err = e
+                attempt += 1
+                _t.sleep(backoff * attempt)
+            if last_err:
+                try:
+                    self.logger.debug(f"图片下载失败(重试耗尽): {last_err}")
+                except Exception:
+                    pass
+            return None
+        except Exception as e:
+            try:
+                self.logger.debug(f"图片下载失败: {e}")
+            except Exception:
+                pass
+            return None
+
+    def _find_probable_author(self, obj) -> str:
+        """启发式在嵌套结构中寻找最可能的用户名/作者名。"""
+        try:
+            from collections import deque
+            q = deque([obj])
+            while q:
+                x = q.popleft()
+                if isinstance(x, dict):
+                    for k, v in x.items():
+                        if isinstance(v, str) and v.strip():
+                            kl = str(k).lower()
+                            if (
+                                "user" in kl
+                                or "author" in kl
+                                or "nick" in kl
+                                or kl.endswith("name")
+                                or kl in {"name", "uname", "screen_name", "nickname", "nick_name", "user_name"}
+                            ):
+                                s = v.strip()
+                                if 1 <= len(s) <= 32:
+                                    return s
+                        if isinstance(v, (dict, list)):
+                            q.append(v)
+                elif isinstance(x, list):
+                    for v in x:
+                        if isinstance(v, (dict, list)):
+                            q.append(v)
+            return ""
+        except Exception:
+            return ""
+
+    def _to_cjk_numeral(self, n: int) -> str:
+        """将 1..99 转换为中文数字（简易，满足段序号场景）。"""
+        digits = "零一二三四五六七八九"
+        if n <= 0:
+            return str(n)
+        if n < 10:
+            return digits[n]
+        if n == 10:
+            return "十"
+        if n < 20:
+            return "十" + digits[n - 10]
+        if n < 100:
+            shi = n // 10
+            ge = n % 10
+            return digits[shi] + "十" + (digits[ge] if ge else "")
+        return str(n)
+
+    def _extract_para_snippet(self, chapter_html: str, target_idx: int) -> str:
+        """从章节 HTML 按 <p> 顺序提取第 target_idx 段的首句；失败返回空串。"""
+        if not isinstance(chapter_html, str) or target_idx < 0:
+            return ""
+        try:
+            pattern = re.compile(r"(<p\b[^>]*>)(.*?)(</p>)", re.I | re.S)
+            idx = 0
+            for m in pattern.finditer(chapter_html):
+                if idx == target_idx:
+                    inner = m.group(2)
+                    inner_text = re.sub(r"<[^>]+>", "", inner)
+                    inner_text = html.unescape(inner_text).strip()
+                    if not inner_text:
+                        return ""
+                    cut_points = []
+                    for sep in ["。", "！", "？", ".", "!", "?", "；", "…"]:
+                        p = inner_text.find(sep)
+                        if p != -1:
+                            cut_points.append(p + 1)
+                    end = min(cut_points) if cut_points else min(len(inner_text), 20)
+                    return inner_text[:end].strip()
+                idx += 1
+        except Exception:
+            return ""
+        return ""
+
+    def _render_segment_comments_xhtml(self, chapter_title: str, chapter_id: str, data: dict, back_to_chapter: str | None = None, chapter_html: str | None = None) -> str:
+        """将段评 JSON 渲染为一个简单可读、符合 EPUB 的 HTML 片段。"""
+        # 头部
+        parts: List[str] = []
+        parts.append(f"<h2>{html.escape(chapter_title)} - 段评</h2>")
+        paras = data.get("paras") if isinstance(data, dict) else None
+        if not isinstance(paras, dict) or not paras:
+            parts.append("<p>暂无段评数据。</p>")
+            return "\n".join(parts)
+
+    # 准备提取段落首句的工具
+
+        # 按段索引排序输出
+        for key in sorted(paras.keys(), key=lambda x: int(x) if str(x).isdigit() else 0):
+            meta = paras.get(key) or {}
+            try:
+                cnt = int(meta.get("count", 0))
+            except Exception:
+                cnt = 0
+            if cnt <= 0:
+                # 该段无评论
+                continue
+            # 展示层将 0 基索引改为 1 基人类可读
+            try:
+                disp_idx = int(key) + 1
+            except Exception:
+                disp_idx = key
+            # 构造标题：一、"段落首句…" (cnt)
+            try:
+                idx_int = int(key)
+            except Exception:
+                idx_int = -1
+            snippet = self._extract_para_snippet(chapter_html or "", idx_int) if chapter_html else ""
+            cjk_idx = self._to_cjk_numeral(int(disp_idx) if str(disp_idx).isdigit() else 0)
+            if snippet:
+                title_html = (
+                    f"<span class=\"para-title\"><span class=\"para-index\">{html.escape(cjk_idx)}、</span> "
+                    f"<span class=\"para-src\">&quot;{html.escape(snippet)}&quot;</span> <small>({cnt})</small></span>"
+                )
+            else:
+                # 回退：保留原来的“第 N 段 (cnt)”
+                title_html = f"<span class=\"para-title\">第 {html.escape(str(disp_idx))} 段 <small>({cnt})</small></span>"
+            parts.append(f"<h3 id=\"para-{html.escape(str(key))}\">{title_html}</h3>")
+            if back_to_chapter:
+                parts.append(f"<p class=\"back-to-chapter\"><a href=\"{html.escape(back_to_chapter)}#p-{html.escape(str(key))}\">返回本章第 {html.escape(str(disp_idx))} 段</a></p>")
+            detail = meta.get("detail") or {}
+            lst = detail.get("data_list") if isinstance(detail, dict) else None
+            if not isinstance(lst, list) or not lst:
+                parts.append("<p>该段暂无可展示的评论。</p>")
+                continue
+            # 限制仅展示每段前 N 条
+            try:
+                top_n = int(getattr(self.config, "segment_comments_top_n", 10))
+            except Exception:
+                top_n = 10
+            show_list = lst[: max(0, int(top_n))]
+            parts.append("<ol>")
+            for item in show_list:
+                # 取评论文本（覆盖常见嵌套路径）
+                text = self._safe_get(
+                    item,
+                    [
+                        "common.content.text",
+                        "content.text",
+                        "common.comment.content.text",
+                        "comment.content.text",
+                        # 次级：可能拿到一个 content dict，继续取其中的 text
+                        "common.content",
+                        "comment.content",
+                        "text",
+                        "msg",
+                        "message",
+                    ],
+                    "",
+                )
+                # 如果拿到的是 dict，尽量向内取 text；仍非字符串再序列化兜底
+                if isinstance(text, dict):
+                    inner_text = self._safe_get(text, ["text", "message"], "")
+                    text = inner_text if isinstance(inner_text, str) and inner_text else text
+                # 结构仍未取到有效文本时，做一次深度回退
+                if not isinstance(text, str) or not text.strip():
+                    text = self._deep_find_str(item)
+                if isinstance(text, (dict, list)):
+                    text = json.dumps(text, ensure_ascii=False)
+                # 表情替换（先替换再转义，保留 emoji）
+                text = self._convert_bracket_emojis(str(text))
+                text = html.escape(text)
+                # 提取并下载图片
+                img_urls = self._extract_image_urls(item)
+                img_tags = []
+                for u in img_urls[:6]:  # 每条评论最多插入 6 张以防过多
+                    fn = self._download_comment_image(u)
+                    if fn:
+                        img_tags.append(f'<img src="images/{html.escape(fn)}" alt="img" />')
+                # 取作者：覆盖常见路径 + 更稳健回退
+                author = self._safe_get(
+                    item,
+                    [
+                        # 常见
+                        "common.user_info.base_info.user_name",
+                        "user_info.base_info.user_name",
+                        "common.user_info.base_info.nickname",
+                        "user_info.base_info.nickname",
+                        "common.user.nick_name",
+                        "common.user.nickname",
+                        "user.nick_name",
+                        "user.nickname",
+                        "user.name",
+                        # 变体
+                        "user_info.user_name",
+                        "user_info.nickname",
+                        "common.user_info.user_name",
+                        "common.user_info.nickname",
+                        "common.user_name",
+                        "screen_name",
+                        "uname",
+                        "nick",
+                        # 通用
+                        "author",
+                        "nickname",
+                        "user_name",
+                        "name",
+                    ],
+                    "",
+                )
+                if not isinstance(author, str) or not author.strip():
+                    author = self._deep_find_str(item, ("user_name", "nickname", "nick_name", "name", "screen_name", "uname", "nick"))
+                if not isinstance(author, str) or not author.strip():
+                    author = self._find_probable_author(item)
+                if not isinstance(author, str) or not author.strip():
+                    author = "匿名"
+                author = html.escape(str(author))
+                # 点赞/热度（覆盖常见嵌套路径，优先 comment.stat.digg_count）
+                like = self._safe_get(
+                    item,
+                    [
+                        # 正确所在位置
+                        "comment.stat.digg_count",
+                        "comment.stat.like_count",
+                        "comment.stat.praise_count",
+                        # 其它可能位置（兼容历史/变体）
+                        "stat.digg_count",
+                        "common.digg_count",
+                        "digg_count",
+                        "like_count",
+                        "praise_count",
+                        "likes",
+                    ],
+                    0,
+                )
+                try:
+                    like = int(like)
+                except Exception:
+                    like = 0
+                if like == 0:
+                    # 仅在 comment 子对象内做回退搜索，避免拿到无关的 0 值
+                    sub = item.get("comment") if isinstance(item, dict) else None
+                    like = self._deep_find_int(sub if isinstance(sub, (dict, list)) else item)
+                # 时间（若有）
+                ts = self._safe_get(
+                    item,
+                    [
+                        "common.create_timestamp",
+                        "create_timestamp",
+                        "create_time",
+                        "ctime",
+                        "time",
+                    ],
+                    "",
+                )
+                # 尝试将时间戳格式化成人类可读
+                try:
+                    import time as _t
+                    if isinstance(ts, (int, float)):
+                        # 绝大多数为秒级时间戳
+                        if ts > 1e12:
+                            # 毫秒
+                            ts = int(ts / 1000)
+                        else:
+                            ts = int(ts)
+                        ts = _t.strftime("%Y-%m-%d %H:%M", _t.localtime(ts))
+                except Exception:
+                    pass
+                ts = html.escape(str(ts)) if ts else ""
+                # 头像
+                avatar_url = self._extract_avatar_url(item)
+                avatar_img = ""
+                if avatar_url:
+                    fn_av = self._download_comment_image(avatar_url)
+                    if fn_av:
+                        avatar_img = f'<img class="avatar" src="images/{html.escape(fn_av)}" alt="avatar" /> '
+
+                meta_line = f"<small class=\"seg-meta\">{avatar_img}作者：{author}"
+                if ts:
+                    meta_line += f" | 时间：{ts}"
+                meta_line += f" | 赞：{like}</small>"
+                if img_tags:
+                    parts.append(f"<li><p>{text}</p><div class=\"seg-images\">{''.join(img_tags)}</div><p>{meta_line}</p></li>")
+                else:
+                    parts.append(f"<li><p>{text}</p><p>{meta_line}</p></li>")
+            parts.append("</ol>")
+
+        # 简单结尾
+        try:
+            n = int(getattr(self.config, "segment_comments_top_n", 10))
+        except Exception:
+            n = 10
+        parts.append(f"<p><small>仅展示每段前 {n} 条评论（若有），实际总数以接口为准。</small></p>")
+        return "\n".join(parts)
+
+    def _inject_segment_links(self, content_html: str, comments_file: str, seg_counts: dict) -> str:
+        """
+        将正文中“有评论的段落”在段尾追加一个灰色小数字（评论数），点击跳转至对应段评锚点；同时为这些段落加上 id="p-<idx>"
+        说明：
+        - 逐个匹配 <p>…</p>，按出现顺序作为段索引 0,1,2,...
+        - 若该索引在 seg_counts 内且 >0，则在段尾追加 <a class="seg-count">(N)</a>
+          并为 <p> 增加 id="p-idx"（若原本无 id）。
+        - 简化实现，未拆分为句级链接；保持正文颜色不变。
+        """
+        try:
+            # 注意：这里使用 \b 是正则“单词边界”，raw-string 下无需再双反斜杠
+            pattern = re.compile(r"(<p\b[^>]*>)(.*?)(</p>)", re.I | re.S)
+            idx = 0
+            out = []
+            last = 0
+            for m in pattern.finditer(content_html):
+                out.append(content_html[last:m.start()])
+                open_tag, inner, close_tag = m.group(1), m.group(2), m.group(3)
+                # 仅对有评论的段落处理
+                cnt = 0
+                try:
+                    cnt = int(seg_counts.get(str(idx), 0))
+                except Exception:
+                    cnt = 0
+                if cnt > 0:
+                    # 若无 id，追加 id="p-idx"
+                    if not re.search(r"\bid\s*=", open_tag, re.I):
+                        open_tag = open_tag[:-1] + f' id="p-{idx}">'
+                    # 在段尾追加灰色可点击数字
+                    badge = (
+                        f' <a class="seg-count" href="{html.escape(comments_file)}#para-{idx}" '
+                        f'title="查看本段评论">({cnt})</a>'
+                    )
+                    inner = inner + badge
+                out.append(open_tag + inner + close_tag)
+                last = m.end()
+                idx += 1
+            out.append(content_html[last:])
+            return "".join(out)
+        except Exception:
+            return content_html

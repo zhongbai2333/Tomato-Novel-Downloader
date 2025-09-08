@@ -3,6 +3,7 @@
 # 职责：实现多线程下载和任务管理
 # -------------------------------
 import time
+import logging
 import requests
 import shutil
 import random
@@ -66,6 +67,7 @@ class ChapterDownloader:
 
         # 中断控制
         self._stop_event = threading.Event()
+        self._sigint_count = 0
         self._orig_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, self._handle_signal)
 
@@ -76,9 +78,16 @@ class ChapterDownloader:
         )
 
     def _handle_signal(self, signum, frame):
-        self.logger.warning("接收到 Ctrl-C，准备优雅退出...")
-        self._stop_event.set()
-        signal.signal(signal.SIGINT, self._orig_handler)
+        # 两段式退出：第一次优雅退出，第二次强制退出
+        self._sigint_count += 1
+        if self._sigint_count == 1:
+            self.logger.warning("接收到 Ctrl-C，正在优雅退出（再次按下将强制退出）...")
+            self._stop_event.set()
+            # 保持自定义 handler 有效，便于第二次 Ctrl-C 捕获
+        else:
+            self.logger.error("第二次 Ctrl-C，强制退出")
+            # 抛出 KeyboardInterrupt，让上层立即中断（download_book 会保存状态并向上抛出）
+            raise KeyboardInterrupt
 
     def download_book(
         self,
@@ -92,13 +101,24 @@ class ChapterDownloader:
           2. config.use_helloplhm_qwq_api → 新增 helloplhm_qwq 批量（每 300 章一组）
           3. 否则 → 非官方单章
         """
-        # 备份并关闭非 tqdm handler
+        # 仅暂时移除控制台类处理器（StreamHandler），保留文件处理器，以确保 tqdm 期间仍写入日志文件
         orig_handlers = self.logger.handlers.copy()
+        removed_handlers = []
         for h in orig_handlers:
-            if not isinstance(h, TqdmLoggingHandler):
+            # 移除除 TqdmLoggingHandler 外的 StreamHandler（通常是控制台处理器）
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, TqdmLoggingHandler):
                 self.logger.removeHandler(h)
+                removed_handlers.append(h)
 
         results = {"success": 0, "failed": 0, "canceled": 0}
+        # 段评并发执行器与任务列表（仅在启用段评时使用）
+        comment_executor: Optional[ThreadPoolExecutor] = None
+        comment_futures = []
+        if getattr(self.config, "enable_segment_comments", False):
+            # 全局并发：按配置控制并发抓取“每章段评”；
+            # 章节内的“每段详情抓取”仍由 _maybe_fetch_segment_comments 内部控制。
+            cw = max(1, int(getattr(self.config, "segment_comments_workers", 4)))
+            comment_executor = ThreadPoolExecutor(max_workers=cw)
 
         # ============ 准备要下载的章节列表 & 分组 ============
 
@@ -206,6 +226,15 @@ class ChapterDownloader:
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
+                                    # 段评：成功保存章节后按需抓取（异步提交，不阻塞主下载）
+                                    if comment_executor:
+                                        comment_futures.append(
+                                            comment_executor.submit(
+                                                self._maybe_fetch_segment_comments,
+                                                book_manager,
+                                                cid,
+                                            )
+                                        )
                                     results["success"] += 1
 
                         # --- 情况 2：helloplhm_qwq 批量 ---
@@ -218,6 +247,15 @@ class ChapterDownloader:
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
+                                    # 段评：成功保存章节后按需抓取（异步提交）
+                                    if comment_executor:
+                                        comment_futures.append(
+                                            comment_executor.submit(
+                                                self._maybe_fetch_segment_comments,
+                                                book_manager,
+                                                cid,
+                                            )
+                                        )
                                     results["success"] += 1
 
                         # --- 情况 3：非官方单章 ---
@@ -229,6 +267,15 @@ class ChapterDownloader:
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
+                                # 段评：成功保存章节后按需抓取（异步提交）
+                                if comment_executor:
+                                    comment_futures.append(
+                                        comment_executor.submit(
+                                            self._maybe_fetch_segment_comments,
+                                            book_manager,
+                                            cid,
+                                        )
+                                    )
                                 results["success"] += 1
 
                     except KeyboardInterrupt:
@@ -246,17 +293,102 @@ class ChapterDownloader:
         canceled = tasks_count - results["success"] - results["failed"]
         results["canceled"] = max(0, canceled)
 
+        # 等待所有段评任务完成（如已启用），以便后续 EPUB 集成时可用
+        if comment_executor:
+            try:
+                for fut in as_completed(comment_futures):
+                    try:
+                        fut.result()
+                    except Exception:
+                        pass
+            finally:
+                comment_executor.shutdown(wait=True)
+
         # 保存状态 & 后处理
         book_manager.save_download_status()
         book_manager.finalize_spawn(chapters, canceled + results["failed"])
 
-        # 恢复日志 handler 和 SIGINT
+        # 恢复被移除的控制台 handler；文件 handler 始终未移除
         self.log_system.disable_tqdm_handler()
-        for h in orig_handlers:
+        for h in removed_handlers:
             self.logger.addHandler(h)
         signal.signal(signal.SIGINT, self._orig_handler)
 
         return results
+
+    # ================= 段评辅助 =================
+    def _maybe_fetch_segment_comments(self, book_manager: BookManager, chapter_id: str):
+        """
+        当配置开启时，抓取该章节的段评统计，并对有评论的段落获取前 N 条评论，保存为 JSON。
+        失败不影响主流程。
+        """
+        try:
+            if not getattr(self.config, "enable_segment_comments", False):
+                return
+            # 统计
+            stats_wrap = self.network.fetch_para_comment_stats(chapter_id)
+            if not stats_wrap or not isinstance(stats_wrap, dict):
+                return
+            item_version = stats_wrap.get("item_version") or "1"
+            stats = stats_wrap.get("stats") if isinstance(stats_wrap.get("stats"), dict) else None
+            if not stats:
+                return
+            # 逐段取评论（仅 count>0 的段），并发提速
+            top_n = max(0, int(getattr(self.config, "segment_comments_top_n", 10)))
+            sort = 1
+            workers = max(1, int(getattr(self.config, "segment_comments_workers", 4)))
+            full = {"chapter_id": chapter_id, "book_id": self.book_id, "item_version": item_version, "paras": {}}
+
+            # 收集需要请求的段落索引并预填统计
+            to_fetch: List[int] = []
+            for key, meta in stats.items():
+                try:
+                    idx = int(key)
+                except Exception:
+                    continue
+                try:
+                    cnt = int(meta.get("count", 0)) if isinstance(meta, dict) else 0
+                except Exception:
+                    cnt = 0
+                if cnt <= 0:
+                    continue
+                to_fetch.append(idx)
+                full["paras"][str(idx)] = {
+                    "count": cnt,
+                    "hot": meta.get("hot") if isinstance(meta, dict) else None,
+                    "infos": meta.get("infos") if isinstance(meta, dict) else None,
+                    "detail": None,
+                }
+
+            if not to_fetch:
+                book_manager.save_segment_comments(chapter_id, full)
+                return
+
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                fut_map = {
+                    ex.submit(
+                        self.network.fetch_para_comments,
+                        chapter_id,
+                        self.book_id,
+                        idx,
+                        item_version,
+                        top_n,
+                        sort,
+                    ): idx
+                    for idx in to_fetch
+                }
+                for fut in as_completed(fut_map):
+                    idx = fut_map[fut]
+                    try:
+                        detail = fut.result()
+                    except Exception:
+                        detail = None
+                    full["paras"][str(idx)]["detail"] = detail
+            # 保存
+            book_manager.save_segment_comments(chapter_id, full)
+        except Exception:
+            # 全部静默
+            pass
 
     # --- 非官方单章下载 ---
     def _download_single(self, chapter: dict) -> Tuple[str, str]:

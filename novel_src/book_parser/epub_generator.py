@@ -54,6 +54,39 @@ class EpubGenerator:
 
         self.chapters = []
         self._file_counter = 0  # 用于生成自动文件名
+        # 注入通用样式，统一正文颜色和段评标识
+        self.style = epub.EpubItem(
+            uid="style_main",
+            file_name="styles/main.css",
+            media_type="text/css",
+            content=(
+                (
+                    """
+                    body { color:#000 !important; }
+                    p { color:#000 !important; }
+                    a.seg-link { color: inherit; text-decoration: none; }
+                    a.seg-link:hover { text-decoration: underline; }
+                    .seg-count { color:#999; font-size:0.75em; margin-left:.3em; text-decoration: none; }
+                    /* 段评页标题：深灰文字、淡灰背景、正常字号 */
+                    h3 { background:#f5f5f5; padding:.4em .6em; color:#333; font-weight:500; }
+                    .para-title .para-index { font-weight:600; margin-right:.25em; color:#333; }
+                    .para-title .para-src { color:#333; }
+                    .para-title small { color:#666; }
+                    /* 返回本章链接更小更淡，悬停变色 */
+                    .back-to-chapter { margin:.2em 0 .8em 0; }
+                    .back-to-chapter a { font-size:.85em; color:#666; text-decoration:none; }
+                    .back-to-chapter a:hover { color:#333; text-decoration:underline; }
+                    /* 评论图片容器与图片样式 */
+                    .seg-images { margin:.25em 0 .5em 0; display:block; }
+                    .seg-images img { max-width:100%; height:auto; max-height:220px; margin-right:.4em; margin-bottom:.2em; border-radius:2px; object-fit:contain; }
+                    /* 头像样式 */
+                    .avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; vertical-align:middle; margin-right:.5em; }
+                    .seg-meta { color:#666; }
+                    """
+                ).encode("utf-8")
+            ),
+        )
+        self.book.add_item(self.style)
 
     def add_chapter(self, title, content, file_name=None, id=None):
         """
@@ -72,10 +105,21 @@ class EpubGenerator:
             title=title, file_name=file_name, lang=self.book.language
         )
         chapter.content = content
+        chapter.add_item(self.style)
 
         # 添加到书籍
         self.book.add_item(chapter)
         self.chapters.append(chapter)
+
+    def add_aux_page(self, title, content, file_name):
+        """
+        添加不进入阅读顺序（spine）的 XHTML 页面，供超链接跳转查看。
+        该页面会加入 manifest（add_item），但不会加入 self.chapters/spine。
+        """
+        page = epub.EpubHtml(title=title, file_name=file_name, lang=self.book.language)
+        page.content = content
+        page.add_item(self.style)
+        self.book.add_item(page)
 
 
     def add_img(self, file_path: str):
@@ -83,11 +127,23 @@ class EpubGenerator:
         img_uid = os.path.splitext(img_name)[0]
         with open(file_path, "rb") as f:
             img_content = f.read()
+        # 根据扩展名设置正确的 MIME，避免部分阅读器不显示
+        ext = os.path.splitext(img_name)[1].lower()
+        if ext in (".jpg", ".jpeg"):
+            mime = "image/jpeg"
+        elif ext == ".png":
+            mime = "image/png"
+        elif ext == ".gif":
+            mime = "image/gif"
+        elif ext == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/jpeg"
         # 1. 用 EpubItem 将二进制图片打包
         img_item = epub.EpubItem(
             uid=img_uid,
             file_name=f"images/{img_name}",
-            media_type="image/jpeg",
+            media_type=mime,
             content=img_content,
         )
         self.book.add_item(img_item)
@@ -105,7 +161,8 @@ class EpubGenerator:
         img_path = GlobalContext.get_config().get_status_folder_path / "images"
         img_list = self.list_files(img_path)
         for file in img_list:
-            self.add_img(str(img_path / file))
+            # file 已是绝对路径，直接传入
+            self.add_img(str(file))
 
         # 添加导航文件 (NCX and Nav) - 需要在TOC和Spine设置之前添加
         self.book.add_item(epub.EpubNcx())
