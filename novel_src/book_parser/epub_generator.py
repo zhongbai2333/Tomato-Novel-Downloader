@@ -62,8 +62,10 @@ class EpubGenerator:
             content=(
                 (
                     """
-                    body { color:#000 !important; }
-                    p { color:#000 !important; }
+                    body { color:#000 !important; line-height:1.5; }
+                    /* 统一段落：首行缩进 + 控制段间距（减少突增的行距感） */
+                    p { color:#000 !important; text-indent:2em; margin:0 0 .8em 0; line-height:1.5; }
+                    p.no-indent { text-indent:0; }
                     a.seg-link { color: inherit; text-decoration: none; }
                     a.seg-link:hover { text-decoration: underline; }
                     .seg-count { color:#999; font-size:0.75em; margin-left:.3em; text-decoration: none; }

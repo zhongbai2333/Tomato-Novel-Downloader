@@ -63,6 +63,9 @@ def show_config_menu(config: Config):
         {"name": "JPEG质量(0-100)", "field": "jpeg_quality", "type": int},
         {"name": "HEIC转JPEG", "field": "convert_heic_to_jpeg", "type": bool},
         {"name": "保留原始HEIC文件", "field": "keep_heic_original", "type": bool},
+    # 章节模板
+    {"name": "启用自定义章节模板", "field": "enable_chapter_template", "type": bool},
+    {"name": "章节模板文件路径", "field": "chapter_template_file", "type": str},
         # 旧界面切换
         {"name": "是否使用老版本命令行界面(需重启)", "field": "old_cli", "type": bool},
     ]
@@ -386,11 +389,15 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             # 走到这里，如果还没拿到 book_id，就当作书名，调用新版 search_book 返回多条结果
             if not book_id:
                 book_name = user_input
+                # 显示简单加载提示，避免用户误以为卡死重复回车
+                print("[正在搜索，请稍候...]", end="", flush=True)
                 try:
                     results = network.search_book(book_name)
                 except Exception as e:
+                    print()  # 换行
                     logger.error(f"搜索小说失败：{e}")
                     continue
+                print(" 完成")
 
                 if not results:
                     logger.info("未搜索到对应书籍")

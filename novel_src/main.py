@@ -280,6 +280,9 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "JPEG质量(0-100)": ("jpeg_quality", int),
         "HEIC转JPEG": ("convert_heic_to_jpeg", bool),
         "保留原始HEIC文件": ("keep_heic_original", bool),
+    # 章节模板
+    "启用自定义章节模板": ("enable_chapter_template", bool),
+    "章节模板文件路径": ("chapter_template_file", str),
     }
 
     def __init__(self, app: "TNDApp"):
@@ -485,78 +488,28 @@ class UpdateMenu(urwid.WidgetPlaceholder):
         # 分别存储有更新和无更新的书籍
         self._update_choices: List[Tuple[str, str]] = []
         self._no_update_choices: List[Tuple[str, str]] = []
-        self._build()
-
-    def _build(self):
-        cfg = self.app.config
-        save_dir = Path(cfg.default_save_dir)
-        subdirs = list_subdirs(save_dir)
-
-        # 清空上次的记录
-        self._update_choices.clear()
-        self._no_update_choices.clear()
-
-        # 遍历所有子目录，分类
-        for folder in subdirs:
-            if "_" not in folder:
-                continue
-            book_id, book_name = folder.split("_", 1)
-            # 跳过无效 book_id
-            if not book_id or not book_id.isdigit():
-                self.app.logger.debug(f"跳过无效的本地目录（book_id无效）: {folder}")
-                continue
-            try:
-                chapters = self.app.network.fetch_chapter_list(book_id)
-            except Exception as e:
-                self.app.logger.error(f"获取章节列表失败: {e}")
-                continue
-            # 接口返回异常或空时跳过
-            if not chapters:
-                self.app.logger.debug(f"章节列表为空，跳过: {book_id}")
-                continue
-
-            status_path = save_dir / folder / f"chapter_status_{book_id}.json"
-            status = load_download_status(status_path)
-            downloaded = status.get("downloaded", {})
-            new_count = max(len(chapters) - len(downloaded), 0)
-            desc = f"《{book_name}》({book_id}) — 新章节: {new_count}"
-
-            if new_count > 0:
-                self._update_choices.append((book_id, desc))
-            else:
-                self._no_update_choices.append((book_id, desc))
-
-        # 如果两个列表都为空，则提示没有任何小说
+        # 默认不立即执行耗时构建，允许外部异步填充后调用 rebuild_from_lists。
+        # 兼容旧逻辑：如仍需同步构建，可调用 self._build()
+        
+    def rebuild_from_lists(self):
+        """在 _update_choices / _no_update_choices 已经准备好的情况下，仅构建界面。"""
         if not self._update_choices and not self._no_update_choices:
             self.app.show_popup("没有可更新或无更新的小说")
             return
-
-        # 构建菜单主体
         body: List[urwid.Widget] = [
             urwid.Text(("title", "小说更新菜单 (q 返回)")),
             urwid.Divider(),
         ]
-
-        # 有更新的书籍列表
         if self._update_choices:
             body.append(urwid.Text("有新章节的书籍："))
             for bid, desc in self._update_choices:
                 body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
             body.append(urwid.Divider())
-
-        # 无更新的书籍子菜单入口
         if self._no_update_choices:
             count = len(self._no_update_choices)
-            body.append(
-                menu_button(
-                    f"无更新 ({count})", lambda btn: self._show_no_update_menu()
-                )
-            )
+            body.append(menu_button(f"无更新 ({count})", lambda btn: self._show_no_update_menu()))
             body.append(urwid.Divider())
-
-        # 返回主菜单
         body.append(menu_button("返回主菜单", lambda btn: self.app.show_main()))
-
         listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
         self.original_widget = urwid.LineBox(listbox)
 
@@ -565,7 +518,7 @@ class UpdateMenu(urwid.WidgetPlaceholder):
         self.app.start_download_flow(book_id)
 
     def _show_no_update_menu(self):
-        """显示无更新书籍的子菜单"""
+        """显示无更新书籍的子菜单 (使用已缓存的 _no_update_choices)。"""
         body: List[urwid.Widget] = [
             urwid.Text(("title", "无更新的书籍 (q 返回)")),
             urwid.Divider(),
@@ -573,7 +526,8 @@ class UpdateMenu(urwid.WidgetPlaceholder):
         for bid, desc in self._no_update_choices:
             body.append(menu_button(desc, lambda btn, b=bid: self._select(b)))
         body.append(urwid.Divider())
-        body.append(menu_button("返回更新菜单", lambda btn: self._build()))
+        # 返回更新菜单：不重新扫描，仅重新展示已有列表
+        body.append(menu_button("返回更新菜单", lambda btn: self.rebuild_from_lists()))
 
         listbox = urwid.ListBox(urwid.SimpleFocusListWalker(body))
         self.original_widget = urwid.LineBox(listbox)
@@ -895,6 +849,13 @@ class TNDApp:
             palette=PALETTE,
             unhandled_input=self._global_key_handler,
         )
+    # =============== Loading / Spinner ===============
+        self._loading_active = False
+        self._loading_prev_widget = None
+        self._spinner_widget = None  # type: ignore
+        self._spinner_frames = ["|", "/", "-", "\\"]
+        self._spinner_index = 0
+        self._spinner_alarm = None
         self.show_main()
 
     # --------------------------------------------------------
@@ -907,7 +868,45 @@ class TNDApp:
         self.main_placeholder.original_widget = ConfigMenu(self)
 
     def show_update(self):
-        self.main_placeholder.original_widget = UpdateMenu(self)
+        # 异步加载更新列表，显示加载遮罩
+        def _task():
+            cfg = self.config
+            save_dir = Path(cfg.default_save_dir)
+            subdirs = list_subdirs(save_dir)
+            update_choices: List[Tuple[str, str]] = []
+            no_update_choices: List[Tuple[str, str]] = []
+            for folder in subdirs:
+                if "_" not in folder:
+                    continue
+                book_id, book_name = folder.split("_", 1)
+                if not book_id or not book_id.isdigit():
+                    continue
+                try:
+                    chapters = self.network.fetch_chapter_list(book_id)
+                except Exception:
+                    continue
+                if not chapters:
+                    continue
+                status_path = save_dir / folder / f"chapter_status_{book_id}.json"
+                status = load_download_status(status_path)
+                downloaded = status.get("downloaded", {})
+                new_count = max(len(chapters) - len(downloaded), 0)
+                desc = f"《{book_name}》({book_id}) — 新章节: {new_count}"
+                if new_count > 0:
+                    update_choices.append((book_id, desc))
+                else:
+                    no_update_choices.append((book_id, desc))
+            return update_choices, no_update_choices
+
+        def _after(result):
+            update_choices, no_update_choices = result
+            menu = UpdateMenu(self)
+            menu._update_choices = update_choices
+            menu._no_update_choices = no_update_choices
+            menu.rebuild_from_lists()
+            self.main_placeholder.original_widget = menu
+
+        self.run_with_loading(_task, _after, "正在扫描本地小说并获取更新…")
 
     def show_about(self):
         self.main_placeholder.original_widget = AboutPage(self)
@@ -1107,19 +1106,20 @@ class TNDApp:
 
         # ③ 作为书名搜索
         else:
-            try:
-                # 调用改后的 search_book，得到一个列表
-                results = self.network.search_book(text)
-            except Exception:
-                results = []
+            # 书名搜索较慢，使用加载遮罩 + 后台线程
+            def _task():
+                try:
+                    return self.network.search_book(text)
+                except Exception:
+                    return []
 
-            # 如果列表为空
-            if not results:
-                self.show_popup("未搜索到对应书籍 / API 异常")
-                return
+            def _after(results):
+                if not results:
+                    self.show_popup("未搜索到对应书籍 / API 异常")
+                    return
+                self.main_placeholder.original_widget = SearchMenu(self, results)
 
-            # 让用户在新页面里选择一本
-            self.main_placeholder.original_widget = SearchMenu(self, results)
+            self.run_with_loading(_task, _after, "正在搜索，请稍候…")
             return
 
         # 如果前面已经拿到 book_id，直接启动下载
@@ -1137,43 +1137,119 @@ class TNDApp:
         logger = self.logger
         cfg = self.config
         network = self.network
+        # 获取书籍信息使用加载遮罩
+        def _task():
+            return network.get_book_info(book_id)
 
-        # 获取书籍信息（保持不变）
-        book_info = network.get_book_info(book_id)
-        if book_info[0] is None:
-            self.show_popup("获取书籍信息失败")
-            return
-        book_name, author, description, tags, chapter_count = book_info
-
-        # 显示书籍信息 + 按钮 (不变，只改变开始下载的回调)
-        info_lines = [
-            f"书名: {book_name}",
-            f"作者: {author}",
-            f"是否完结: {tags[0]} | 共 {chapter_count} 章",
-            f"标签: {' | '.join(tags[1:])}",
-            f"简介: {description[:50]}…",
-            "\n请选择：",
-        ]
-        txt = urwid.Text("\n".join(info_lines))
-        preview_btn = menu_button(
-            "预览封面", lambda btn: self.show_cover_preview(book_name)
-        )
-        ok_btn = menu_button("开始下载", lambda btn: on_confirm())
-        cancel_btn = menu_button("返回主菜单", lambda btn: self.show_main())
-
-        pile = urwid.Pile(
-            [txt, urwid.Divider(), ok_btn, urwid.Divider(), preview_btn, cancel_btn]
-        )
-        self.main_placeholder.original_widget = urwid.LineBox(urwid.Filler(pile, "top"))
-
-        def on_confirm():
-            manager = BookManager(
-                save_path, book_id, book_name, author, tags, description
+        def _after(book_info):
+            if book_info[0] is None:
+                self.show_popup("获取书籍信息失败")
+                return
+            book_name, author, description, tags, chapter_count = book_info
+            info_lines = [
+                f"书名: {book_name}",
+                f"作者: {author}",
+                f"是否完结: {tags[0]} | 共 {chapter_count} 章",
+                f"标签: {' | '.join(tags[1:])}",
+                f"简介: {description[:50]}…",
+                "\n请选择：",
+            ]
+            txt = urwid.Text("\n".join(info_lines))
+            preview_btn = menu_button(
+                "预览封面", lambda btn: self.show_cover_preview(book_name)
             )
-            downloader = ChapterDownloader(book_id, network)
-            chapter_list = network.fetch_chapter_list(book_id)
-            # 进入“检查历史/选择范围”的流程
-            self.show_pre_download_page(manager, chapter_list)
+
+            def on_confirm(btn):
+                manager = BookManager(
+                    save_path, book_id, book_name, author, tags, description
+                )
+                downloader = ChapterDownloader(book_id, network)
+
+                # 获取章节列表也加加载遮罩
+                def _task2():
+                    try:
+                        return network.fetch_chapter_list(book_id)
+                    except Exception:
+                        return []
+
+                def _after2(chapter_list):
+                    if not chapter_list:
+                        self.show_popup("获取章节列表失败")
+                        return
+                    self.show_pre_download_page(manager, chapter_list)
+
+                self.run_with_loading(_task2, _after2, "正在获取章节列表…")
+
+            ok_btn = menu_button("开始下载", on_confirm)
+            cancel_btn = menu_button("返回主菜单", lambda btn: self.show_main())
+            pile = urwid.Pile([
+                txt,
+                urwid.Divider(),
+                ok_btn,
+                urwid.Divider(),
+                preview_btn,
+                cancel_btn,
+            ])
+            self.main_placeholder.original_widget = urwid.LineBox(urwid.Filler(pile, "top"))
+
+        self.run_with_loading(_task, _after, "正在获取书籍信息…")
+        return
+
+    # ---------------- Loading / Spinner -----------------
+    def show_loading(self, message: str):
+        if self._loading_active:
+            return
+        self._loading_active = True
+        self._loading_prev_widget = self.main_placeholder.original_widget
+        self._spinner_widget = urwid.Text(message + " |")
+        box = urwid.LineBox(urwid.Filler(self._spinner_widget, valign="middle"))
+        overlay = urwid.Overlay(
+            box,
+            self._loading_prev_widget,
+            align="center",
+            width=("relative", 50),
+            valign="middle",
+            height=("relative", 30),
+        )
+        self.main_placeholder.original_widget = overlay
+        self._spinner_index = 0
+        self._spinner_alarm = self.loop.set_alarm_in(0.15, self._spinner_tick)
+        self.loop.draw_screen()
+
+    def _spinner_tick(self, loop, user_data):
+        if not self._loading_active or not self._spinner_widget:
+            return
+        self._spinner_index = (self._spinner_index + 1) % len(self._spinner_frames)
+        base = self._spinner_widget.text.rsplit(" ", 1)[0]
+        self._spinner_widget.set_text(f"{base} {self._spinner_frames[self._spinner_index]}")
+        self._spinner_alarm = self.loop.set_alarm_in(0.15, self._spinner_tick)
+
+    def hide_loading(self):
+        if not self._loading_active:
+            return
+        self._loading_active = False
+        self.main_placeholder.original_widget = self._loading_prev_widget
+        self._loading_prev_widget = None
+        self._spinner_widget = None
+        self._spinner_alarm = None
+        self.loop.draw_screen()
+
+    def run_with_loading(self, task_fn, after_fn, message: str):
+        import threading
+        if self._loading_active:
+            return
+        self.show_loading(message)
+
+        def _runner():
+            result = task_fn()
+            def _finish(loop, user_data):
+                self.hide_loading()
+                try:
+                    after_fn(result)
+                except Exception:
+                    self.show_popup("操作失败 / 异常")
+            self.loop.set_alarm_in(0, _finish)
+        threading.Thread(target=_runner, daemon=True).start()
 
     def run_terminal_download(
         self, manager: BookManager, downloader: ChapterDownloader, chapters: list[dict]

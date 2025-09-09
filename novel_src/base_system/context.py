@@ -86,6 +86,13 @@ class Config(BaseConfig):
     keep_heic_original: bool = Field(
         default=False, description="为 True 时即便无法转码也保留 .heic/.heif 原文件（阅读器可能不显示）"
     )
+    # 自定义章节模板
+    enable_chapter_template: bool = Field(
+        default=False, description="是否启用自定义章节模板"
+    )
+    chapter_template_file: str = Field(
+        default="chapter_template.txt", description="章节模板文件路径"
+    )
 
     @property
     def default_save_dir(self) -> Path:

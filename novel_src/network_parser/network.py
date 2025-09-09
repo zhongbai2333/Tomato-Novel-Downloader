@@ -14,6 +14,7 @@ from fake_useragent import UserAgent
 from ..base_system.context import GlobalContext
 from ..book_parser.parser import ContentParser
 from ..offical_tools.downloader import search_api
+from fanqie_mod import get_iid as _fanqie_get_iid
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
@@ -271,6 +272,7 @@ class NetworkClient:
         """
         aid = 1967
         url = f"https://api5-normal-sinfonlinea.fqnovel.com/novel/commentapi/idea/list/{chapter_id}/v1"
+        iid = _fanqie_get_iid()
         body = {"item_version": str(item_version)}
         # 带重试（解决偶发 5xx/502）
         retries = max(1, int(getattr(self.config, "max_retries", 3)))
@@ -279,7 +281,7 @@ class NetworkClient:
             try:
                 resp = self.session.post(
                     url,
-                    params={"aid": aid},
+                    params={"aid": aid, **({"iid": iid} if iid else {})},
                     json=body,
                     headers=self.get_headers(),
                     timeout=self.config.request_timeout,
@@ -334,6 +336,7 @@ class NetworkClient:
         """
         aid = 1967
         url = f"https://api5-normal-sinfonlinea.fqnovel.com/novel/commentapi/comment/list/{chapter_id}/v1"
+        iid = _fanqie_get_iid()
         body = {
             "business_param": {
                 "book_id": str(book_id),
@@ -342,6 +345,7 @@ class NetworkClient:
             },
             "comment_source": 2,
             "comment_type": 1,
+            "count": int(limit),
             "group_type": 15,
             "sort": int(sort),
         }
@@ -353,7 +357,7 @@ class NetworkClient:
             try:
                 resp = self.session.post(
                     url,
-                    params={"aid": aid},
+                    params={"aid": aid, **({"iid": iid} if iid else {})},
                     json=body,
                     headers=self.get_headers(),
                     timeout=self.config.request_timeout,

@@ -1,0 +1,4 @@
+{title}
+
+{{for p in paragraphs}}    {p}
+{{end}}

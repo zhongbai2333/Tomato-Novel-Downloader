@@ -66,28 +66,82 @@ class BookManager(object):
 
     def save_chapter(self, chapter_id: str, title: str, content: str):
         """保存章节内容，支持散装保存（EPUB 下生成完整 XHTML）"""
-        self.downloaded[chapter_id] = [title, content]
+        # 在写入缓存前可应用自定义章节模板
+        processed_content = content
+        try:
+            if getattr(self.config, 'enable_chapter_template', False):
+                tpl_path = getattr(self.config, 'chapter_template_file', 'chapter_template.txt')
+                tpl_file = Path(tpl_path)
+                # 支持相对路径（相对于运行目录 / 配置状态目录）
+                if not tpl_file.exists():
+                    alt = self.status_folder / tpl_path
+                    if alt.exists():
+                        tpl_file = alt
+                if tpl_file.exists():
+                    raw_tpl = tpl_file.read_text(encoding='utf-8', errors='ignore')
+                    processed_content = self._render_chapter_template(raw_tpl, title, content)
+                else:
+                    self.logger.warning(f"章节模板未找到: {tpl_path}")
+        except Exception as e:
+            self.logger.debug(f"章节模板处理失败: {e}")
+
+        # ---- 模板输出后处理 ----
+        try:
+            if getattr(self.config, 'enable_chapter_template', False):
+                # 1) EPUB（非散装）场景下 EpubGenerator 通常会再包一层 <h1>标题，避免首行重复标题
+                if (not self.config.bulk_files) and self.config.novel_format == 'epub':
+                    lines = [l for l in processed_content.split('\n')]
+                    # 跳过前导空行找第一行实际内容
+                    first_idx = 0
+                    while first_idx < len(lines) and lines[first_idx].strip() == '':
+                        first_idx += 1
+                    if first_idx < len(lines) and lines[first_idx].strip() == title.strip():
+                        lines.pop(first_idx)
+                        processed_content = '\n'.join(lines).lstrip('\n')
+                # 2) 将用户以四个空格期望的“中文首行缩进”转换为全角空格（或 &emsp;&emsp;）避免 HTML 渲染吞掉空格
+                # 两个全角空格“　　”在大多数阅读器中更稳定。
+                processed_content = re.sub(r'(?m)^( {4})(\S)', r'　　\2', processed_content)
+                # 3) 若需要直接保留模板中写下的前导空格（包含循环里写的    {p} 形式），自动转为 &nbsp; 保证 EPUB 阅读器不会折叠
+                if self.config.novel_format == 'epub':
+                    # 仅转换每一行行首连续空格，避免破坏行内普通空格。
+                    def _lead_space_to_nbsp(m):
+                        return '&nbsp;' * len(m.group(1))
+                    processed_content = re.sub(r'(?m)^( +)', _lead_space_to_nbsp, processed_content)
+        except Exception:
+            pass
+
+        self.downloaded[chapter_id] = [title, processed_content]
         if self.config.bulk_files:
             bulk_dir = self.save_dir / self.book_name
             bulk_dir.mkdir(parents=True, exist_ok=True)
 
             if self.config.novel_format == "epub":
                 suffix = ".xhtml"
-                # 简易的 XHTML 模板，生成时可根据需要补充 meta/css 等
+                # 使用 processed_content 而不是原始 content，且不再强制加入标题（让模板自行控制）
                 xhtml_template = f'''<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
   <title>{title}</title>
+  <meta charset="utf-8" />
+  <style>p{{margin:0 0 0.8em 0;}}</style>
 </head>
 <body>
-  {content}
+{processed_content}
 </body>
 </html>'''
                 file_content = xhtml_template
             else:
                 suffix = ".txt"
-                file_content = f"{title}\n\n{content}"
+                # TXT 散装文件若模板已含标题，避免重复：检测首行（忽略空行）是否已是标题
+                _lines = processed_content.split('\n')
+                _i = 0
+                while _i < len(_lines) and _lines[_i].strip() == '':
+                    _i += 1
+                if _i < len(_lines) and _lines[_i].strip() == title.strip():
+                    file_content = processed_content
+                else:
+                    file_content = f"{title}\n\n{processed_content}"
 
             # 把 title 中的非法文件名字符替换掉
             safe_title = "".join(c for c in title if c.isalnum() or c in "-_ ")
@@ -102,6 +156,71 @@ class BookManager(object):
             self.save_download_status()
 
         self.logger.debug(f"章节 {chapter_id} 缓存成功")
+
+    def _render_chapter_template(self, template: str, title: str, raw_content: str) -> str:
+        """渲染自定义章节模板。
+        支持占位符:
+          {title} 章节标题
+          {content} 原始内容（不做额外缩进）
+          {text} 整体内容前可统一加缩进（即保持原换行）
+          {paragraphs} 按段落处理拼接（段落分隔: 空行或换行）
+        额外支持一个简易循环：
+          {{for p in paragraphs}}...{p}...{{end}}
+        在循环中使用 {p} 占位符代表单个段落文本（可含前缀缩进）
+        特殊缩进规则：
+          模板中出现 "{text}" 前若有 4 个或更多空格紧贴，可视为缩进指令，对整段应用同样前缀。
+          模板中出现 "{paragraph}" 类似；不过建议在循环语法中使用。
+        """
+        try:
+            # 统一行结束
+            raw = raw_content.replace('\r\n', '\n').replace('\r', '\n')
+            # 切分段落（简单规则：按单个换行拆，保留空行）
+            paragraphs = [p for p in raw.split('\n')]
+            # 基础上下文
+            ctx = {
+                'title': title,
+                'content': raw,
+            }
+            # 处理缩进：若模板中直接使用 {text}，不改；
+            # 若用户写成 "    {text}" 则把前导空格作为整块缩进
+            def apply_block_indent(placeholder: str, block: str) -> str:
+                pattern = re.compile(rf'^(?P<indent>[ \t]+)\{{{placeholder}\}}$', re.MULTILINE)
+                def repl(m):
+                    ind = m.group('indent')
+                    new_lines = [ind + ln if ln.strip() else ln for ln in block.split('\n')]
+                    return '\n'.join(new_lines)
+                return re.sub(pattern, repl, template)
+
+            rendered = template
+            # 简易循环实现
+            loop_pattern = re.compile(r'\{\{for p in paragraphs\}\}(.*?)\{\{end\}\}', re.DOTALL)
+            def loop_repl(m):
+                body = m.group(1)
+                out_parts = []
+                for para in paragraphs:
+                    # 处理单段缩进： 若 body 中出现独立行 "    {paragraph}" -> 应用缩进到该段
+                    b = body
+                    # {paragraph} 直接替换为 para（保持原样）
+                    b = b.replace('{paragraph}', para)
+                    # {p} 占位符
+                    b = b.replace('{p}', para)
+                    out_parts.append(b)
+                return ''.join(out_parts)
+            rendered = re.sub(loop_pattern, loop_repl, rendered)
+
+            # paragraphs 拼接（保持原行结构）
+            rendered = rendered.replace('{paragraphs}', '\n'.join(paragraphs))
+            # text 语义：整体内容，若使用 "    {text}" 应套缩进
+            if '{text}' in rendered:
+                rendered = rendered.replace('{text}', raw)
+            # content 保留原始
+            rendered = rendered.replace('{content}', raw)
+            # title
+            rendered = rendered.replace('{title}', title)
+            return rendered
+        except Exception as e:
+            self.logger.debug(f"章节模板渲染异常: {e}")
+            return raw_content
 
     def save_segment_comments(self, chapter_id: str, payload: dict):
         """

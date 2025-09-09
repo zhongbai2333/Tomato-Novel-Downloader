@@ -120,13 +120,12 @@ class ChapterDownloader:
 
         results = {"success": 0, "failed": 0, "canceled": 0}
         # 段评并发执行器与任务列表（仅在启用段评时使用）
-        comment_executor: Optional[ThreadPoolExecutor] = None
+        # 章节级段评并发执行器（控制并行处理多少章节的段评）
+        chapter_comment_executor: Optional[ThreadPoolExecutor] = None
         comment_futures = []
         if getattr(self.config, "enable_segment_comments", False):
-            # 全局并发：按配置控制并发抓取“每章段评”；
-            # 章节内的“每段详情抓取”仍由 _maybe_fetch_segment_comments 内部控制。
-            cw = max(1, int(getattr(self.config, "segment_comments_workers", 4)))
-            comment_executor = ThreadPoolExecutor(max_workers=cw)
+            chapter_cw = max(1, int(getattr(self.config, "segment_comments_chapter_workers", 4)))
+            chapter_comment_executor = ThreadPoolExecutor(max_workers=chapter_cw)
 
         # ============ 准备要下载的章节列表 & 分组 ============
 
@@ -203,11 +202,26 @@ class ChapterDownloader:
         # ============ 并发执行 ============
 
         # 预先创建进度条，避免首批极快完成导致未创建无法更新
-        cols, _ = shutil.get_terminal_size(fallback=(80, 24))
-        # 现在只剩 2 条进度条，重新分配宽度（原逻辑为 //3 导致变短）
-        bar_count = 2
-        bar_width = max(30, (cols - 4) // bar_count)
-        common_kwargs = dict(ncols=bar_width, mininterval=0.25, dynamic_ncols=False, leave=True)
+        # 使用 dynamic_ncols 让 tqdm 自动填满整行；自定义 bar_format 统一显示
+        # 重新计算终端宽度，确保 tqdm 占满（Windows 下 tqdm 对 dynamic_ncols 偶尔失效）
+        try:
+            cols, _ = shutil.get_terminal_size(fallback=(120, 30))
+        except Exception:
+            cols = 120
+        # 预留尾部信息长度，大致估算
+        info_tail = 32  # ETA/计数等
+        # desc + 百分比固定区（含空格）估算 20
+        base_fixed = 20 + info_tail
+        # bar 宽度：最少 10
+        bar_total = max(10, cols - base_fixed)
+        bar_fmt = f"[{{elapsed}}] {{desc}} {{percentage:3.0f}}%|{{bar:{bar_total}}}| {{n_fmt}}/{{total_fmt}} ETA:{{remaining}}"
+        common_kwargs = dict(
+            mininterval=0.25,
+            dynamic_ncols=False,  # 我们手工控制 ncols
+            leave=True,
+            ncols=cols,
+            bar_format=bar_fmt,
+        )
         if self.config.use_official_api:
             download_bar = tqdm(total=len(groups), desc="章节下载(批)", position=0, **common_kwargs)
             self._batch_progress_bar = download_bar
@@ -252,8 +266,8 @@ class ChapterDownloader:
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
-                                if comment_executor:
-                                    comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
+                                if chapter_comment_executor:
+                                    comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
                             _save_bar_incr()
                         # 批进度 +1 在批量函数已处理
@@ -266,8 +280,8 @@ class ChapterDownloader:
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
-                                if comment_executor:
-                                    comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
+                                if chapter_comment_executor:
+                                    comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
                             _save_bar_incr()
                         continue
@@ -279,8 +293,8 @@ class ChapterDownloader:
                             results["failed"] += 1
                         else:
                             book_manager.save_chapter(cid, title, content)
-                            if comment_executor:
-                                comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
+                            if chapter_comment_executor:
+                                comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                             results["success"] += 1
                         _save_bar_incr()
                         download_bar.update(1)
@@ -298,6 +312,15 @@ class ChapterDownloader:
         if pending_save_updates:
             save_bar.update(pending_save_updates)
             pending_save_updates = 0
+        # 等待段评章节级并发任务完成
+        if comment_futures:
+            for cf in as_completed(comment_futures):
+                try:
+                    _ = cf.result()
+                except Exception:
+                    pass
+        if chapter_comment_executor:
+            chapter_comment_executor.shutdown(wait=True)
         # 保存状态 & 后处理（with 结束后）
         canceled = tasks_count - results["success"] - results["failed"]
         results["canceled"] = max(0, canceled)
