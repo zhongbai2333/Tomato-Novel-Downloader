@@ -634,6 +634,7 @@ class BookManager(object):
         try:
             # 若配置不允许下载评论图片，仅预取头像
             allow_images = bool(getattr(self.config, "download_comment_images", True))
+            allow_avatars = bool(getattr(self.config, "download_comment_avatars", True))
             paras = seg_data.get("paras") if isinstance(seg_data, dict) else None
             if not isinstance(paras, dict):
                 return
@@ -652,10 +653,11 @@ class BookManager(object):
                             urls.append(u)
                             img_cnt += 1
                     # 头像
-                    av = self._extract_avatar_url(item)
-                    if av:
-                        urls.append(av)
-                        avatar_cnt += 1
+                    if allow_avatars:
+                        av = self._extract_avatar_url(item)
+                        if av:
+                            urls.append(av)
+                            avatar_cnt += 1
             # 去重
             unique = []
             seen = set()
@@ -667,7 +669,7 @@ class BookManager(object):
                 # 提示没有可下载媒体，便于用户判断为何进度条不动
                 try:
                     self.logger.debug(
-                        f"[媒体] 章节 {seg_data.get('chapter_id')} 无可下载资源 (图片={img_cnt}, 头像={avatar_cnt}, allow_images={allow_images})"
+                        f"[媒体] 章节 {seg_data.get('chapter_id')} 无可下载资源 (图片={img_cnt}, 头像={avatar_cnt}, allow_images={allow_images}, allow_avatars={allow_avatars})"
                     )
                 except Exception:
                     pass
@@ -688,12 +690,20 @@ class BookManager(object):
                 pass
             with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
                 futures = [ex.submit(self._download_comment_image, u) for u in unique]
+                completed = 0
                 for f in as_completed(futures):
                     try:
-                        _ = f.result()
+                        res = f.result()
                     except Exception:
-                        pass
-                    # 静默，不再更新 UI
+                        res = None
+                    completed += 1
+                try:
+                    self.logger.info(
+                        f"[媒体] 章节 {seg_data.get('chapter_id')} 段评媒体下载完成: 计划={len(unique)} 实际完成={completed} (图片={img_cnt}, 头像={avatar_cnt}, allow_images={allow_images}, allow_avatars={allow_avatars})"
+                    )
+                except Exception:
+                    pass
+                # 静默，不再更新 UI
         except Exception:
             pass
 

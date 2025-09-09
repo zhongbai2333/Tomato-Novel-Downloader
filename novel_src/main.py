@@ -272,6 +272,7 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "段评并发线程数": ("segment_comments_workers", int),
         # 段评媒体/图片
         "是否下载评论区图片": ("download_comment_images", bool),
+        "是否下载评论区头像": ("download_comment_avatars", bool),
         "评论图片下载线程数": ("media_download_workers", int),
         "图片域名黑名单(逗号分隔)": ("blocked_media_domains", list),
         # 图片转码/格式控制
@@ -280,9 +281,9 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "JPEG质量(0-100)": ("jpeg_quality", int),
         "HEIC转JPEG": ("convert_heic_to_jpeg", bool),
         "保留原始HEIC文件": ("keep_heic_original", bool),
-    # 章节模板
-    "启用自定义章节模板": ("enable_chapter_template", bool),
-    "章节模板文件路径": ("chapter_template_file", str),
+        # 章节模板
+        "启用自定义章节模板": ("enable_chapter_template", bool),
+        "章节模板文件路径": ("chapter_template_file", str),
     }
 
     def __init__(self, app: "TNDApp"):

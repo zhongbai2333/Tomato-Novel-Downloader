@@ -55,6 +55,7 @@ def show_config_menu(config: Config):
         {"name": "段评并发线程数", "field": "segment_comments_workers", "type": int},
         # 段评媒体
         {"name": "是否下载评论区图片", "field": "download_comment_images", "type": bool},
+        {"name": "是否下载评论区头像", "field": "download_comment_avatars", "type": bool},
         {"name": "评论图片下载线程数", "field": "media_download_workers", "type": int},
         {"name": "图片域名黑名单(逗号分隔)", "field": "blocked_media_domains", "type": list},
         # 图片处理
@@ -63,9 +64,9 @@ def show_config_menu(config: Config):
         {"name": "JPEG质量(0-100)", "field": "jpeg_quality", "type": int},
         {"name": "HEIC转JPEG", "field": "convert_heic_to_jpeg", "type": bool},
         {"name": "保留原始HEIC文件", "field": "keep_heic_original", "type": bool},
-    # 章节模板
-    {"name": "启用自定义章节模板", "field": "enable_chapter_template", "type": bool},
-    {"name": "章节模板文件路径", "field": "chapter_template_file", "type": str},
+        # 章节模板
+        {"name": "启用自定义章节模板", "field": "enable_chapter_template", "type": bool},
+        {"name": "章节模板文件路径", "field": "chapter_template_file", "type": str},
         # 旧界面切换
         {"name": "是否使用老版本命令行界面(需重启)", "field": "old_cli", "type": bool},
     ]

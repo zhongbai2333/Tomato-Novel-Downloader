@@ -61,6 +61,9 @@ class Config(BaseConfig):
     download_comment_images: bool = Field(
         default=True, description="是否下载评论区图片（不含头像）"
     )
+    download_comment_avatars: bool = Field(
+        default=True, description="是否下载评论区头像"
+    )
     media_download_workers: int = Field(
         default=8, description="评论图片/头像下载并发线程数"
     )
