@@ -29,9 +29,13 @@ from .old_main import main as old_main
 
 def list_subdirs(path: Path | str) -> List[str]:
     """返回指定目录下所有一级子文件夹的名称列表（不含文件）。"""
-    return [
-        name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))
-    ]
+    try:
+        return [
+            name for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))
+        ]
+    except FileNotFoundError:
+        # 目录不存在视为无子目录
+        return []
 
 
 def load_download_status(status_path: Path) -> dict:
@@ -874,6 +878,9 @@ class TNDApp:
             cfg = self.config
             save_dir = Path(cfg.default_save_dir)
             subdirs = list_subdirs(save_dir)
+            # 若目录不存在或为空，快速返回空列表，避免后续构建空界面
+            if not subdirs:
+                return [], []
             update_choices: List[Tuple[str, str]] = []
             no_update_choices: List[Tuple[str, str]] = []
             for folder in subdirs:
@@ -901,6 +908,10 @@ class TNDApp:
 
         def _after(result):
             update_choices, no_update_choices = result
+            # 若完全无小说，保持当前界面并直接提示；避免出现黑底空界面
+            if not update_choices and not no_update_choices:
+                self.show_popup("未发现本地小说：保存目录为空或不存在。请先下载小说后再使用更新功能。")
+                return
             menu = UpdateMenu(self)
             menu._update_choices = update_choices
             menu._no_update_choices = no_update_choices
