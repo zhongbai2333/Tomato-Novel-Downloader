@@ -14,6 +14,13 @@ from ..base_system.context import GlobalContext
 from ..base_system.storage_system import FileCleaner
 from .epub_generator import EpubGenerator
 
+# 默认章节模板内容（当启用模板功能但指定文件不存在时自动生成）
+DEFAULT_CHAPTER_TEMPLATE = (
+    "{title}\n\n"  # 标题占位符
+    "{{for p in paragraphs}}    {p}\n"  # 每段前 4 空格，后续逻辑会替换为全角或 &nbsp;
+    "{{end}}"
+)
+
 class BookManager(object):
     """书籍存储控制器"""
     def __init__(self, save_path: str, book_id: str, book_name: str, author: str, tags: list, description: str):
@@ -81,7 +88,14 @@ class BookManager(object):
                     raw_tpl = tpl_file.read_text(encoding='utf-8', errors='ignore')
                     processed_content = self._render_chapter_template(raw_tpl, title, content)
                 else:
-                    self.logger.warning(f"章节模板未找到: {tpl_path}")
+                    # 模板不存在：尝试自动生成默认模板
+                    try:
+                        tpl_file.parent.mkdir(parents=True, exist_ok=True)
+                        tpl_file.write_text(DEFAULT_CHAPTER_TEMPLATE, encoding='utf-8')
+                        self.logger.info(f"章节模板未找到，已自动生成默认模板: {tpl_file}")
+                        processed_content = self._render_chapter_template(DEFAULT_CHAPTER_TEMPLATE, title, content)
+                    except Exception as ge:
+                        self.logger.warning(f"章节模板未找到且自动生成失败: {tpl_path} ({ge})")
         except Exception as e:
             self.logger.debug(f"章节模板处理失败: {e}")
 
