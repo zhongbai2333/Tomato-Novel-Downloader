@@ -76,6 +76,9 @@ class ChapterDownloader:
             config=self.config,
             network_status=self.network._api_status,
         )
+        # 批量下载进度条引用（官方/第三方批量模式使用）
+        self._batch_progress_bar = None
+        self._batch_bar_lock = threading.Lock()
 
     def _handle_signal(self, signum, frame):
         # 两段式退出：第一次优雅退出，第二次强制退出
@@ -199,16 +202,39 @@ class ChapterDownloader:
 
         # ============ 并发执行 ============
 
+        # 预先创建进度条，避免首批极快完成导致未创建无法更新
+        cols, _ = shutil.get_terminal_size(fallback=(80, 24))
+        # 现在只剩 2 条进度条，重新分配宽度（原逻辑为 //3 导致变短）
+        bar_count = 2
+        bar_width = max(30, (cols - 4) // bar_count)
+        common_kwargs = dict(ncols=bar_width, mininterval=0.25, dynamic_ncols=False, leave=True)
+        if self.config.use_official_api:
+            download_bar = tqdm(total=len(groups), desc="章节下载(批)", position=0, **common_kwargs)
+            self._batch_progress_bar = download_bar
+        elif self.config.use_helloplhm_qwq_api:
+            download_bar = tqdm(total=len(id_groups), desc="章节下载(批)", position=0, **common_kwargs)
+            self._batch_progress_bar = download_bar
+        else:
+            download_bar = tqdm(total=tasks_count, desc="章节下载", position=0, **common_kwargs)
+            self._batch_progress_bar = None
+        save_bar = tqdm(total=tasks_count, desc="正文/段评保存", position=1, **common_kwargs)
+        # 缓冲保存进度更新，减少闪烁
+        pending_save_updates = 0
+        save_update_batch = 1 if tasks_count <= 80 else 3
+
+        def _save_bar_incr():
+            nonlocal pending_save_updates
+            pending_save_updates += 1
+            if pending_save_updates >= save_update_batch:
+                save_bar.update(pending_save_updates)
+                pending_save_updates = 0
+        # 已移除段评图片进度条，后台静默下载
+        book_manager.media_progress = None
+        self.log_system.enable_tqdm_handler(download_bar)
+
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             futures = get_submit(exe)
-            cols, _ = shutil.get_terminal_size(fallback=(80, 24))
-            # 三个进度条：1 下载任务完成数 2 章节保存/段评抓取数 3 段评图片
-            download_bar = tqdm(total=len(futures), desc="章节下载", ncols=cols//3, position=0, leave=True)
-            save_bar = tqdm(total=tasks_count, desc="正文/段评保存", ncols=cols//3, position=1, leave=True)
-            media_bar = tqdm(total=0, desc="段评图片", ncols=cols//3, position=2, leave=True)
-            # 注入 media_bar 到 book_manager
-            book_manager.media_progress = media_bar
-            self.log_system.enable_tqdm_handler(download_bar)
+            # 批量模式不再提前章节级推进，由完成后 +1
 
             for future in as_completed(futures):
                 if self._stop_event.is_set():
@@ -216,7 +242,6 @@ class ChapterDownloader:
                         if not f.done():
                             f.cancel()
                     break
-
                 task = futures[future]
                 try:
                     if self.config.use_official_api:
@@ -230,7 +255,9 @@ class ChapterDownloader:
                                 if comment_executor:
                                     comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
-                            save_bar.update(1)
+                            _save_bar_incr()
+                        # 批进度 +1 在批量函数已处理
+                        continue
                     elif self.config.use_helloplhm_qwq_api:
                         batch_out: Dict[str, Tuple[str, str]] = future.result()
                         for cid, (content, title) in batch_out.items():
@@ -242,7 +269,8 @@ class ChapterDownloader:
                                 if comment_executor:
                                     comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
-                            save_bar.update(1)
+                            _save_bar_incr()
+                        continue
                     else:
                         content, title = future.result()
                         cid = task["id"]
@@ -254,43 +282,25 @@ class ChapterDownloader:
                             if comment_executor:
                                 comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                             results["success"] += 1
-                        save_bar.update(1)
+                        _save_bar_incr()
+                        download_bar.update(1)
                 except KeyboardInterrupt:
                     book_manager.save_download_status()
                     raise
                 except Exception as e:
                     self.logger.error(f"[异常] 处理任务时出错：{e}")
-                    results["failed"] += 1
-                download_bar.update(1)
-
-            # 等待段评 futures 完成并更新保存进度（段评抓取不改变 success/failed 统计章节数）
-            if comment_executor:
-                for cf in as_completed(comment_futures):
-                    try:
-                        cf.result()
-                    except Exception:
-                        pass
-
-            # 刷新媒体条（若未预取任何资源）
-            media_bar.refresh()
-            download_bar.close(); save_bar.close(); media_bar.close()
-
-        # ============ 统计取消数 ============
+                    if not (self.config.use_official_api or self.config.use_helloplhm_qwq_api):
+                        try:
+                            download_bar.update(1)
+                        except Exception:
+                            pass
+        # 刷新剩余缓冲
+        if pending_save_updates:
+            save_bar.update(pending_save_updates)
+            pending_save_updates = 0
+        # 保存状态 & 后处理（with 结束后）
         canceled = tasks_count - results["success"] - results["failed"]
         results["canceled"] = max(0, canceled)
-
-        # 等待所有段评任务完成（如已启用），以便后续 EPUB 集成时可用
-        if comment_executor:
-            try:
-                for fut in as_completed(comment_futures):
-                    try:
-                        fut.result()
-                    except Exception:
-                        pass
-            finally:
-                comment_executor.shutdown(wait=True)
-
-        # 保存状态 & 后处理
         book_manager.save_download_status()
         book_manager.finalize_spawn(chapters, canceled + results["failed"])
 
@@ -467,6 +477,7 @@ class ChapterDownloader:
         joined = "-".join(id_list)[:4]
         req_id = f"{joined}-{random.randint(1000,9999)}"
         self.logger.debug(f"[{req_id}] 批量下载 {len(id_list)} 章")
+    # 不在开始时更新进度（避免与完成语义冲突）
 
         # 随机延迟（官方接口最快 500ms，强制下限 500）
         min_wait = max(500, self.config.min_wait_time)
@@ -488,6 +499,13 @@ class ChapterDownloader:
 
         elapsed = time.time() - start
         self.logger.info(f"[{req_id}] 批量完成 ({elapsed:.2f}s)")
+        # 批量完成后 +1（与下载(批) 进度条联动）
+        try:
+            if self._batch_progress_bar is not None:
+                with self._batch_bar_lock:
+                    self._batch_progress_bar.update(1)
+        except Exception:
+            pass
         return out
 
     # --- 新增 helloplhm_qwq 批量下载方法 ---
@@ -503,6 +521,7 @@ class ChapterDownloader:
         joined = "-".join(id_list)[:4]
         req_id = f"{joined}-{random.randint(1000,9999)}"
         self.logger.debug(f"[{req_id}] helloplhm_qwq 批量下载 {len(id_list)} 章")
+    # 开始不更新；完成后再 +1
 
         # 随机延迟以分散压力
         dt = random.randint(
@@ -529,9 +548,21 @@ class ChapterDownloader:
             self.logger.info(
                 f"[{req_id}] helloplhm_qwq 批量下载完成 ({len(id_list)} 章)"
             )
+            try:
+                if self._batch_progress_bar is not None:
+                    with self._batch_bar_lock:
+                        self._batch_progress_bar.update(1)
+            except Exception:
+                pass
             return out
 
         except Exception as e:
             # 如果整个批次调用出错，则把这一批次的 ID 全部标记为 Error
             self.logger.error(f"[{req_id}] helloplhm_qwq 批量下载异常：{e}")
+            try:
+                if self._batch_progress_bar is not None:
+                    with self._batch_bar_lock:
+                        self._batch_progress_bar.update(1)
+            except Exception:
+                pass
             return {cid: ("Error", cid) for cid in id_list}

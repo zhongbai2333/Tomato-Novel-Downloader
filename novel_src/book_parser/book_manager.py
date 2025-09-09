@@ -41,10 +41,7 @@ class BookManager(object):
         self._load_download_status()
         # 标记：段评媒体是否已在下载阶段预取，避免 finalize 再次处理
         self._media_prefetched = False
-        # 由下载器注入的 tqdm 进度条对象（段评图片）
-        self.media_progress = None
-        # 段评媒体进度条的并发锁（total/update 安全）
-        self._media_progress_lock = threading.Lock()
+    # 已移除段评图片进度条显示（静默下载）
         # 段评媒体预取执行器（在保存段评时并发启动）
         try:
             from concurrent.futures import ThreadPoolExecutor as _TP
@@ -118,6 +115,23 @@ class BookManager(object):
             with out_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             self.logger.debug(f"段评已保存: {out_path}")
+            # 用户可见提示：告知段评保存完成（用于进度条外的心跳感知）
+            try:
+                paras = payload.get("paras") if isinstance(payload, dict) else None
+                seg_cnt = 0
+                cmts_total = 0
+                if isinstance(paras, dict):
+                    for _k, _v in paras.items():
+                        try:
+                            c = int((_v or {}).get("count", 0))
+                        except Exception:
+                            c = 0
+                        if c > 0:
+                            seg_cnt += 1
+                            cmts_total += c
+                self.logger.info(f"[段评] 章节 {chapter_id} 已保存：含 {seg_cnt} 段有评论，共 {cmts_total} 条（前 {getattr(self.config,'segment_comments_top_n',10)} 条已写入展示）")
+            except Exception:
+                pass
             # 同步启动段评媒体（图片+头像）预取：与保存同时进行
             if getattr(self.config, "enable_segment_comments", False):
                 try:
@@ -491,6 +505,8 @@ class BookManager(object):
             if not isinstance(paras, dict):
                 return
             urls = []
+            img_cnt = 0
+            avatar_cnt = 0
             for _k, _meta in paras.items():
                 detail = (_meta or {}).get("detail") or {}
                 lst = detail.get("data_list") if isinstance(detail, dict) else None
@@ -501,10 +517,12 @@ class BookManager(object):
                     if allow_images:
                         for u in self._extract_image_urls(item):
                             urls.append(u)
+                            img_cnt += 1
                     # 头像
                     av = self._extract_avatar_url(item)
                     if av:
                         urls.append(av)
+                        avatar_cnt += 1
             # 去重
             unique = []
             seen = set()
@@ -513,6 +531,13 @@ class BookManager(object):
                     seen.add(u)
                     unique.append(u)
             if not unique:
+                # 提示没有可下载媒体，便于用户判断为何进度条不动
+                try:
+                    self.logger.debug(
+                        f"[媒体] 章节 {seg_data.get('chapter_id')} 无可下载资源 (图片={img_cnt}, 头像={avatar_cnt}, allow_images={allow_images})"
+                    )
+                except Exception:
+                    pass
                 return
             # 并发下载
             try:
@@ -520,17 +545,14 @@ class BookManager(object):
             except Exception:
                 workers = 4
             # 初始化 / 增量更新 媒体进度条 total（若注入）
-            if self.media_progress:
-                try:
-                    with self._media_progress_lock:
-                        if self.media_progress.total == 0:
-                            self.media_progress.total = len(unique)
-                        else:
-                            self.media_progress.total += len(unique)
-                        self.media_progress.refresh()
-                except Exception:
-                    pass
+            # 已移除 UI 进度条，无需 total 更新
             self._media_prefetched = True
+            try:
+                self.logger.debug(
+                    f"[媒体] 章节 {seg_data.get('chapter_id')} 收集图片={img_cnt} 头像={avatar_cnt} 去重后={len(unique)}"
+                )
+            except Exception:
+                pass
             with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
                 futures = [ex.submit(self._download_comment_image, u) for u in unique]
                 for f in as_completed(futures):
@@ -538,12 +560,7 @@ class BookManager(object):
                         _ = f.result()
                     except Exception:
                         pass
-                    if self.media_progress:
-                        try:
-                            with self._media_progress_lock:
-                                self.media_progress.update(1)
-                        except Exception:
-                            pass
+                    # 静默，不再更新 UI
         except Exception:
             pass
 
