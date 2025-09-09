@@ -3,6 +3,7 @@ import json
 import re
 import html
 import hashlib
+import threading
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, List
@@ -15,21 +16,13 @@ from .epub_generator import EpubGenerator
 
 class BookManager(object):
     """书籍存储控制器"""
-    def __init__(
-        self,
-        save_path: str,
-        book_id: str,
-        book_name: str,
-        author: str,
-        tags: list,
-        description: str,
-    ):
+    def __init__(self, save_path: str, book_id: str, book_name: str, author: str, tags: list, description: str):
         # 书本信息缓存
         self.save_dir = Path(save_path)
         self.book_id = book_id
         self.book_name = book_name
         self.author = author
-        self.end = True if tags[0] == "已完结" else False
+        self.end = True if (tags and tags[0] == "已完结") else False
         self.tags = "|".join(tags)
         self.description = description
 
@@ -46,6 +39,18 @@ class BookManager(object):
         self.status_file = self.status_folder / filename
 
         self._load_download_status()
+        # 标记：段评媒体是否已在下载阶段预取，避免 finalize 再次处理
+        self._media_prefetched = False
+        # 由下载器注入的 tqdm 进度条对象（段评图片）
+        self.media_progress = None
+        # 段评媒体进度条的并发锁（total/update 安全）
+        self._media_progress_lock = threading.Lock()
+        # 段评媒体预取执行器（在保存段评时并发启动）
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _TP
+            self._media_prefetch_executor = _TP(max_workers=2)
+        except Exception:
+            self._media_prefetch_executor = None
 
     def _load_download_status(self):
         """加载完整的下载状态"""
@@ -113,6 +118,24 @@ class BookManager(object):
             with out_path.open("w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
             self.logger.debug(f"段评已保存: {out_path}")
+            # 同步启动段评媒体（图片+头像）预取：与保存同时进行
+            if getattr(self.config, "enable_segment_comments", False):
+                try:
+                    top_n = int(getattr(self.config, "segment_comments_top_n", 10))
+                except Exception:
+                    top_n = 10
+                # 仅当配置允许下载评论图片或头像（头像始终会被尝试）才启动
+                allow_images = bool(getattr(self.config, "download_comment_images", True))
+                if allow_images or True:  # 头像始终处理
+                    if self._media_prefetch_executor is not None:
+                        try:
+                            self._media_prefetch_executor.submit(self._prefetch_media, payload, top_n)
+                        except Exception:
+                            # 回退直接调用（阻塞当前线程）
+                            self._prefetch_media(payload, top_n)
+                    else:
+                        # 无执行器（极端情况）直接调用
+                        self._prefetch_media(payload, top_n)
         except Exception as e:
             self.logger.debug(f"段评保存失败: {e}")
 
@@ -125,6 +148,12 @@ class BookManager(object):
     def finalize_spawn(self, chapters, result):
         """生成最终文件"""
         if not self.config.bulk_files:
+            # 等待所有异步图片预取任务完成，保证生成 EPUB 时图片已落地
+            try:
+                if hasattr(self, "_media_prefetch_executor") and self._media_prefetch_executor:
+                    self._media_prefetch_executor.shutdown(wait=True)
+            except Exception:
+                pass
             output_file = self.save_dir / f"{self.book_name}.{self.config.novel_format}"
             if output_file.exists():
                 os.remove(output_file)
@@ -159,15 +188,16 @@ class BookManager(object):
                     if getattr(self.config, "enable_segment_comments", False):
                         seg_data = self._load_segment_comments_json(chapter_id)
                         if seg_data is not None:
-                            # 预取评论图片与头像（仅每段前 N 条），并发下载，确保发起请求
-                            try:
+                            # 若未在下载阶段预取媒体，则此处兜底预取一次
+                            if not self._media_prefetched:
                                 try:
-                                    top_n = int(getattr(self.config, "segment_comments_top_n", 10))
+                                    try:
+                                        top_n = int(getattr(self.config, "segment_comments_top_n", 10))
+                                    except Exception:
+                                        top_n = 10
+                                    self._prefetch_media(seg_data, top_n)
                                 except Exception:
-                                    top_n = 10
-                                self._prefetch_media(seg_data, top_n)
-                            except Exception:
-                                pass
+                                    pass
                             comments_file = f"comments_{chapter_id}.xhtml"
                             comments_title = f"{title} - 段评"
                             # 在修改正文之前，保留一份原始 HTML 供段标题提取首句
@@ -486,9 +516,21 @@ class BookManager(object):
                 return
             # 并发下载
             try:
-                workers = int(getattr(self.config, "media_download_workers", 4))
+                workers = int(getattr(self.config, "media_download_workers", 8))
             except Exception:
                 workers = 4
+            # 初始化 / 增量更新 媒体进度条 total（若注入）
+            if self.media_progress:
+                try:
+                    with self._media_progress_lock:
+                        if self.media_progress.total == 0:
+                            self.media_progress.total = len(unique)
+                        else:
+                            self.media_progress.total += len(unique)
+                        self.media_progress.refresh()
+                except Exception:
+                    pass
+            self._media_prefetched = True
             with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
                 futures = [ex.submit(self._download_comment_image, u) for u in unique]
                 for f in as_completed(futures):
@@ -496,6 +538,12 @@ class BookManager(object):
                         _ = f.result()
                     except Exception:
                         pass
+                    if self.media_progress:
+                        try:
+                            with self._media_progress_lock:
+                                self.media_progress.update(1)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -525,9 +573,10 @@ class BookManager(object):
             if out_path.exists():
                 return file_name
 
+            accept_hdr = "image/jpeg,image/jpg,image/png,image/gif,*/*;q=0.8"
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Accept": accept_hdr,
                 "Referer": f"{parsed.scheme}://{parsed.netloc}/",
             }
 
@@ -554,18 +603,91 @@ class BookManager(object):
                     resp = requests.get(url, headers=headers, timeout=timeout)
                     sc = resp.status_code
                     if sc == 200 and resp.content:
-                        # 修正扩展名
+                        # ---- 内容类型与扩展处理 ----
                         ctype = resp.headers.get("Content-Type", "").lower()
+                        url_lower = url.lower()
+                        # URL 迹象（更宽松）
+                        heic_url_markers = [".heic", "/heic", "format=heic", "heic=1", "image/heic", "x-oss-process=image/format,heic"]
+                        is_heic_hint = any(m in url_lower for m in heic_url_markers) or ("heic" in ctype or "heif" in ctype)
+                        # Magic 检测：在前 512 字节 搜索 ftyp + 品牌
+                        if not is_heic_hint:
+                            try:
+                                head_bytes = resp.content[:512]
+                                pos = head_bytes.find(b"ftyp")
+                                if pos != -1:
+                                    brand_window = head_bytes[pos+4:pos+16]
+                                    if any(b in brand_window for b in [b"heic", b"heif", b"mif1", b"msf1"]):
+                                        is_heic_hint = True
+                            except Exception:
+                                pass
+                        debug_formats = getattr(self.config, "log_image_format_debug", False)
+                        if is_heic_hint and debug_formats:
+                            self.logger.debug(f"检测到 HEIC 格式: url={url} ctype={ctype}")
                         if ext == ".jpg" and "png" in ctype:
                             file_name2 = f"{name}.png"; out_path2 = img_dir / file_name2
                         elif ext == ".jpg" and "gif" in ctype:
                             file_name2 = f"{name}.gif"; out_path2 = img_dir / file_name2
                         elif ext == ".jpg" and "webp" in ctype:
                             file_name2 = f"{name}.webp"; out_path2 = img_dir / file_name2
+                        elif ext == ".jpg" and "avif" in ctype:
+                            file_name2 = f"{name}.avif"; out_path2 = img_dir / file_name2
+                        elif is_heic_hint:
+                            file_name2 = f"{name}.heic"; out_path2 = img_dir / file_name2
                         else:
                             file_name2 = file_name; out_path2 = out_path
+                        data_bytes = resp.content
+                        # 强制统一转成 JPEG（新配置）或旧 webp 配置兼容映射
+                        try:
+                            force_jpeg = bool(getattr(self.config, "force_convert_images_to_jpeg", False)) or bool(getattr(self.config, "force_convert_images_to_webp", False))
+                            need_heic_convert = is_heic_hint and getattr(self.config, "convert_heic_to_jpeg", True)
+                            if force_jpeg or need_heic_convert:
+                                from io import BytesIO
+                                buf_in = BytesIO(data_bytes)
+                                converted = False
+                                # 注册 heic 解码
+                                try:
+                                    import pillow_heif  # type: ignore
+                                    pillow_heif.register_heif_opener()
+                                except Exception:
+                                    pass
+                                try:
+                                    from PIL import Image
+                                    with Image.open(buf_in) as im:
+                                        im = im.convert("RGB")
+                                        qj = int(getattr(self.config, "jpeg_quality", 90))
+                                        buf_out = BytesIO()
+                                        im.save(buf_out, format="JPEG", quality=max(1, min(100, qj)))
+                                        data_bytes = buf_out.getvalue()
+                                        file_name2 = f"{name}.jpg"; out_path2 = img_dir / file_name2
+                                        converted = True
+                                except Exception:
+                                    converted = False
+                                if is_heic_hint and not converted:
+                                    if not getattr(self.config, "keep_heic_original", False):
+                                        if debug_formats:
+                                            self.logger.debug(f"HEIC 转码失败已丢弃: url={url}")
+                                        return None
+                                    else:
+                                        if not file_name2.endswith(".heic"):
+                                            file_name2 = f"{name}.heic"; out_path2 = img_dir / file_name2
+                            elif getattr(self.config, "jpeg_retry_convert", True) and not ("jpeg" in ctype or file_name2.endswith('.jpg') or file_name2.endswith('.jpeg')):
+                                from io import BytesIO
+                                from PIL import Image
+                                buf_in = BytesIO(data_bytes)
+                                try:
+                                    with Image.open(buf_in) as im:
+                                        im = im.convert("RGB")
+                                        qj = int(getattr(self.config, "jpeg_quality", 90))
+                                        buf_out = BytesIO()
+                                        im.save(buf_out, format="JPEG", quality=max(1, min(100, qj)))
+                                        data_bytes = buf_out.getvalue()
+                                        file_name2 = f"{name}.jpg"; out_path2 = img_dir / file_name2
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                         with open(out_path2, "wb") as f:
-                            f.write(resp.content)
+                            f.write(data_bytes)
                         return file_name2
                     # 可重试状态码
                     if sc in (429, 500, 502, 503, 504):
@@ -863,9 +985,9 @@ class BookManager(object):
                     meta_line += f" | 时间：{ts}"
                 meta_line += f" | 赞：{like}</small>"
                 if img_tags:
-                    parts.append(f"<li><p>{text}</p><div class=\"seg-images\">{''.join(img_tags)}</div><p>{meta_line}</p></li>")
+                    parts.append(f"<li class=\"seg-item\"><p>{text}</p><div class=\"seg-images\">{''.join(img_tags)}</div><p>{meta_line}</p></li>")
                 else:
-                    parts.append(f"<li><p>{text}</p><p>{meta_line}</p></li>")
+                    parts.append(f"<li class=\"seg-item\"><p>{text}</p><p>{meta_line}</p></li>")
             parts.append("</ol>")
 
         # 简单结尾

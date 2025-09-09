@@ -81,7 +81,10 @@ class EpubGenerator:
                     .seg-images img { max-width:100%; height:auto; max-height:220px; margin-right:.4em; margin-bottom:.2em; border-radius:2px; object-fit:contain; }
                     /* 头像样式 */
                     .avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; vertical-align:middle; margin-right:.5em; }
-                    .seg-meta { color:#666; }
+                    .seg-meta { color:#666; display:block; text-align:right; }
+                    /* 评论项分割线 */
+                    li.seg-item { border-bottom:1px solid #ddd; padding:.5em 0 .6em 0; }
+                    li.seg-item:last-child { border-bottom:none; }
                     """
                 ).encode("utf-8")
             ),
@@ -136,7 +139,9 @@ class EpubGenerator:
         elif ext == ".gif":
             mime = "image/gif"
         elif ext == ".webp":
-            mime = "image/webp"
+            mime = "image/webp"  # 强制转码场景下主格式
+        elif ext == ".avif":
+            mime = "image/avif"
         else:
             mime = "image/jpeg"
         # 1. 用 EpubItem 将二进制图片打包

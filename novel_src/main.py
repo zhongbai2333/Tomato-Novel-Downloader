@@ -248,22 +248,38 @@ class ConfigMenu(urwid.WidgetPlaceholder):
 
     # 配置项元数据：显示名称 -> (Config 属性名, 类型)
     OPTIONS = {
+        # 基础
         "保存路径": ("save_path", str),
+        "小说保存格式(txt/epub)": ("novel_format", str),
+        "是否以散装形式保存小说": ("bulk_files", bool),
+        "优雅退出模式": ("graceful_exit", bool),
+        "是否自动清理缓存文件": ("auto_clear_dump", bool),
+        # 网络
         "最大线程数": ("max_workers", int),
         "请求超时(秒)": ("request_timeout", int),
         "最大重试次数": ("max_retries", int),
         "最小等待时间(ms)": ("min_wait_time", int),
         "最大等待时间(ms)": ("max_wait_time", int),
-        "小说保存格式(txt/epub)": ("novel_format", str),
-        "优雅退出模式": ("graceful_exit", bool),
-        "是否自动清理缓存文件": ("auto_clear_dump", bool),
+        "最小连接超时时间": ("min_connect_timeout", float),
+        "强制退出等待时间(秒)": ("force_exit_timeout", int),
+        # API 相关
         "是否使用官方API": ("use_official_api", bool),
         "是否使用 helloplhm_qwq API": ("use_helloplhm_qwq_api", bool),
-        "是否以散装形式保存小说": ("bulk_files", bool),
-        # 段评相关
+        "自定义API列表(逗号分隔)": ("api_endpoints", list),
+        # 段评
         "是否下载段评": ("enable_segment_comments", bool),
         "段评每段最多条数": ("segment_comments_top_n", int),
         "段评并发线程数": ("segment_comments_workers", int),
+        # 段评媒体/图片
+        "是否下载评论区图片": ("download_comment_images", bool),
+        "评论图片下载线程数": ("media_download_workers", int),
+        "图片域名黑名单(逗号分隔)": ("blocked_media_domains", list),
+        # 图片转码/格式控制
+        "强制所有图片转JPEG": ("force_convert_images_to_jpeg", bool),
+        "非JPEG尝试转JPEG": ("jpeg_retry_convert", bool),
+        "JPEG质量(0-100)": ("jpeg_quality", int),
+        "HEIC转JPEG": ("convert_heic_to_jpeg", bool),
+        "保留原始HEIC文件": ("keep_heic_original", bool),
     }
 
     def __init__(self, app: "TNDApp"):
@@ -378,9 +394,18 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                 # 1) 类型转换
                 if value_type is int:
                     new_val = int(raw)
+                elif value_type is float:
+                    new_val = float(raw)
+                elif value_type is list:
+                    if raw == "":
+                        new_val = []
+                    else:
+                        # 支持 换行 或 逗号 分隔
+                        parts = re.split(r"[,\n]", raw)
+                        new_val = [p.strip() for p in parts if p.strip()]
                 elif value_type is str:
                     new_val = raw
-                else:
+                else:  # 兜底
                     new_val = raw
 
                 # 2) 基础校验/约束
@@ -395,11 +420,23 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                     "max_wait_time",
                     "segment_comments_top_n",
                     "segment_comments_workers",
+                    "media_download_workers",
+                    "force_exit_timeout",
                 ):
                     if int(new_val) < 0:
                         raise ValueError("该数值不能为负数")
+                if field == "jpeg_quality":
+                    if not (0 <= int(new_val) <= 100):
+                        raise ValueError("JPEG质量需在0-100之间")
+                if field == "min_connect_timeout":
+                    if float(new_val) <= 0:
+                        raise ValueError("最小连接超时时间需>0")
                 if field == "save_path" and new_val:
                     Path(new_val).mkdir(parents=True, exist_ok=True)
+                if field == "blocked_media_domains" and not isinstance(new_val, list):
+                    raise ValueError("内部错误: 解析域名列表失败")
+                if field == "api_endpoints" and not isinstance(new_val, list):
+                    raise ValueError("内部错误: 解析API列表失败")
 
                 # 3) 互斥逻辑：官方API 与 helloplhm_qwq API
                 if field == "use_official_api" and new_val:
@@ -420,7 +457,14 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                 # 4) 保存并返回
                 setattr(cfg, field, new_val)
                 cfg.save()
-                self.app.show_popup(f"{display_name} 已保存为 {new_val}")
+                # 展示值（列表较长时截断）
+                show_val = new_val
+                if isinstance(new_val, list):
+                    if len(new_val) > 6:
+                        show_val = ", ".join(new_val[:6]) + f" ...(+{len(new_val)-6})"
+                    else:
+                        show_val = ", ".join(new_val)
+                self.app.show_popup(f"{display_name} 已保存为 {show_val}")
                 self._build_view()
             except ValueError as ve:
                 self.app.show_popup(str(ve))

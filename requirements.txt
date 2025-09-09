@@ -19,3 +19,4 @@ urllib3
 portalocker
 urwid
 pyperclip
+pillow_heif

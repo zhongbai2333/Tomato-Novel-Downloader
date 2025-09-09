@@ -105,8 +105,13 @@ class ChapterDownloader:
         orig_handlers = self.logger.handlers.copy()
         removed_handlers = []
         for h in orig_handlers:
-            # 移除除 TqdmLoggingHandler 外的 StreamHandler（通常是控制台处理器）
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, TqdmLoggingHandler):
+            # 仅移除“指向控制台的普通 StreamHandler”，保留文件处理器与已添加的 TqdmLoggingHandler
+            # 问题修复：FileHandler 继承自 StreamHandler，之前条件会把文件日志处理器也移除，导致 tqdm 期间日志不写入文件。
+            if (
+                isinstance(h, logging.StreamHandler)
+                and not isinstance(h, TqdmLoggingHandler)
+                and not isinstance(h, logging.FileHandler)  # 保留文件日志处理器
+            ):
                 self.logger.removeHandler(h)
                 removed_handlers.append(h)
 
@@ -197,97 +202,78 @@ class ChapterDownloader:
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
             futures = get_submit(exe)
             cols, _ = shutil.get_terminal_size(fallback=(80, 24))
-            with tqdm(
-                total=len(futures),
-                desc=desc,
-                ncols=cols,
-                dynamic_ncols=False,
-                leave=True,
-            ) as pbar:
-                self.log_system.enable_tqdm_handler(pbar)
+            # 三个进度条：1 下载任务完成数 2 章节保存/段评抓取数 3 段评图片
+            download_bar = tqdm(total=len(futures), desc="章节下载", ncols=cols//3, position=0, leave=True)
+            save_bar = tqdm(total=tasks_count, desc="正文/段评保存", ncols=cols//3, position=1, leave=True)
+            media_bar = tqdm(total=0, desc="段评图片", ncols=cols//3, position=2, leave=True)
+            # 注入 media_bar 到 book_manager
+            book_manager.media_progress = media_bar
+            self.log_system.enable_tqdm_handler(download_bar)
 
-                for future in as_completed(futures):
-                    if self._stop_event.is_set():
-                        # 优雅取消剩余任务
-                        for f in futures:
-                            if not f.done():
-                                f.cancel()
-                        break
+            for future in as_completed(futures):
+                if self._stop_event.is_set():
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    break
 
-                    task = futures[future]
-                    try:
-                        # --- 情况 1：官方批量 ---
-                        if self.config.use_official_api:
-                            # future.result() 返回： Dict[str, Tuple[content, title]]
-                            batch_out: Dict[str, Tuple[str, str]] = future.result()
-                            for cid, (content, title) in batch_out.items():
-                                if content == "Error":
-                                    book_manager.save_error_chapter(cid, cid)
-                                    results["failed"] += 1
-                                else:
-                                    book_manager.save_chapter(cid, title, content)
-                                    # 段评：成功保存章节后按需抓取（异步提交，不阻塞主下载）
-                                    if comment_executor:
-                                        comment_futures.append(
-                                            comment_executor.submit(
-                                                self._maybe_fetch_segment_comments,
-                                                book_manager,
-                                                cid,
-                                            )
-                                        )
-                                    results["success"] += 1
-
-                        # --- 情况 2：helloplhm_qwq 批量 ---
-                        elif self.config.use_helloplhm_qwq_api:
-                            # future.result() 返回： Dict[str, Tuple[content, title]]
-                            batch_out: Dict[str, Tuple[str, str]] = future.result()
-                            for cid, (content, title) in batch_out.items():
-                                if content == "Error":
-                                    book_manager.save_error_chapter(cid, cid)
-                                    results["failed"] += 1
-                                else:
-                                    book_manager.save_chapter(cid, title, content)
-                                    # 段评：成功保存章节后按需抓取（异步提交）
-                                    if comment_executor:
-                                        comment_futures.append(
-                                            comment_executor.submit(
-                                                self._maybe_fetch_segment_comments,
-                                                book_manager,
-                                                cid,
-                                            )
-                                        )
-                                    results["success"] += 1
-
-                        # --- 情况 3：非官方单章 ---
-                        else:
-                            content, title = future.result()
-                            cid = task["id"]
+                task = futures[future]
+                try:
+                    if self.config.use_official_api:
+                        batch_out: Dict[str, Tuple[str, str]] = future.result()
+                        for cid, (content, title) in batch_out.items():
                             if content == "Error":
-                                book_manager.save_error_chapter(cid, task["title"])
+                                book_manager.save_error_chapter(cid, cid)
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
-                                # 段评：成功保存章节后按需抓取（异步提交）
                                 if comment_executor:
-                                    comment_futures.append(
-                                        comment_executor.submit(
-                                            self._maybe_fetch_segment_comments,
-                                            book_manager,
-                                            cid,
-                                        )
-                                    )
+                                    comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
+                            save_bar.update(1)
+                    elif self.config.use_helloplhm_qwq_api:
+                        batch_out: Dict[str, Tuple[str, str]] = future.result()
+                        for cid, (content, title) in batch_out.items():
+                            if content == "Error":
+                                book_manager.save_error_chapter(cid, cid)
+                                results["failed"] += 1
+                            else:
+                                book_manager.save_chapter(cid, title, content)
+                                if comment_executor:
+                                    comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
+                                results["success"] += 1
+                            save_bar.update(1)
+                    else:
+                        content, title = future.result()
+                        cid = task["id"]
+                        if content == "Error":
+                            book_manager.save_error_chapter(cid, task["title"])
+                            results["failed"] += 1
+                        else:
+                            book_manager.save_chapter(cid, title, content)
+                            if comment_executor:
+                                comment_futures.append(comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
+                            results["success"] += 1
+                        save_bar.update(1)
+                except KeyboardInterrupt:
+                    book_manager.save_download_status()
+                    raise
+                except Exception as e:
+                    self.logger.error(f"[异常] 处理任务时出错：{e}")
+                    results["failed"] += 1
+                download_bar.update(1)
 
-                    except KeyboardInterrupt:
-                        # 第二次 Ctrl-C：真正退出
-                        book_manager.save_download_status()
-                        raise
-                    except Exception as e:
-                        # 无论哪种模式，只要抛异常，都当作失败
-                        self.logger.error(f"[异常] 处理任务时出错：{e}")
-                        results["failed"] += 1
+            # 等待段评 futures 完成并更新保存进度（段评抓取不改变 success/failed 统计章节数）
+            if comment_executor:
+                for cf in as_completed(comment_futures):
+                    try:
+                        cf.result()
+                    except Exception:
+                        pass
 
-                    pbar.update()
+            # 刷新媒体条（若未预取任何资源）
+            media_bar.refresh()
+            download_bar.close(); save_bar.close(); media_bar.close()
 
         # ============ 统计取消数 ============
         canceled = tasks_count - results["success"] - results["failed"]
