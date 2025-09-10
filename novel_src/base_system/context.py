@@ -47,6 +47,53 @@ class Config(BaseConfig):
         description="API列表",
     )
 
+    # 段评配置
+    enable_segment_comments: bool = Field(
+        default=False, description="是否下载段评（段落评论）"
+    )
+    segment_comments_top_n: int = Field(
+        default=10, description="每段最多保存的评论数"
+    )
+    segment_comments_workers: int = Field(
+        default=32, description="段评抓取的并发线程数（每章内）"
+    )
+    # 段评媒体配置
+    download_comment_images: bool = Field(
+        default=True, description="是否下载评论区图片（不含头像）"
+    )
+    download_comment_avatars: bool = Field(
+        default=True, description="是否下载评论区头像"
+    )
+    media_download_workers: int = Field(
+        default=8, description="评论图片/头像下载并发线程数"
+    )
+    blocked_media_domains: list = Field(
+        default=["p-passport-sign.bytedance.net"],
+        description="拒绝下载的图片域名（包含匹配）",
+    )
+    # 图片统一格式配置（新版：改为强制转 JPEG；旧字段 force_convert_images_to_webp 已弃用）
+    force_convert_images_to_jpeg: bool = Field(
+        default=False, description="是否强制将所有下载图片转码为 JPEG（最大兼容性）"
+    )
+    # JPEG 优先下载/转码
+    jpeg_retry_convert: bool = Field(
+        default=True, description="若返回非 JPEG 且可解码则转码为 JPEG 保存"
+    )
+    jpeg_quality: int = Field(
+        default=90, description="JPEG 转码质量 (0-100)"
+    )
+    # HEIC/HEIF 处理
+    convert_heic_to_jpeg: bool = Field(
+        default=True, description="检测到 HEIC/HEIF 时转码为 JPEG（需 pillow-heif）"
+    )
+    keep_heic_original: bool = Field(
+        default=False, description="为 True 时即便无法转码也保留 .heic/.heif 原文件（阅读器可能不显示）"
+    )
+    # 段落首行缩进 (em)；0 表示不缩进
+    first_line_indent_em: float = Field(
+        default=2.0, description="EPUB 段落首行缩进 em 数 (0 表示无缩进)"
+    )
+
     @property
     def default_save_dir(self) -> Path:
         """获取默认保存目录路径对象"""

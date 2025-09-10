@@ -20,150 +20,179 @@ from .constants import VERSION
 
 
 def show_config_menu(config: Config):
-    """显示配置菜单"""
-    print("\n=== 配置选项 ===")
-    options = {
-        "1": {"name": "保存路径", "field": "save_path", "type": str},
-        "2": {"name": "最大线程数", "field": "max_workers", "type": int},
-        "3": {"name": "请求超时(秒)", "field": "request_timeout", "type": int},
-        "4": {"name": "最大重试次数", "field": "max_retries", "type": int},
-        "5": {"name": "最小等待时间(ms)", "field": "min_wait_time", "type": int},
-        "6": {"name": "最大等待时间(ms)", "field": "max_wait_time", "type": int},
-        "7": {
-            "name": "优雅退出模式[True/False]",
-            "field": "graceful_exit",
-            "type": bool,
-        },
-        "8": {"name": "小说保存格式[txt/epub]", "field": "novel_format", "type": str},
-        "9": {
-            "name": "是否自动清理缓存文件[True/False]",
-            "field": "auto_clear_dump",
-            "type": bool,
-        },
-        "A": {
-            "name": "是否使用官方API[True/False]",
-            "field": "use_official_api",
-            "type": bool,
-        },
-        "B": {
-            "name": "是否使用helloplhm_qwq API[True/False]",
-            "field": "use_helloplhm_qwq_api",
-            "type": bool,
-        },
-        "C": {
-            "name": "是否以散装的形式保存小说[True/False]",
-            "field": "bulk_files",
-            "type": bool,
-        },
-        "D": {
-            "name": "是否使用老版本命令行界面[True/False] (需自行重启)",
-            "field": "old_cli",
-            "type": bool,
-        },
-        "0": {"name": "返回主菜单"},
-    }
+    """显示配置菜单 (已同步新版 main 中的所有配置字段)。
 
-    while True:
-        print("\n当前配置：")
-        for key in sorted(options.keys()):
-            if key == "0":
-                continue
-            opt = options[key]
-            current_value = getattr(config, opt["field"], "N/A")
-            print(f"{key}. {opt['name']}: {current_value}")
+    支持类型:
+      bool / int / float / str / list(逗号或换行分隔)
+    互斥逻辑:
+      use_official_api 与 use_helloplhm_qwq_api
+    自动调整:
+      启用 helloplhm_qwq API 时: max_workers=1,min_wait_time>=1000,max_wait_time>=1200
+    """
+
+    # 定义所有可编辑配置项 (顺序即菜单顺序)
+    option_defs = [
+        {"name": "保存路径", "field": "save_path", "type": str},
+        {"name": "小说保存格式(txt/epub)", "field": "novel_format", "type": str},
+        {"name": "是否以散装形式保存小说", "field": "bulk_files", "type": bool},
+        {"name": "优雅退出模式", "field": "graceful_exit", "type": bool},
+        {"name": "是否自动清理缓存文件", "field": "auto_clear_dump", "type": bool},
+        # 网络
+        {"name": "最大线程数", "field": "max_workers", "type": int},
+        {"name": "请求超时(秒)", "field": "request_timeout", "type": int},
+        {"name": "最大重试次数", "field": "max_retries", "type": int},
+        {"name": "最小等待时间(ms)", "field": "min_wait_time", "type": int},
+        {"name": "最大等待时间(ms)", "field": "max_wait_time", "type": int},
+        {"name": "最小连接超时时间", "field": "min_connect_timeout", "type": float},
+        {"name": "强制退出等待时间(秒)", "field": "force_exit_timeout", "type": int},
+        # API
+        {"name": "是否使用官方API", "field": "use_official_api", "type": bool},
+        {"name": "是否使用 helloplhm_qwq API", "field": "use_helloplhm_qwq_api", "type": bool},
+        {"name": "自定义API列表(逗号分隔)", "field": "api_endpoints", "type": list},
+        # 段评
+        {"name": "是否下载段评", "field": "enable_segment_comments", "type": bool},
+        {"name": "段评每段最多条数", "field": "segment_comments_top_n", "type": int},
+        {"name": "段评并发线程数", "field": "segment_comments_workers", "type": int},
+        # 段评媒体
+        {"name": "是否下载评论区图片", "field": "download_comment_images", "type": bool},
+        {"name": "是否下载评论区头像", "field": "download_comment_avatars", "type": bool},
+        {"name": "评论图片下载线程数", "field": "media_download_workers", "type": int},
+        {"name": "图片域名黑名单(逗号分隔)", "field": "blocked_media_domains", "type": list},
+        # 图片处理
+        {"name": "强制所有图片转JPEG", "field": "force_convert_images_to_jpeg", "type": bool},
+        {"name": "非JPEG尝试转JPEG", "field": "jpeg_retry_convert", "type": bool},
+        {"name": "JPEG质量(0-100)", "field": "jpeg_quality", "type": int},
+        {"name": "HEIC转JPEG", "field": "convert_heic_to_jpeg", "type": bool},
+        {"name": "保留原始HEIC文件", "field": "keep_heic_original", "type": bool},
+        # 段落缩进
+        {"name": "EPUB首行缩进(em)", "field": "first_line_indent_em", "type": float},
+        # 旧界面切换
+        {"name": "是否使用老版本命令行界面(需重启)", "field": "old_cli", "type": bool},
+    ]
+
+    def _show_menu():
+        print("\n=== 配置选项 ===")
+        for idx, opt in enumerate(option_defs, start=1):
+            val = getattr(config, opt["field"], "<N/A>")
+            if isinstance(val, list):
+                display = ",".join(map(str, val))
+            else:
+                display = val
+            name = opt['name']
+            if opt["field"] == "enable_segment_comments" and getattr(config, "novel_format", "epub") == "txt":
+                name = f"{name}（TXT 不支持）"
+            print(f"{idx}. {name}: {display}")
         print("0. 返回主菜单")
 
-        choice = input("\n请选择要修改的配置项：").strip().upper()
-
+    while True:
+        _show_menu()
+        choice = input("\n请选择要修改的配置项编号: ").strip()
         if choice == "0":
             break
-
-        if choice not in options:
-            print("无效选项，请重新输入")
+        if not choice.isdigit():
+            print("请输入数字编号")
             continue
-
-        if choice == "0":
-            break
-
-        # 获取配置项元数据
-        opt = options[choice]
+        idx = int(choice)
+        if not (1 <= idx <= len(option_defs)):
+            print("编号超出范围")
+            continue
+        opt = option_defs[idx - 1]
         field = opt["field"]
-        value_type = opt["type"]
-        current_value = getattr(config, field)
-
-        # 显示当前值并获取新值
-        print(f"\n当前 {opt['name']}: {current_value}")
-        new_value = input("请输入新值（留空取消修改）: ").strip()
-
-        if not new_value:
-            print("修改已取消")
+        typ = opt["type"]
+        cur_val = getattr(config, field, None)
+        if isinstance(cur_val, list):
+            cur_display = ",".join(cur_val)
+        else:
+            cur_display = cur_val
+        new_text = input(f"当前 {opt['name']} = {cur_display}\n输入新值(留空取消): ").strip()
+        if new_text == "":
+            print("已取消修改")
             continue
 
-        # 验证并转换值类型
+        # 解析与转换
         try:
-            if value_type == bool:
-                converted = new_value.lower() in ("true", "1", "yes")
+            if typ is bool:
+                new_val = new_text.lower() in ("true", "1", "yes", "y")
+            elif typ is int:
+                new_val = int(new_text)
+            elif typ is float:
+                new_val = float(new_text)
+            elif typ is list:
+                parts = [p.strip() for p in re.split(r"[,\n]", new_text) if p.strip()]
+                new_val = parts
             else:
-                converted = value_type(new_value)
+                new_val = new_text
         except ValueError:
-            print(f"无效值类型，需要 {value_type.__name__}")
+            print("类型转换失败")
             continue
 
-        # 特殊验证逻辑
-        if field == "max_workers":
-            if converted < 1 or converted > 16:
-                print("线程数必须在1-16之间")
+        # 校验
+        if field == "novel_format" and new_val not in ("txt", "epub"):
+            print("小说保存格式必须为 txt 或 epub")
+            continue
+        if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "force_exit_timeout"):
+            if new_val < 0:
+                print("该数值不能为负")
                 continue
-        elif field in ("min_wait_time", "max_wait_time"):
-            if converted < 0:
-                print("等待时间不能为负数")
+        if field in ("min_wait_time", "max_wait_time") and new_val < 0:
+            print("等待时间不能为负")
+            continue
+        if field == "jpeg_quality" and not (0 <= new_val <= 100):
+            print("JPEG质量需在0-100之间")
+            continue
+        if field == "min_connect_timeout" and new_val <= 0:
+            print("最小连接超时时间需>0")
+            continue
+        if field == "save_path" and new_val:
+            new_val = new_val.rstrip("/\\")
+            try:
+                Path(new_val).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                print(f"创建目录失败: {e}")
                 continue
-        elif field == "request_timeout":
-            if converted < 5:
-                print("请求超时时间不能小于5秒")
-                continue
-        elif field == "novel_format":
-            if converted not in ["txt", "epub"]:
-                print("格式应为txt或epub")
-                continue
-        elif field == "save_path":
-            converted = converted.rstrip("/")
 
-        # —— 新增：API 互斥与自动调整 —— 
-        # 如果启用了官方 API，则关闭 helloplhm_qwq API
-        if field == "use_official_api" and converted:
+    # 互斥与自动调整
+        if field == "use_official_api" and new_val:
             if getattr(config, "use_helloplhm_qwq_api", False):
                 config.use_helloplhm_qwq_api = False
-                print("检测到启用 官方 API，已自动关闭 helloplhm_qwq API")
-
-        # 如果启用了 helloplhm_qwq API，则关闭官方 API，并自动调整相关参数
-        if field == "use_helloplhm_qwq_api" and converted:
+                print("已自动关闭 helloplhm_qwq API")
+        if field == "use_helloplhm_qwq_api" and new_val:
             msgs = []
             if getattr(config, "use_official_api", False):
                 config.use_official_api = False
-                msgs.append("已关闭 官方 API")
-            if converted and getattr(config, "max_workers", None) != 1:
-                config.max_workers = 1
-                msgs.append("最大线程数 = 1")
-            if converted and getattr(config, "min_wait_time", 0) < 1000:
-                config.min_wait_time = 1000
-                msgs.append("最小等待时间 ≥ 1000ms")
-            if converted and getattr(config, "max_wait_time", 0) < 1200:
-                config.max_wait_time = 1200
-                msgs.append("最大等待时间 ≥ 1200ms")
+                msgs.append("关闭 官方API")
+            if getattr(config, "max_workers", None) != 1:
+                config.max_workers = 1; msgs.append("max_workers=1")
+            if getattr(config, "min_wait_time", 0) < 1000:
+                config.min_wait_time = 1000; msgs.append("min_wait_time>=1000")
+            if getattr(config, "max_wait_time", 0) < 1200:
+                config.max_wait_time = 1200; msgs.append("max_wait_time>=1200")
             if msgs:
-                print("由于启用 helloplhm_qwq API，" + "；".join(msgs) + "。")
+                print("启用 helloplhm_qwq API 已自动调整: " + "; ".join(msgs))
 
-        # 更新配置
-        setattr(config, field, converted)
-        print(f"{opt['name']} 已更新为 {converted}")
+        # novel_format 与 段评互斥：
+        # 1) 当用户把 novel_format 设为 txt，则强制关闭段评并提示
+        if field == "novel_format" and new_val == "txt":
+            if getattr(config, "enable_segment_comments", False):
+                config.enable_segment_comments = False
+                print("TXT 格式不支持段评，已自动关闭段评功能。")
+        # 2) 当用户开启段评而当前为 txt，自动切换到 epub 并提示
+        if field == "enable_segment_comments" and bool(new_val):
+            if getattr(config, "novel_format", "epub") == "txt":
+                config.novel_format = "epub"
+                print("已自动将保存格式切换为 EPUB 以启用段评功能。")
 
-        # 立即保存配置
+        setattr(config, field, new_val)
         try:
             config.save()
-            print("配置已保存")
+            short_val = new_val
+            if isinstance(new_val, list) and len(new_val) > 8:
+                short_val = ",".join(new_val[:8]) + f"...(共{len(new_val)}项)"
+            elif isinstance(new_val, list):
+                short_val = ",".join(new_val)
+            print(f"已更新 {opt['name']} = {short_val}")
         except Exception as e:
-            print(f"保存配置失败: {str(e)}")
+            print(f"保存配置失败: {e}")
 
 
 def load_download_status(status_path: Path) -> dict:
@@ -375,11 +404,15 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             # 走到这里，如果还没拿到 book_id，就当作书名，调用新版 search_book 返回多条结果
             if not book_id:
                 book_name = user_input
+                # 显示简单加载提示，避免用户误以为卡死重复回车
+                print("[正在搜索，请稍候...]", end="", flush=True)
                 try:
                     results = network.search_book(book_name)
                 except Exception as e:
+                    print()  # 换行
                     logger.error(f"搜索小说失败：{e}")
                     continue
+                print(" 完成")
 
                 if not results:
                     logger.info("未搜索到对应书籍")
@@ -413,7 +446,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             if book_name is None:
                 continue
 
-            folder_path = config.get_status_folder_path
+            # 先生成状态目录（与新 main 保持一致，便于封面与下载器使用）
+            try:
+                folder_path = config.status_folder_path(book_name, book_id, save_path)
+            except Exception:
+                folder_path = Path(config.default_save_dir) / f"{book_id}_{book_name}"
+                folder_path.mkdir(parents=True, exist_ok=True)
             cover_path = folder_path / f"{book_name}.jpg"
             preview_ascii(cover_path)
             logger.info(f"\n书名: {book_name}")
@@ -422,9 +460,22 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             logger.info(f"标签: {'|'.join(tags[1:])}")
             logger.info(f"简介: {description[:50]}...")  # 显示前50字符
 
-            manager = BookManager(
-                save_path, book_id, book_name, author, tags, description
-            )
+            # 适配新版 BookManager 构造 (config, logger)，其余元数据手动赋值
+            manager = BookManager(config, logger)
+            manager.book_name = book_name or ""
+            manager.book_id = book_id or ""
+            manager.author = author or ""
+            try:
+                manager.tags = "|".join(tags) if isinstance(tags, (list, tuple)) else str(tags or "")
+                if isinstance(tags, (list, tuple)) and tags:
+                    manager.end = (str(tags[0]).find("完结") != -1)
+            except Exception:
+                manager.tags = ""
+            manager.description = description or ""
+            try:
+                setattr(config, "output_dir", save_path)
+            except Exception:
+                pass
 
             log_system.add_safe_exit_func(manager.save_download_status)
 

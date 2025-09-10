@@ -85,9 +85,18 @@ class BaseConfig(metaclass=BaseConfigMeta):
             return instance
 
         with open(config_path, "r", encoding="utf-8") as f:
-            raw_data = yaml.safe_load(f)
+            raw_data = yaml.safe_load(f) or {}
 
-        return cls(config_path=target_path, **cls._validate_config(raw_data))
+        # 校验 + 使用默认值填补缺失项（但不改变类型校验策略）
+        validated = cls._validate_config(raw_data)
+        instance = cls(config_path=target_path, **validated)
+
+        # 如果检测到缺失项，则自动回写补全后的配置到文件
+        missing = [name for name in cls.__fields__.keys() if name not in raw_data]
+        if missing:
+            instance.save()
+
+        return instance
 
     def save(self, config_path: str = None):
         """保存为带注释的YAML"""

@@ -2,7 +2,7 @@ name: Auto Build Python Executable
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "dev" ]
     tags: [ "v*" ]
     paths:
       - '**.py'
