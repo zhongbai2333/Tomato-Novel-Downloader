@@ -42,7 +42,7 @@ class EpubGenerator:
             GlobalContext.get_logger().error(f"读取封面失败: {str(e)}")
             cover_content = b""
         self.book.set_cover("cover.jpg", cover_content, False)
-        #self.book.get_item_with_id("cover").title = "封面"
+        # self.book.get_item_with_id("cover").title = "封面"
 
         # 添加可选元数据
         if author:
@@ -55,41 +55,45 @@ class EpubGenerator:
         self.chapters = []
         self._file_counter = 0  # 用于生成自动文件名
         # 注入通用样式，统一正文颜色和段评标识
+        # 动态首行缩进值（em）。允许 0 代表关闭缩进。
+        try:
+            indent_em = float(GlobalContext.get_config().first_line_indent_em)
+            if indent_em < 0:
+                indent_em = 0.0
+        except Exception:
+            indent_em = 2.0
+        indent_rule = (
+            f"text-indent:{indent_em}em;" if indent_em > 0 else "text-indent:0;"
+        )
+        css = f"""
+            body {{ color:#000 !important; line-height:1.5; }}
+            /* 统一段落：首行缩进(可配置) + 控制段间距 */
+            p {{ color:#000 !important; {indent_rule} margin:0 0 .8em 0; line-height:1.5; }}
+            p.no-indent {{ text-indent:0; }}
+            a.seg-link {{ color: inherit; text-decoration: none; }}
+            a.seg-link:hover {{ text-decoration: underline; }}
+            .seg-count {{ color:#999; font-size:0.75em; margin-left:.3em; text-decoration: none; }}
+            h3 {{ background:#f5f5f5; padding:.4em .6em; color:#333; font-weight:500; }}
+            .para-title .para-index {{ font-weight:600; margin-right:.25em; color:#333; }}
+            .para-title .para-src {{ color:#333; }}
+            .para-title small {{ color:#666; }}
+            .back-to-chapter {{ margin:.2em 0 .8em 0; }}
+            .back-to-chapter a {{ font-size:.85em; color:#666; text-decoration:none; }}
+            .back-to-chapter a:hover {{ color:#333; text-decoration:underline; }}
+            .seg-images {{ margin:.25em 0 .5em 0; display:block; }}
+            .seg-images img {{ max-width:100%; height:auto; max-height:220px; margin-right:.4em; margin-bottom:.2em; border-radius:2px; object-fit:contain; }}
+            .avatar {{ width:36px; height:36px; border-radius:50%; object-fit:cover; vertical-align:middle; margin-right:.5em; }}
+            .seg-meta {{ color:#666; display:block; text-align:right; }}
+            li.seg-item {{ border-bottom:1px solid #ddd; padding:.5em 0 .6em 0; }}
+            li.seg-item:last-child {{ border-bottom:none; }}
+        """.encode(
+            "utf-8"
+        )
         self.style = epub.EpubItem(
             uid="style_main",
             file_name="styles/main.css",
             media_type="text/css",
-            content=(
-                (
-                    """
-                    body { color:#000 !important; line-height:1.5; }
-                    /* 统一段落：首行缩进 + 控制段间距（减少突增的行距感） */
-                    p { color:#000 !important; text-indent:2em; margin:0 0 .8em 0; line-height:1.5; }
-                    p.no-indent { text-indent:0; }
-                    a.seg-link { color: inherit; text-decoration: none; }
-                    a.seg-link:hover { text-decoration: underline; }
-                    .seg-count { color:#999; font-size:0.75em; margin-left:.3em; text-decoration: none; }
-                    /* 段评页标题：深灰文字、淡灰背景、正常字号 */
-                    h3 { background:#f5f5f5; padding:.4em .6em; color:#333; font-weight:500; }
-                    .para-title .para-index { font-weight:600; margin-right:.25em; color:#333; }
-                    .para-title .para-src { color:#333; }
-                    .para-title small { color:#666; }
-                    /* 返回本章链接更小更淡，悬停变色 */
-                    .back-to-chapter { margin:.2em 0 .8em 0; }
-                    .back-to-chapter a { font-size:.85em; color:#666; text-decoration:none; }
-                    .back-to-chapter a:hover { color:#333; text-decoration:underline; }
-                    /* 评论图片容器与图片样式 */
-                    .seg-images { margin:.25em 0 .5em 0; display:block; }
-                    .seg-images img { max-width:100%; height:auto; max-height:220px; margin-right:.4em; margin-bottom:.2em; border-radius:2px; object-fit:contain; }
-                    /* 头像样式 */
-                    .avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; vertical-align:middle; margin-right:.5em; }
-                    .seg-meta { color:#666; display:block; text-align:right; }
-                    /* 评论项分割线 */
-                    li.seg-item { border-bottom:1px solid #ddd; padding:.5em 0 .6em 0; }
-                    li.seg-item:last-child { border-bottom:none; }
-                    """
-                ).encode("utf-8")
-            ),
+            content=css,
         )
         self.book.add_item(self.style)
 
@@ -116,16 +120,15 @@ class EpubGenerator:
         self.book.add_item(chapter)
         self.chapters.append(chapter)
 
-    def add_aux_page(self, title, content, file_name):
-        """
-        添加不进入阅读顺序（spine）的 XHTML 页面，供超链接跳转查看。
-        该页面会加入 manifest（add_item），但不会加入 self.chapters/spine。
-        """
+    def add_aux_page(self, title, content, file_name, include_in_spine: bool = True):
+        """添加辅助页面；可选加入 spine/TOC（默认加入，解决阅读器无法访问的问题）。"""
         page = epub.EpubHtml(title=title, file_name=file_name, lang=self.book.language)
         page.content = content
         page.add_item(self.style)
         self.book.add_item(page)
-
+        if include_in_spine:
+            # 追加到章节序列，后续 toc/spine 统一使用 self.chapters
+            self.chapters.append(page)
 
     def add_img(self, file_path: str):
         img_name = os.path.basename(file_path)
@@ -155,7 +158,7 @@ class EpubGenerator:
         )
         self.book.add_item(img_item)
         # 2. （可选）加入 manifest，确保 toc/导航也能识别
-        # self.book.spine.append(img_item) 
+        # self.book.spine.append(img_item)
         # 無用，因後續已複寫 self.book.spine
 
     def generate(self, output_path, toc=None):
@@ -173,7 +176,7 @@ class EpubGenerator:
 
         # 添加导航文件 (NCX and Nav) - 需要在TOC和Spine设置之前添加
         self.book.add_item(epub.EpubNcx())
-        self.book.add_item(epub.EpubNav(title="目录")) # 設默認物件 title 為 "目录" 
+        self.book.add_item(epub.EpubNav(title="目录"))  # 設默認物件 title 為 "目录"
 
         # 设置默认目录（如果未提供）
         if not toc:

@@ -123,7 +123,11 @@ class ChapterDownloader:
         # 章节级段评并发执行器（控制并行处理多少章节的段评）
         chapter_comment_executor: Optional[ThreadPoolExecutor] = None
         comment_futures = []
-        if getattr(self.config, "enable_segment_comments", False):
+        seg_enabled = (
+            getattr(self.config, "enable_segment_comments", False)
+            and str(getattr(self.config, "novel_format", "epub")).lower() == "epub"
+        )
+        if seg_enabled:
             chapter_cw = max(1, int(getattr(self.config, "segment_comments_chapter_workers", 4)))
             chapter_comment_executor = ThreadPoolExecutor(max_workers=chapter_cw)
 
@@ -208,20 +212,17 @@ class ChapterDownloader:
             cols, _ = shutil.get_terminal_size(fallback=(120, 30))
         except Exception:
             cols = 120
-        # 预留尾部信息长度，大致估算
-        info_tail = 32  # ETA/计数等
-        # desc + 百分比固定区（含空格）估算 20
-        base_fixed = 20 + info_tail
-        # bar 宽度：最少 10
-        bar_total = max(10, cols - base_fixed)
-        bar_fmt = f"[{{elapsed}}] {{desc}} {{percentage:3.0f}}%|{{bar:{bar_total}}}| {{n_fmt}}/{{total_fmt}} ETA:{{remaining}}"
+        # 使用动态列宽：交给 tqdm 自适应栏宽度，不再固定 {bar:width}
+        bar_fmt = "[{}] {{desc}} {{percentage:3.0f}}%|{{bar}}| {{n_fmt}}/{{total_fmt}} ETA:{{remaining}}".format(
+            "{elapsed}"
+        )
         common_kwargs = dict(
             mininterval=0.25,
-            dynamic_ncols=False,  # 我们手工控制 ncols
+            dynamic_ncols=True,  # 让 tqdm 随终端宽度变化
             leave=True,
-            ncols=cols,
             bar_format=bar_fmt,
         )
+        last_cols = cols
         if self.config.use_official_api:
             download_bar = tqdm(total=len(groups), desc="章节下载 -", position=0, **common_kwargs)
             self._batch_progress_bar = download_bar
@@ -231,7 +232,15 @@ class ChapterDownloader:
         else:
             download_bar = tqdm(total=tasks_count, desc="章节下载 -", position=0, **common_kwargs)
             self._batch_progress_bar = None
-        save_bar = tqdm(total=tasks_count, desc="正文/段评保存", position=1, **common_kwargs)
+        save_bar = tqdm(total=tasks_count, desc="正文保存", position=1, **common_kwargs)
+        # 新增：段媒体进度条（仅在启用段评功能时出现，与每章节媒体预取完成联动）
+        media_bar = None
+        if seg_enabled:
+            media_bar = tqdm(total=tasks_count, desc="段评媒体下载/保存", position=2, **common_kwargs)
+            # 注入到 book_manager，供 _prefetch_media 中更新
+            book_manager.media_progress = media_bar
+        else:
+            book_manager.media_progress = None
         # 缓冲保存进度更新，减少闪烁
         pending_save_updates = 0
         save_update_batch = 1 if tasks_count <= 80 else 3
@@ -242,8 +251,7 @@ class ChapterDownloader:
             if pending_save_updates >= save_update_batch:
                 save_bar.update(pending_save_updates)
                 pending_save_updates = 0
-        # 已移除段评图片进度条，后台静默下载
-        book_manager.media_progress = None
+    # 注意：保持 book_manager.media_progress 指向 media_bar，供媒体预取线程更新
         self.log_system.enable_tqdm_handler(download_bar)
 
         with ThreadPoolExecutor(max_workers=max_workers) as exe:
@@ -254,6 +262,25 @@ class ChapterDownloader:
             spinner_idx = 0
             heartbeat_interval = 0.6
             last_heartbeat = time.time()
+            
+            def _maybe_resize_bars():
+                nonlocal last_cols
+                try:
+                    new_cols, _ = shutil.get_terminal_size(fallback=(120, 30))
+                except Exception:
+                    return
+                if not isinstance(new_cols, int) or new_cols <= 0:
+                    return
+                if new_cols == last_cols:
+                    return
+                last_cols = new_cols
+                for pb in (download_bar, save_bar, media_bar):
+                    if pb is not None:
+                        try:
+                            pb.ncols = new_cols
+                            pb.refresh(nolock=True)
+                        except Exception:
+                            pass
 
             while pending:
                 if self._stop_event.is_set():
@@ -262,6 +289,8 @@ class ChapterDownloader:
                     break
                 # wait 带超时，保证即使没有任务完成也会回到循环刷新 elapsed
                 done, _ = wait(pending, timeout=heartbeat_interval)
+                # 窗口大小变化时，尝试刷新各进度条宽度
+                _maybe_resize_bars()
                 for fut in list(done):
                     pending.discard(fut)
                     task = futures_map[fut]
@@ -274,7 +303,7 @@ class ChapterDownloader:
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
-                                    if chapter_comment_executor:
+                                    if seg_enabled and chapter_comment_executor:
                                         comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                     results["success"] += 1
                                 _save_bar_incr()
@@ -288,7 +317,7 @@ class ChapterDownloader:
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
-                                    if chapter_comment_executor:
+                                    if seg_enabled and chapter_comment_executor:
                                         comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                     results["success"] += 1
                                 _save_bar_incr()
@@ -301,7 +330,7 @@ class ChapterDownloader:
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
-                                if chapter_comment_executor:
+                                if seg_enabled and chapter_comment_executor:
                                     comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
                                 results["success"] += 1
                             _save_bar_incr()
@@ -328,6 +357,8 @@ class ChapterDownloader:
                             download_bar.refresh()
                         if save_bar is not None:
                             save_bar.refresh()
+                        if media_bar is not None:
+                            media_bar.refresh()
                     except Exception:
                         pass
         # 刷新剩余缓冲
@@ -335,25 +366,49 @@ class ChapterDownloader:
             save_bar.update(pending_save_updates)
             pending_save_updates = 0
         # 等待段评章节级并发任务完成
-        if comment_futures:
+        if seg_enabled and comment_futures:
             for cf in as_completed(comment_futures):
                 try:
                     _ = cf.result()
                 except Exception:
                     pass
-        if chapter_comment_executor:
+        if seg_enabled and chapter_comment_executor:
             chapter_comment_executor.shutdown(wait=True)
         # 保存状态 & 后处理（with 结束后）
         canceled = tasks_count - results["success"] - results["failed"]
         results["canceled"] = max(0, canceled)
         book_manager.save_download_status()
-        book_manager.finalize_spawn(chapters, canceled + results["failed"])
+        # 调用新的 finalize 方法（旧 finalize_spawn 已移除）
+        result_code = 0 if (canceled + results["failed"]) == 0 else 1
+        book_manager.finalize(chapters, result=result_code)
 
         # 恢复被移除的控制台 handler；文件 handler 始终未移除
         self.log_system.disable_tqdm_handler()
         for h in removed_handlers:
             self.logger.addHandler(h)
         signal.signal(signal.SIGINT, self._orig_handler)
+
+        # --- 显式关闭进度条，防止程序退出阶段 tqdm 再次刷新导致“多余刷新” ---
+        try:
+            if download_bar is not None:
+                download_bar.close()
+        except Exception:
+            pass
+        try:
+            if save_bar is not None:
+                save_bar.close()
+        except Exception:
+            pass
+        try:
+            if media_bar is not None:
+                media_bar.close()
+        except Exception:
+            pass
+        # 解除引用（帮助 GC，避免后台线程持有）
+        try:
+            book_manager.media_progress = None
+        except Exception:
+            pass
 
         return results
 
@@ -364,7 +419,7 @@ class ChapterDownloader:
         失败不影响主流程。
         """
         try:
-            if not getattr(self.config, "enable_segment_comments", False):
+            if not (getattr(self.config, "enable_segment_comments", False) and str(getattr(self.config, "novel_format", "epub")).lower() == "epub"):
                 return
             # 统计
             stats_wrap = self.network.fetch_para_comment_stats(chapter_id)

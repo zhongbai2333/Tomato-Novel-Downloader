@@ -285,9 +285,8 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "JPEG质量(0-100)": ("jpeg_quality", int),
         "HEIC转JPEG": ("convert_heic_to_jpeg", bool),
         "保留原始HEIC文件": ("keep_heic_original", bool),
-        # 章节模板
-        "启用自定义章节模板": ("enable_chapter_template", bool),
-        "章节模板文件路径": ("chapter_template_file", str),
+        # 段落缩进
+        "EPUB首行缩进(em)": ("first_line_indent_em", float),
     }
 
     def __init__(self, app: "TNDApp"):
@@ -312,8 +311,13 @@ class ConfigMenu(urwid.WidgetPlaceholder):
 
             # ----- 布尔型配置：用 CheckBox -----
             if typ is bool:
-                # Create a CheckBox and capture `field` via default arg in lambda
-                cb = urwid.CheckBox(label=name, state=bool(cur_val))
+                # 针对 段评 在 TXT 格式下的提示与只读显示
+                label = name
+                state = bool(cur_val)
+                if field == "enable_segment_comments" and getattr(cfg, "novel_format", "epub") == "txt":
+                    label = f"{name}（TXT 格式不支持，将自动关闭/切换为EPUB）"
+                    state = False  # 界面强制显示未勾选
+                cb = urwid.CheckBox(label=label, state=state)
                 urwid.connect_signal(
                     cb,
                     "change",
@@ -349,9 +353,17 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         - 保存 config 并重建整张页面
         """
         cfg = self.app.config
+
+        # —— TXT 与 段评 互斥：
+        # 1) 当勾选“是否下载段评”为 True 且当前为 TXT 时，自动切换到 EPUB 并提示
+        if field == "enable_segment_comments" and new_state:
+            if getattr(cfg, "novel_format", "epub") == "txt":
+                cfg.novel_format = "epub"
+                self.app.show_popup("已自动将保存格式切换为 EPUB 以启用段评功能。")
+        # 其余布尔项照常赋值
         setattr(cfg, field, new_state)
 
-        # —— 互斥逻辑：使用官方 API 与 使用 helloplhm_qwq API 不能同时为 True ——
+    # —— 互斥逻辑：使用官方 API 与 使用 helloplhm_qwq API 不能同时为 True ——
         if field == "use_official_api" and new_state:
             cfg.use_helloplhm_qwq_api = False
 
@@ -420,6 +432,10 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                 if field == "novel_format":
                     if new_val not in ("txt", "epub"):
                         raise ValueError("小说保存格式必须为 txt 或 epub")
+                    # novel_format=txt 时，直接关闭段评以保持互斥
+                    if new_val == "txt" and getattr(cfg, "enable_segment_comments", False):
+                        cfg.enable_segment_comments = False
+                        self.app.show_popup("TXT 格式不支持段评，已自动关闭段评功能。")
                 if field in (
                     "max_workers",
                     "request_timeout",
@@ -461,6 +477,13 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                         "由于启用 helloplhm_qwq API，已自动调整：\n"
                         "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
                     )
+
+                # 3.1) 互斥逻辑：段评 与 TXT
+                if field == "enable_segment_comments" and bool(new_val):
+                    if getattr(cfg, "novel_format", "epub") == "txt":
+                        # 当用户强制在编辑框里把 enable_segment_comments 设为 True 时，自动切到 EPUB
+                        cfg.novel_format = "epub"
+                        self.app.show_popup("已自动将保存格式切换为 EPUB 以启用段评功能。")
 
                 # 4) 保存并返回
                 setattr(cfg, field, new_val)
@@ -862,6 +885,8 @@ class TNDApp:
         self._spinner_index = 0
         self._spinner_alarm = None
         self.show_main()
+        # 封面预览状态标志防止重复进入
+        self._in_cover_preview = False
 
     # --------------------------------------------------------
     # 页面切换方法
@@ -927,7 +952,6 @@ class TNDApp:
         """
         在当前界面叠加一个 MessagePopup 弹窗，按 q/Q/Enter/Esc 时仅关闭弹窗并恢复到弹前界面。
         """
-
         # 1. 先把“弹窗之前”的界面保存起来
         old_widget = self.main_placeholder.original_widget
 
@@ -957,11 +981,15 @@ class TNDApp:
         """
         暂时退出 Urwid 界面，打印整屏 ASCII 封面，用户按任意键后恢复到原来的 UI。
         """
+        if getattr(self, "_in_cover_preview", False):
+            return
+        self._in_cover_preview = True
         # 1. 找到封面图片路径
         cover_path = Path(self.config.get_status_folder_path) / f"{book_name}.jpg"
         if not cover_path.exists():
             # 如果没有封面文件，跳出一个弹窗提示
             self.show_popup("未找到封面图片，无法预览")
+            self._in_cover_preview = False
             return
 
         # 2. 先把 Urwid 界面画面清掉，恢复到普通终端模式
@@ -973,12 +1001,25 @@ class TNDApp:
         preview_ascii(cover_path)
 
         # 4. 等待用户按任意键（因为我们现在已经不在 Urwid 的 MainLoop 里）
+        import sys
         try:
             self._pause_mouse_tracking()
-            input("\n\n<按回车键返回>")
+            # Windows 下用 msvcrt 任意键立即返回；其它平台 fallback 到 input
+            try:
+                import msvcrt  # type: ignore
+                print("\n<按任意键返回>")
+                msvcrt.getwch()
+                # 清理可能残留的额外按键
+                while msvcrt.kbhit():
+                    msvcrt.getwch()
+            except Exception:
+                try:
+                    input("\n\n<按回车键返回>")
+                except EOFError:
+                    pass
             self._resume_mouse_tracking()
-        except Exception:
-            pass
+        finally:
+            self._in_cover_preview = False
 
         # 5. 用户按回车后，重新绘制原先的 TUI 界面
         # 先清屏，然后告诉 Urwid 画一次当前画面
@@ -1069,6 +1110,53 @@ class TNDApp:
             self.loop.screen.set_mouse_tracking(True)
         except Exception:
             pass
+
+    # -------- 键盘输入辅助 --------
+    def _flush_key_buffer(self):
+        """在 Windows 控制台清空残留按键，避免被后续读取；其它平台忽略。"""
+        try:
+            import msvcrt  # type: ignore
+            while msvcrt.kbhit():
+                try:
+                    msvcrt.getwch()
+                except Exception:
+                    break
+        except Exception:
+            pass
+
+    def _wait_for_enter(self, prompt: str):
+        """只等待 Enter，忽略其它按键与鼠标滚轮产生的序列，不回显。跨平台回退到 input。"""
+        try:
+            self._pause_mouse_tracking()
+            # Windows 下使用 msvcrt 无回显方式读取
+            try:
+                import msvcrt  # type: ignore
+                print(prompt, end="", flush=True)
+                # 先清空残留按键
+                self._flush_key_buffer()
+                while True:
+                    ch = msvcrt.getwch()
+                    # 特殊键前缀（方向键等）：\x00 或 \xe0，额外再读一次丢弃
+                    if ch in ("\x00", "\xe0"):
+                        try:
+                            if msvcrt.kbhit():
+                                msvcrt.getwch()
+                        except Exception:
+                            pass
+                        continue
+                    if ch in ("\r", "\n"):
+                        break
+                    # 其余字符一律忽略
+                print("")
+                return
+            except Exception:
+                # 其它平台退化到 input
+                try:
+                    input(prompt)
+                except EOFError:
+                    pass
+        finally:
+            self._resume_mouse_tracking()
 
     # --------------------------------------------------------
     # 解析用户输入并启动下载流程
@@ -1172,9 +1260,29 @@ class TNDApp:
             )
 
             def on_confirm(btn):
-                manager = BookManager(
-                    save_path, book_id, book_name, author, tags, description
-                )
+                # 适配新版 BookManager，仅接受 (config, logger)，其余元数据手动赋值
+                # 先生成状态目录（供 BookManager 使用）
+                try:
+                    self.config.status_folder_path(book_name, book_id, save_path)
+                except Exception:
+                    pass
+                manager = BookManager(self.config, self.logger)
+                manager.book_name = book_name or ""
+                manager.book_id = book_id or ""
+                manager.author = author or ""
+                try:
+                    # tags 原为列表: [完结状态, 其他标签...]
+                    manager.tags = "|".join(tags) if isinstance(tags, (list, tuple)) else str(tags or "")
+                    if isinstance(tags, (list, tuple)) and tags:
+                        manager.end = (str(tags[0]).find("完结") != -1)
+                except Exception:
+                    manager.tags = ""
+                manager.description = description or ""
+                # 输出目录沿用用户选择的 save_path
+                try:
+                    setattr(self.config, "output_dir", save_path)
+                except Exception:
+                    pass
                 downloader = ChapterDownloader(book_id, network)
 
                 # 获取章节列表也加加载遮罩
@@ -1285,11 +1393,8 @@ class TNDApp:
             result = downloader.download_book(manager, manager.book_name, chapters)
         except Exception as e:
             # 异常时也先暂停鼠标捕获，再做 input
-            self._pause_mouse_tracking()
             print(f"\n下载异常中止: {e}\n")
-            choice = input("按回车返回 TUI …")
-            # input 结束后再重新开启鼠标（如果需要的话）
-            self._resume_mouse_tracking()
+            self._wait_for_enter("按回车返回 TUI …")
             # 清屏并把 Urwid 主界面重新绘制
             os.system("cls" if os.name == "nt" else "clear")
             self.show_main()
@@ -1321,25 +1426,20 @@ class TNDApp:
                         )
                     except Exception as e2:
                         # 再次出错时，把鼠标再暂停输入
-                        self._pause_mouse_tracking()
                         print(f"\n重试时出现异常：{e2}\n")
-                        input("按回车继续 …")
-                        self._resume_mouse_tracking()
+                        self._wait_for_enter("按回车继续 …")
                     else:
                         print(
                             f"\n重试完成！本次重试成功 {result['success']} 章，取消 {result['canceled']} 章，仍失败 {result['failed']} 章。\n"
                         )
-                        input("按回车继续 …")
+                        self._wait_for_enter("按回车继续 …")
 
         # 5. 最终提示并等回车
         # 同样暂停鼠标捕获，再让用户回车，然后恢复鼠标
-        self._pause_mouse_tracking()
         print(
             f"\n最终结果：成功 {result['success']} 章，取消 {result['canceled']} 章，失败 {result['failed']} 章。\n"
         )
-        input("按回车返回 TUI …")
-        self._resume_mouse_tracking()
-
+        self._wait_for_enter("按回车返回 TUI …")
         # 6. 清屏并恢复Urwid主界面
         os.system("cls" if os.name == "nt" else "clear")
         self.show_main()

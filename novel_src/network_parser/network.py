@@ -15,6 +15,7 @@ from ..base_system.context import GlobalContext
 from ..book_parser.parser import ContentParser
 from ..offical_tools.downloader import search_api
 from fanqie_mod import get_iid as _fanqie_get_iid
+from .review_parser import parse_comment_list_api
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
@@ -379,12 +380,32 @@ class NetworkClient:
                 # 仅取前 limit 条
                 if isinstance(data_list, list) and limit > 0:
                     data_list = data_list[:limit]
+
+                # 结构化解析：集中在 network 层完成
+                raw_wrapper = {
+                    "data": {
+                        "common_list_info": {
+                            "cursor": cursor,
+                            "has_more": has_more,
+                            "total": total,
+                        },
+                        "data_list": data_list,
+                        "extra": data.get("extra") or {},
+                    }
+                }
+                try:
+                    _meta, reviews = parse_comment_list_api(raw_wrapper)
+                except Exception:
+                    _meta, reviews = {}, []
+
                 return {
                     "total": total,
                     "has_more": has_more,
                     "cursor": cursor,
                     "para_index": para_index,
-                    "data_list": data_list,
+                    "data_list": data_list,  # 原始列表（向后兼容）
+                    "reviews": reviews,      # 结构化后的评论列表
+                    "para_content": (_meta.get("para_content") if isinstance(_meta, dict) else None) or ((data.get("extra") or {}).get("para_content") if isinstance(data.get("extra"), dict) else None),
                     "extra": data.get("extra"),
                 }
             except Exception as e:

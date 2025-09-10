@@ -64,9 +64,8 @@ def show_config_menu(config: Config):
         {"name": "JPEG质量(0-100)", "field": "jpeg_quality", "type": int},
         {"name": "HEIC转JPEG", "field": "convert_heic_to_jpeg", "type": bool},
         {"name": "保留原始HEIC文件", "field": "keep_heic_original", "type": bool},
-        # 章节模板
-        {"name": "启用自定义章节模板", "field": "enable_chapter_template", "type": bool},
-        {"name": "章节模板文件路径", "field": "chapter_template_file", "type": str},
+        # 段落缩进
+        {"name": "EPUB首行缩进(em)", "field": "first_line_indent_em", "type": float},
         # 旧界面切换
         {"name": "是否使用老版本命令行界面(需重启)", "field": "old_cli", "type": bool},
     ]
@@ -79,7 +78,10 @@ def show_config_menu(config: Config):
                 display = ",".join(map(str, val))
             else:
                 display = val
-            print(f"{idx}. {opt['name']}: {display}")
+            name = opt['name']
+            if opt["field"] == "enable_segment_comments" and getattr(config, "novel_format", "epub") == "txt":
+                name = f"{name}（TXT 不支持）"
+            print(f"{idx}. {name}: {display}")
         print("0. 返回主菜单")
 
     while True:
@@ -149,7 +151,7 @@ def show_config_menu(config: Config):
                 print(f"创建目录失败: {e}")
                 continue
 
-        # 互斥与自动调整
+    # 互斥与自动调整
         if field == "use_official_api" and new_val:
             if getattr(config, "use_helloplhm_qwq_api", False):
                 config.use_helloplhm_qwq_api = False
@@ -167,6 +169,18 @@ def show_config_menu(config: Config):
                 config.max_wait_time = 1200; msgs.append("max_wait_time>=1200")
             if msgs:
                 print("启用 helloplhm_qwq API 已自动调整: " + "; ".join(msgs))
+
+        # novel_format 与 段评互斥：
+        # 1) 当用户把 novel_format 设为 txt，则强制关闭段评并提示
+        if field == "novel_format" and new_val == "txt":
+            if getattr(config, "enable_segment_comments", False):
+                config.enable_segment_comments = False
+                print("TXT 格式不支持段评，已自动关闭段评功能。")
+        # 2) 当用户开启段评而当前为 txt，自动切换到 epub 并提示
+        if field == "enable_segment_comments" and bool(new_val):
+            if getattr(config, "novel_format", "epub") == "txt":
+                config.novel_format = "epub"
+                print("已自动将保存格式切换为 EPUB 以启用段评功能。")
 
         setattr(config, field, new_val)
         try:
@@ -432,7 +446,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             if book_name is None:
                 continue
 
-            folder_path = config.get_status_folder_path
+            # 先生成状态目录（与新 main 保持一致，便于封面与下载器使用）
+            try:
+                folder_path = config.status_folder_path(book_name, book_id, save_path)
+            except Exception:
+                folder_path = Path(config.default_save_dir) / f"{book_id}_{book_name}"
+                folder_path.mkdir(parents=True, exist_ok=True)
             cover_path = folder_path / f"{book_name}.jpg"
             preview_ascii(cover_path)
             logger.info(f"\n书名: {book_name}")
@@ -441,9 +460,22 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             logger.info(f"标签: {'|'.join(tags[1:])}")
             logger.info(f"简介: {description[:50]}...")  # 显示前50字符
 
-            manager = BookManager(
-                save_path, book_id, book_name, author, tags, description
-            )
+            # 适配新版 BookManager 构造 (config, logger)，其余元数据手动赋值
+            manager = BookManager(config, logger)
+            manager.book_name = book_name or ""
+            manager.book_id = book_id or ""
+            manager.author = author or ""
+            try:
+                manager.tags = "|".join(tags) if isinstance(tags, (list, tuple)) else str(tags or "")
+                if isinstance(tags, (list, tuple)) and tags:
+                    manager.end = (str(tags[0]).find("完结") != -1)
+            except Exception:
+                manager.tags = ""
+            manager.description = description or ""
+            try:
+                setattr(config, "output_dir", save_path)
+            except Exception:
+                pass
 
             log_system.add_safe_exit_func(manager.save_download_status)
 
