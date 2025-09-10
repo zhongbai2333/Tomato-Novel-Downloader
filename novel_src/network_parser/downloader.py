@@ -134,6 +134,8 @@ class ChapterDownloader:
         # ============ 准备要下载的章节列表 & 分组 ============
 
         # 1. 官方批量模式（修改：每 50 章一组；get_contents 接受 List[str]）
+        # 记录本次会处理的章节 ID（用于段评进度条最终兜底）
+        target_ids: List[str] = []
         if self.config.use_official_api:
             to_download = [
                 ch
@@ -141,6 +143,7 @@ class ChapterDownloader:
                 if (ch["id"] not in book_manager.downloaded)
                 or (book_manager.downloaded.get(ch["id"])[1] == "Error")
             ]
+            target_ids = [ch["id"] for ch in to_download]
             # 按 50 章一组（原为 10）
             groups = [
                 to_download[i : i + 25] for i in range(0, len(to_download), 25)
@@ -172,6 +175,7 @@ class ChapterDownloader:
             id_groups: List[List[str]] = [
                 id_list[i : i + 300] for i in range(0, len(id_list), 300)
             ]
+            target_ids = id_list[:]
             # 对应于每个 ID 列表，我们还要记住“这一组对应哪几个章节”，
             # 以便将来存储和统计时知道哪些 ID 与哪个章节绑定。这里可以用一个 map。
             # 但为了简单，我们只传递 ID 列表给任务，后面结果处理时只关注 ID 即可。
@@ -197,6 +201,7 @@ class ChapterDownloader:
             ]
             tasks_count = len(to_download)
             max_workers = min(self.config.max_workers, len(self.config.api_endpoints))
+            target_ids = [ch["id"] for ch in to_download]
 
             def get_submit(exe):
                 return {exe.submit(self._download_single, ch): ch for ch in to_download}
@@ -314,6 +319,12 @@ class ChapterDownloader:
                             for cid, (content, title) in batch_out.items():
                                 if content == "Error":
                                     book_manager.save_error_chapter(cid, cid)
+                                    # 段评进度条：失败也应 +1，避免尾部不满
+                                    if seg_enabled:
+                                        try:
+                                            book_manager._media_progress_mark(cid, "error")
+                                        except Exception:
+                                            pass
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
@@ -328,6 +339,11 @@ class ChapterDownloader:
                             for cid, (content, title) in batch_out.items():
                                 if content == "Error":
                                     book_manager.save_error_chapter(cid, cid)
+                                    if seg_enabled:
+                                        try:
+                                            book_manager._media_progress_mark(cid, "error")
+                                        except Exception:
+                                            pass
                                     results["failed"] += 1
                                 else:
                                     book_manager.save_chapter(cid, title, content)
@@ -341,6 +357,11 @@ class ChapterDownloader:
                             cid = task["id"]
                             if content == "Error":
                                 book_manager.save_error_chapter(cid, task["title"])
+                                if seg_enabled:
+                                    try:
+                                        book_manager._media_progress_mark(cid, "error")
+                                    except Exception:
+                                        pass
                                 results["failed"] += 1
                             else:
                                 book_manager.save_chapter(cid, title, content)
@@ -386,6 +407,13 @@ class ChapterDownloader:
                     _ = cf.result()
                 except Exception:
                     pass
+        # 段评进度条兜底：确保本次涉及的所有章节都至少 +1
+        if seg_enabled:
+            try:
+                for cid in target_ids:
+                    book_manager._media_progress_mark(cid, "final_fill")
+            except Exception:
+                pass
         if seg_enabled and chapter_comment_executor:
             chapter_comment_executor.shutdown(wait=True)
         # 保存状态 & 后处理（with 结束后）

@@ -21,8 +21,9 @@ class TqdmLoggingHandler(logging.StreamHandler):
     def emit(self, record):
         msg = self.format(record)
         try:
-            self.tqdm_instance.clear()      # ← 新增：抹掉旧条行
-            self.tqdm_instance.write(msg)   # 原来就有：写日志 + 重新画条
+            # 仅用 tqdm.write 输出日志，避免手动 clear 破坏多进度条定位，
+            # 这在 Windows 下偶发会导致“进度条被顶上去”。
+            self.tqdm_instance.write(msg)
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception:
