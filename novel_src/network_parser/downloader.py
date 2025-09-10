@@ -218,8 +218,9 @@ class ChapterDownloader:
         )
         common_kwargs = dict(
             mininterval=0.25,
-            dynamic_ncols=True,  # 让 tqdm 随终端宽度变化
+            dynamic_ncols=False,  # 改为手动控制，提升 Windows 稳定性
             leave=True,
+            ncols=cols,
             bar_format=bar_fmt,
         )
         last_cols = cols
@@ -241,6 +242,14 @@ class ChapterDownloader:
             book_manager.media_progress = media_bar
         else:
             book_manager.media_progress = None
+        # 刚创建后强制刷新一次，确保初始 ncols 生效
+        for pb in (download_bar, save_bar, media_bar):
+            if pb is not None:
+                try:
+                    pb.ncols = cols
+                    pb.refresh(nolock=True)
+                except Exception:
+                    pass
         # 缓冲保存进度更新，减少闪烁
         pending_save_updates = 0
         save_update_batch = 1 if tasks_count <= 80 else 3
@@ -251,6 +260,11 @@ class ChapterDownloader:
             if pending_save_updates >= save_update_batch:
                 save_bar.update(pending_save_updates)
                 pending_save_updates = 0
+                try:
+                    save_bar.ncols = last_cols
+                    save_bar.refresh(nolock=True)
+                except Exception:
+                    pass
     # 注意：保持 book_manager.media_progress 指向 media_bar，供媒体预取线程更新
         self.log_system.enable_tqdm_handler(download_bar)
 

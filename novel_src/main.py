@@ -877,7 +877,7 @@ class TNDApp:
             palette=PALETTE,
             unhandled_input=self._global_key_handler,
         )
-    # =============== Loading / Spinner ===============
+        # =============== Loading / Spinner ===============
         self._loading_active = False
         self._loading_prev_widget = None
         self._spinner_widget = None  # type: ignore
@@ -981,6 +981,13 @@ class TNDApp:
         """
         暂时退出 Urwid 界面，打印整屏 ASCII 封面，用户按任意键后恢复到原来的 UI。
         """
+        # 简短冷却，避免刚退出后残余回车再次触发
+        try:
+            import time as _t
+            if getattr(self, "_cover_preview_cooldown_until", 0) > _t.time():
+                return
+        except Exception:
+            pass
         if getattr(self, "_in_cover_preview", False):
             return
         self._in_cover_preview = True
@@ -1007,19 +1014,32 @@ class TNDApp:
             # Windows 下用 msvcrt 任意键立即返回；其它平台 fallback 到 input
             try:
                 import msvcrt  # type: ignore
-                print("\n<按任意键返回>")
+                # 进入等待前先清空残留按键，避免需要按两次
+                try:
+                    while msvcrt.kbhit():
+                        msvcrt.getwch()
+                except Exception:
+                    pass
+                print("\n<按两次任意键返回>")
+                # 读取一次按键即可返回
                 msvcrt.getwch()
                 # 清理可能残留的额外按键
                 while msvcrt.kbhit():
                     msvcrt.getwch()
             except Exception:
                 try:
-                    input("\n\n<按回车键返回>")
+                    input("\n\n<按两次回车键返回>")
                 except EOFError:
                     pass
             self._resume_mouse_tracking()
         finally:
             self._in_cover_preview = False
+            # 设置冷却窗口，避免返回后立即再次触发
+            try:
+                import time as _t
+                self._cover_preview_cooldown_until = _t.time() + 0.5
+            except Exception:
+                pass
 
         # 5. 用户按回车后，重新绘制原先的 TUI 界面
         # 先清屏，然后告诉 Urwid 画一次当前画面
