@@ -1,6 +1,6 @@
 name: 文档改进
 description: 文档/README/注释相关的问题或建议
-title: "[Doc]: "
+title: "[Doc] "
 labels: ["documentation", "new"]
 body:
   - type: textarea

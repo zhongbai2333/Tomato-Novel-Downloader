@@ -1,6 +1,6 @@
 name: "Bug 报告"
 description: 报告你遇到的问题并附上最近的日志
-title: "[BUG]: "
+title: "[BUG] "
 labels: ["bug", "new"]
 body:
   - type: markdown

@@ -1,6 +1,6 @@
-name: 其他（Other）
+name: 其他
 description: 其他不属于以上分类的内容
-title: "[Other]: "
+title: "[Other] "
 labels: ["new"]
 body:
   - type: textarea
