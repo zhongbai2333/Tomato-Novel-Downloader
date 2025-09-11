@@ -1,4 +1,4 @@
-name: 疑问
+name: "疑问"
 description: 提出问题、使用疑问或求助
 title: "[Question] "
 labels: ["question", "new"]
