@@ -94,6 +94,17 @@ class Config(BaseConfig):
         default=2.0, description="EPUB 段落首行缩进 em 数 (0 表示无缩进)"
     )
 
+    # 媒体体积与数量控制
+    media_limit_per_chapter: int = Field(
+        default=0, description="每章最多下载的媒体数（0 表示不限制）"
+    )
+    media_max_dimension_px: int = Field(
+        default=1280, description="图片最长边像素上限，>0 时会缩放并转成 JPEG 以节省体积"
+    )
+    media_total_limit_mb: int = Field(
+        default=0, description="本次会话媒体总下载上限（MB，0 表示不限制）"
+    )
+
     @property
     def default_save_dir(self) -> Path:
         """获取默认保存目录路径对象"""

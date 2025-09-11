@@ -113,6 +113,19 @@ class EpubGenerator:
         chapter = epub.EpubHtml(
             title=title, file_name=file_name, lang=self.book.language
         )
+        # 兜底：避免内容为空导致 lxml 抛出 "Document is empty"
+        if not isinstance(content, str) or not content.strip():
+            fallback = (
+                f"<h3>{title or '无标题'}</h3>"
+                "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
+            )
+            try:
+                GlobalContext.get_logger().debug(
+                    f"[EPUB] 章节 '{title}' 内容为空，使用占位内容写入（{file_name}）"
+                )
+            except Exception:
+                pass
+            content = fallback
         chapter.content = content
         chapter.add_item(self.style)
 
@@ -123,6 +136,19 @@ class EpubGenerator:
     def add_aux_page(self, title, content, file_name, include_in_spine: bool = True):
         """添加辅助页面；可选加入 spine/TOC（默认加入，解决阅读器无法访问的问题）。"""
         page = epub.EpubHtml(title=title, file_name=file_name, lang=self.book.language)
+        # 兜底：辅助页也不允许为空
+        if not isinstance(content, str) or not content.strip():
+            fallback = (
+                f"<h3>{title or '页面'}</h3>"
+                "<p class='no-indent'>（空页面）</p>"
+            )
+            try:
+                GlobalContext.get_logger().debug(
+                    f"[EPUB] 辅助页 '{title}' 内容为空，使用占位内容写入（{file_name}）"
+                )
+            except Exception:
+                pass
+            content = fallback
         page.content = content
         page.add_item(self.style)
         self.book.add_item(page)

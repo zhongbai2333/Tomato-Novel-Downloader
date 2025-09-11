@@ -22,6 +22,8 @@ class MediaDownloader:
         self._seen_urls: set[str] = set()
         self._inflight: set[str] = set()
         self._dl_lock = threading.Lock()
+        # 会话级体积统计（字节）
+        self._session_bytes = 0
 
     # --------- 供外部使用的工具 ---------
     def get_cached_media_filename(self, url: str) -> str | None:
@@ -137,9 +139,16 @@ class MediaDownloader:
             except Exception:
                 pass
 
+            # 每章上限：0 表示不限制
+            try:
+                per_chapter_cap = int(getattr(self.config, "media_limit_per_chapter", 0))
+            except Exception:
+                per_chapter_cap = 0
+            capped_unique = unique[:per_chapter_cap] if per_chapter_cap and per_chapter_cap > 0 else unique
+
             completed = 0
             with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-                futures = [ex.submit(self._download_comment_image, u) for u in unique]
+                futures = [ex.submit(self._download_comment_image, u) for u in capped_unique]
                 for f in as_completed(futures):
                     try:
                         _ = f.result()
@@ -154,7 +163,7 @@ class MediaDownloader:
             except Exception:
                 pass
 
-            return (len(unique), completed, img_cnt, avatar_cnt)
+            return (len(capped_unique), completed, img_cnt, avatar_cnt)
         except Exception:
             return (0, 0, 0, 0)
 
@@ -372,6 +381,19 @@ class MediaDownloader:
                     resp = requests.get(url, headers=headers, timeout=timeout)
                     sc = resp.status_code
                     if sc == 200 and resp.content:
+                        # 会话总量上限：0 表示不限制
+                        try:
+                            total_cap_mb = int(getattr(self.config, "media_total_limit_mb", 0))
+                        except Exception:
+                            total_cap_mb = 0
+                        if total_cap_mb and total_cap_mb > 0:
+                            with self._dl_lock:
+                                if (self._session_bytes + len(resp.content)) > total_cap_mb * 1024 * 1024:
+                                    try:
+                                        self.logger.info("[媒体] 已达会话媒体总量上限，跳过后续媒体下载。")
+                                    except Exception:
+                                        pass
+                                    return None
                         # ---- 内容类型与扩展处理 ----
                         ctype = resp.headers.get("Content-Type", "").lower()
                         url_lower = url.lower()
@@ -478,8 +500,37 @@ class MediaDownloader:
                                     pass
                         except Exception:
                             pass
+                        # 尺寸压缩：最长边不超过 media_max_dimension_px，且转成 JPEG
+                        try:
+                            max_dim = int(getattr(self.config, "media_max_dimension_px", 1280))
+                        except Exception:
+                            max_dim = 1280
+                        if isinstance(max_dim, int) and max_dim > 0:
+                            try:
+                                from io import BytesIO
+                                from PIL import Image
+                                with Image.open(BytesIO(data_bytes)) as im:
+                                    im_format = "JPEG"
+                                    im = im.convert("RGB")
+                                    w, h = im.size
+                                    scale = 1.0
+                                    if max(w, h) > max_dim and max_dim > 0:
+                                        scale = max_dim / float(max(w, h))
+                                    if scale < 1.0:
+                                        new_size = (int(w * scale), int(h * scale))
+                                        im = im.resize(new_size)
+                                    qj = int(getattr(self.config, "jpeg_quality", 85))
+                                    buf_out = BytesIO()
+                                    im.save(buf_out, format=im_format, quality=max(1, min(100, qj)))
+                                    data_bytes = buf_out.getvalue()
+                                    file_name2 = f"{name}.jpg"
+                                    out_path2 = img_dir / file_name2
+                            except Exception:
+                                pass
                         with open(out_path2, "wb") as f:
                             f.write(data_bytes)
+                        with self._dl_lock:
+                            self._session_bytes += len(data_bytes)
                         # 标记 seen
                         try:
                             with self._dl_lock:

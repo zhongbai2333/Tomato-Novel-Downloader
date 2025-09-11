@@ -1,0 +1,20 @@
+name: 文档改进
+description: 文档/README/注释相关的问题或建议
+title: "[Doc]: "
+labels: ["documentation", "new"]
+body:
+  - type: textarea
+    id: doc-issue
+    attributes:
+      label: 文档问题/建议
+      description: 哪段文档不清晰或需要增补？
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: 参考/示例（可选）
+      description: 提供你认为清晰的文档例子或链接。
+    validations:
+      required: false
