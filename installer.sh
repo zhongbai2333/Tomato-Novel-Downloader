@@ -214,8 +214,10 @@ case "$PLATFORM" in
                 BINARY_NAME="TomatoNovelDownloader-Linux_amd64-v${VERSION}"
             elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
                 BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
+            elif [[ "$ARCH" == "armv7l" || "$ARCH" == "armv7" || "$ARCH" == "armhf" ]]; then
+                BINARY_NAME="TomatoNovelDownloader-Linux_armv7l-v${VERSION}"
             else
-                log_error "不支持的 Linux 架构 [${ARCH}]！仅支持 x86_64/amd64 与 aarch64/arm64。"
+                log_error "不支持的 Linux 架构 [${ARCH}]！仅支持 x86_64/amd64, aarch64/arm64, armv7l/armv7/armhf。"
                 exit 1
             fi
         fi

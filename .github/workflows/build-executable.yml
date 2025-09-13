@@ -181,6 +181,66 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-Linux_arm64-*
 
+  build-linux-armv7:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU (armv7)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: Run build on armv7 (armhf) via run-on-arch-action
+        uses: uraimo/run-on-arch-action@v2.7.2
+        with:
+          arch: armv7
+          distro: ubuntu_latest
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -y
+            apt-get install -y python3 python3-pip python3-venv python3-dev build-essential curl git
+            python3 -m pip install --upgrade pip
+            pip install Cython
+          run: |
+            set -e
+            if [ -z "${{ secrets.PYD_PAT }}" ]; then echo "缺少 PYD_PAT，无法克隆私有仓库 B" >&2; exit 1; fi
+            git clone https://${{ secrets.PYD_PAT }}@github.com/zhongbai2333/Fanqie-Novel-Official-API-Helper B
+            cd B
+            python3 setup.py build_ext --inplace || true
+            if [ -f setup_offical.py ]; then python3 setup_offical.py build_ext --inplace || true; fi
+            cd ..
+            cp B/client_mod.*.so . 2>/dev/null || true
+            cp B/fanqie_mod.*.so . 2>/dev/null || true
+            cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+            python3 -m pip install -r requirements.txt
+            python3 -m pip install pyinstaller
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              VERSION="${{ github.ref_name }}"
+            else
+              VERSION="sha-${{ github.sha }}"
+            fi
+            pyinstaller \
+              --onefile \
+              --strip \
+              --exclude-module _bootlocale \
+              --exclude-module _cffi_backend \
+              --collect-data fake_useragent \
+              --hidden-import=portalocker \
+              --hidden-import=TTEncrypt \
+              -i img/Tomato-downlaoder-ico.ico \
+              --name=TomatoNovelDownloader-Linux_armv7l-$VERSION \
+              --clean \
+              main.py
+            ls -l dist
+
+      - name: Upload Linux ARMv7 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-armv7-build
+          path: dist/TomatoNovelDownloader-Linux_armv7l-*
+
   build-windows:
     runs-on: windows-latest
     steps:
@@ -447,7 +507,7 @@ jobs:
           path: dist/TomatoNovelDownloader-macOS_amd64-*
 
   publish-release:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-macos-intel]
+    needs: [build-linux, build-linux-arm64, build-linux-armv7, build-windows, build-macos, build-macos-intel]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
@@ -520,6 +580,7 @@ jobs:
           files: |
             release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
+            release-artifacts/linux-armv7-build/TomatoNovelDownloader-Linux_armv7l-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
             release-artifacts/macos-intel-build/TomatoNovelDownloader-macOS_amd64-*

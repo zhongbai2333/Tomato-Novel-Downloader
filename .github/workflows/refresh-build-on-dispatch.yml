@@ -193,6 +193,67 @@ jobs:
           name: linux-arm64-build
           path: dist/TomatoNovelDownloader-*
 
+  build-linux-armv7:
+    name: 构建 Linux ARMv7 可执行文件
+    needs: fetch_and_clean
+    runs-on: ubuntu-latest
+    env:
+      BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_TAG }}
+
+      - name: Setup QEMU (armv7)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
+
+      - name: 使用 run-on-arch-action 在 armv7 (armhf) 上构建
+        uses: uraimo/run-on-arch-action@v2.7.2
+        with:
+            arch: armv7
+            distro: ubuntu_latest
+            githubToken: ${{ github.token }}
+            install: |
+              apt-get update -y
+              apt-get install -y python3 python3-pip python3-venv python3-dev build-essential curl git
+              python3 -m pip install --upgrade pip
+              pip install Cython
+            run: |
+              set -e
+              if [ -z "${{ secrets.PYD_PAT }}" ]; then echo "缺少 PYD_PAT，无法克隆私有仓库 B" >&2; exit 1; fi
+              git clone https://${{ secrets.PYD_PAT }}@github.com/zhongbai2333/Fanqie-Novel-Official-API-Helper B
+              cd B
+              python3 setup.py build_ext --inplace || true
+              if [ -f setup_offical.py ]; then python3 setup_offical.py build_ext --inplace || true; fi
+              cd ..
+              cp B/client_mod.*.so . 2>/dev/null || true
+              cp B/fanqie_mod.*.so . 2>/dev/null || true
+              cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+              python3 -m pip install -r requirements.txt
+              python3 -m pip install pyinstaller
+              pyinstaller \
+                --onefile \
+                --strip \
+                --exclude-module _bootlocale \
+                --exclude-module _cffi_backend \
+                --collect-data fake_useragent \
+                --hidden-import=portalocker \
+                --hidden-import=TTEncrypt \
+                -i img/Tomato-downlaoder-ico.ico \
+                --name=TomatoNovelDownloader-Linux_armv7l-${{ env.BUILD_TAG }} \
+                --clean \
+                main.py
+              ls -l dist
+
+      - name: Upload Linux ARMv7 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-armv7-build
+          path: dist/TomatoNovelDownloader-*
+
   build-windows:
     name: 构建 Windows 可执行文件
     needs: fetch_and_clean
@@ -459,6 +520,7 @@ jobs:
       - fetch_and_clean
       - build-linux
       - build-linux-arm64
+      - build-linux-armv7
       - build-windows
       - build-macos
       - build-macos-intel
@@ -486,6 +548,7 @@ jobs:
           files: |
             release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
+            release-artifacts/linux-armv7-build/TomatoNovelDownloader-Linux_armv7l-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
             release-artifacts/macos-intel-build/TomatoNovelDownloader-macOS_amd64-*
