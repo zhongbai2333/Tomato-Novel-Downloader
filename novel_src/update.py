@@ -53,13 +53,10 @@ class UpdateManager(object):
         machine = platform.machine().lower()
 
         # 归一化架构
-        # 新增 armv7 / armv7l / armhf 支持 -> 统一使用 armv7l 作为发布资产名的一部分
         if machine in ("x86_64", "amd64"):
             arch_key = "amd64"
         elif machine in ("aarch64", "arm64"):
             arch_key = "arm64"
-        elif machine in ("armv7l", "armv7", "armhf"):
-            arch_key = "armv7l"
         else:
             arch_key = machine
 
