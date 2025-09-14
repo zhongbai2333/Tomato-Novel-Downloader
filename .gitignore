@@ -28,7 +28,7 @@ MANIFEST
 
 # Test file
 logs/
-config.yml
+/config.yml
 chapter_template.txt
 novels/
 

@@ -67,6 +67,13 @@ def _finalize_epub(manager, chapters: list[dict], output_file: Path):
         manager.description or None,
         publisher,
     )
+    # 早期兜底：如果没有任何可用章节（例如用户中断在早期），也生成一个仅包含“介绍页”的最小 EPUB，避免 Document is empty
+    safe_minimal_mode = False
+    try:
+        if not chapters or len(chapters) == 0:
+            safe_minimal_mode = True
+    except Exception:
+        pass
     # 在所有章节前添加“介绍页”作为 EPUB 第一页
     try:
         intro_html = _build_intro_page_html(
@@ -76,6 +83,14 @@ def _finalize_epub(manager, chapters: list[dict], output_file: Path):
         epub.add_aux_page("介绍", intro_html, "intro.xhtml", include_in_spine=True)
     except Exception:
         pass
+    if safe_minimal_mode:
+        try:
+            manager.logger.warning("没有可写入的章节，已生成仅包含介绍页的最小 EPUB。")
+        except Exception:
+            pass
+        epub.generate(output_file)
+        manager.logger.info(f"EPUB生成完成: {output_file}")
+        return
     # 仅在 EPUB 模式并且启用段评时处理段评
     seg_enabled = (getattr(manager.config, "novel_format", "epub").lower() == "epub") and getattr(manager.config, "enable_segment_comments", False)
     seg_json_map = _scan_segment_json(manager) if seg_enabled else {}

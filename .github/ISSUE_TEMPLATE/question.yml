@@ -1,0 +1,30 @@
+name: "提出疑问"
+description: 提出问题、使用疑问或求助
+title: "[Question] "
+labels: ["question", "new"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: 你的问题是什么？
+      description: 请尽可能清晰地描述你遇到的疑问或想了解的内容。
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境信息（可选）
+      description: 操作系统/运行方式（TUI/旧CLI）/版本信息
+      placeholder: Windows 11, 新版 TUI, vX.Y.Z
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志（如适用）
+      description: 若问题与运行有关，建议附上最近一次 logs/latest.log 或日志ZIP。
+      render: text
+    validations:
+      required: false

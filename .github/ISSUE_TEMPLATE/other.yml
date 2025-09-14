@@ -1,0 +1,20 @@
+name: "其他 Other"
+description: 其他不属于以上分类的内容
+title: "[Other] "
+labels: ["new"]
+body:
+  - type: textarea
+    id: desc
+    attributes:
+      label: 描述
+      description: 请说明此次 Issue 的目的和背景。
+    validations:
+      required: true
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: 附件（可选）
+      description: 相关截图、文件或参考链接。
+    validations:
+      required: false

@@ -279,6 +279,10 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否下载评论区头像": ("download_comment_avatars", bool),
         "评论图片下载线程数": ("media_download_workers", int),
         "图片域名黑名单(逗号分隔)": ("blocked_media_domains", list),
+    # 媒体体积/数量控制
+    "每章媒体数量上限(0为不限制)": ("media_limit_per_chapter", int),
+    "图片最长边像素上限(>0生效)": ("media_max_dimension_px", int),
+    "会话媒体总下载上限(MB,0不限制)": ("media_total_limit_mb", int),
         # 图片转码/格式控制
         "强制所有图片转JPEG": ("force_convert_images_to_jpeg", bool),
         "非JPEG尝试转JPEG": ("jpeg_retry_convert", bool),
@@ -445,6 +449,9 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                     "segment_comments_top_n",
                     "segment_comments_workers",
                     "media_download_workers",
+                    "media_limit_per_chapter",
+                    "media_max_dimension_px",
+                    "media_total_limit_mb",
                     "force_exit_timeout",
                 ):
                     if int(new_val) < 0:
@@ -683,7 +690,11 @@ class PreDownloadPage(urwid.WidgetWrap):
 
     def build_widget(self):
         downloaded_failed = len(
-            [v for v in self.manager.downloaded.values() if v[1] == "Error"]
+            [
+                v
+                for v in self.manager.downloaded.values()
+                if not (isinstance(v, list) and len(v) >= 2 and v[1] not in (None, "Error"))
+            ]
         )
         downloaded_count = len(self.manager.downloaded) - downloaded_failed
         total = len(self.chapter_list)
@@ -764,7 +775,9 @@ class RangeSelectPage(urwid.WidgetWrap):
                 for ch in chapter_list
                 if not (
                     ch["id"] in manager.downloaded
-                    and manager.downloaded[ch["id"]][1] != "Error"
+                    and isinstance(manager.downloaded[ch["id"]], list)
+                    and len(manager.downloaded[ch["id"]]) >= 2
+                    and manager.downloaded[ch["id"]][1] not in (None, "Error")
                 )
             ]
 
@@ -920,10 +933,20 @@ class TNDApp:
                     continue
                 if not chapters:
                     continue
-                status_path = save_dir / folder / f"chapter_status_{book_id}.json"
+                # 新版状态文件为 status.json（不再使用 chapter_status_{book_id}.json）
+                status_path = save_dir / folder / "status.json"
                 status = load_download_status(status_path)
-                downloaded = status.get("downloaded", {})
-                new_count = max(len(chapters) - len(downloaded), 0)
+                downloaded = status.get("downloaded", {}) or {}
+                # 仅统计成功的章节（content 不为 None 且不为 'Error'）
+                try:
+                    success_cnt = sum(
+                        1
+                        for v in downloaded.values()
+                        if isinstance(v, list) and len(v) >= 2 and (v[1] not in (None, "Error"))
+                    )
+                except Exception:
+                    success_cnt = 0
+                new_count = max(len(chapters) - success_cnt, 0)
                 desc = f"《{book_name}》({book_id}) — 新章节: {new_count}"
                 if new_count > 0:
                     update_choices.append((book_id, desc))
@@ -1053,7 +1076,11 @@ class TNDApp:
         否则直接跳到 RangeSelectPage。
         """
         downloaded_failed = len(
-            [v for v in manager.downloaded.values() if v[1] == "Error"]
+            [
+                v
+                for v in manager.downloaded.values()
+                if not (isinstance(v, list) and len(v) >= 2 and v[1] not in (None, "Error"))
+            ]
         )
         downloaded_count = len(manager.downloaded) - downloaded_failed
         if downloaded_count == 0:
@@ -1301,6 +1328,14 @@ class TNDApp:
                 # 输出目录沿用用户选择的 save_path
                 try:
                     setattr(self.config, "output_dir", save_path)
+                except Exception:
+                    pass
+                # 加载已有断点状态（status.json），用于继续下载
+                try:
+                    status_path = Path(self.config.get_status_folder_path) / "status.json"
+                    status_data = load_download_status(status_path)
+                    if isinstance(status_data, dict) and isinstance(status_data.get("downloaded"), dict):
+                        manager.downloaded = status_data.get("downloaded")
                 except Exception:
                     pass
                 downloader = ChapterDownloader(book_id, network)

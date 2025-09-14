@@ -64,6 +64,10 @@ def show_config_menu(config: Config):
         {"name": "JPEG质量(0-100)", "field": "jpeg_quality", "type": int},
         {"name": "HEIC转JPEG", "field": "convert_heic_to_jpeg", "type": bool},
         {"name": "保留原始HEIC文件", "field": "keep_heic_original", "type": bool},
+    # 媒体体积控制
+    {"name": "每章媒体数量上限(0为不限制)", "field": "media_limit_per_chapter", "type": int},
+    {"name": "图片最长边像素上限(>0生效)", "field": "media_max_dimension_px", "type": int},
+    {"name": "会话媒体总下载上限(MB,0不限制)", "field": "media_total_limit_mb", "type": int},
         # 段落缩进
         {"name": "EPUB首行缩进(em)", "field": "first_line_indent_em", "type": float},
         # 旧界面切换
@@ -130,7 +134,7 @@ def show_config_menu(config: Config):
         if field == "novel_format" and new_val not in ("txt", "epub"):
             print("小说保存格式必须为 txt 或 epub")
             continue
-        if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "force_exit_timeout"):
+        if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "media_limit_per_chapter", "media_max_dimension_px", "media_total_limit_mb", "force_exit_timeout"):
             if new_val < 0:
                 print("该数值不能为负")
                 continue
@@ -151,7 +155,7 @@ def show_config_menu(config: Config):
                 print(f"创建目录失败: {e}")
                 continue
 
-    # 互斥与自动调整
+        # 互斥与自动调整
         if field == "use_official_api" and new_val:
             if getattr(config, "use_helloplhm_qwq_api", False):
                 config.use_helloplhm_qwq_api = False
@@ -236,10 +240,18 @@ def update_menu(
             logger.error(f"获取章节列表失败：{book_id}，原因：{e}")
             continue
 
-        status_path = save_dir / folder / f"chapter_status_{book_id}.json"
+        # 使用新版状态文件 status.json，并仅统计成功章节
+        status_path = save_dir / folder / "status.json"
         status = load_download_status(status_path)
-        downloaded = status.get("downloaded", {})
-        new_count = max(len(chapters) - len(downloaded), 0)
+        downloaded = status.get("downloaded", {}) or {}
+        try:
+            success_cnt = sum(
+                1 for v in downloaded.values()
+                if isinstance(v, list) and len(v) >= 2 and (v[1] not in (None, "Error"))
+            )
+        except Exception:
+            success_cnt = 0
+        new_count = max(len(chapters) - success_cnt, 0)
         desc = f"《{book_name}》({book_id}) — 新章节：{new_count}"
 
         if new_count > 0:
