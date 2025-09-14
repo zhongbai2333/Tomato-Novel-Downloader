@@ -26,18 +26,35 @@ class EpubGenerator:
         self.book = epub.EpubBook()
 
         # 设置基本元数据
-        cover_path = str(
-            GlobalContext.get_config().get_status_folder_path / f"{title}.jpg"
-        )
+        cfg = GlobalContext.get_config()
+        safe_title = cfg.safe_fs_name(title)
+        base_folder = getattr(cfg, "get_status_folder_path", None)
+        try:
+            if callable(base_folder):  # 兼容旧实现
+                base_folder = base_folder()
+        except Exception:
+            pass
+        if not base_folder:
+            # 兜底回退（极端场景）
+            base_folder = Path(os.getcwd())
+        cover_path_safe = Path(base_folder) / f"{safe_title}.jpg"
+        cover_path_legacy = Path(base_folder) / f"{title}.jpg"  # 兼容旧文件名
         self.book.set_identifier(identifier)
         self.book.set_title(title)
         self.book.set_language(language)
         try:
-            with open(cover_path, "rb") as cover_file:
-                cover_content = cover_file.read()  # 获取二进制内容
+            try:
+                with open(cover_path_safe, "rb") as cover_file:
+                    cover_content = cover_file.read()
+            except FileNotFoundError:
+                # 旧版本可能使用未清洗标题存放
+                with open(cover_path_legacy, "rb") as cover_file:
+                    cover_content = cover_file.read()
         except FileNotFoundError:
-            GlobalContext.get_logger().error(f"封面文件未找到: {cover_path}")
-            cover_content = b""  # 返回空内容或处理错误
+            GlobalContext.get_logger().error(
+                f"封面文件未找到: {cover_path_safe} (fallback: {cover_path_legacy})"
+            )
+            cover_content = b""
         except Exception as e:
             GlobalContext.get_logger().error(f"读取封面失败: {str(e)}")
             cover_content = b""

@@ -127,9 +127,42 @@ class Config(BaseConfig):
             save_dir = self.default_save_dir
         # 清理非法字符确保文件名安全
         safe_book_id = re.sub(r"[^a-zA-Z0-9_]", "_", book_id)
-        self.folder_path = Path(save_dir) / f"{safe_book_id}_{book_name}"
+        safe_book_name = self.safe_fs_name(book_name)
+        self.folder_path = Path(save_dir) / f"{safe_book_id}_{safe_book_name}"
         self.folder_path.mkdir(parents=True, exist_ok=True)
         return self.folder_path
+
+    # ---------------- 文件名安全工具 ----------------
+    @staticmethod
+    def safe_fs_name(name: str, replacement: str = "_", max_len: int = 120) -> str:
+        """将任意字符串转换为跨平台安全的文件/目录名。
+
+        规则:
+          1. 替换 Windows 非法字符 <>:"/\|?* 为 replacement
+          2. 去除控制字符 (0-31)
+          3. 去除前后空格与点 (Windows 不允许以点/空格结尾)
+          4. 处理保留字 (CON, PRN, AUX, NUL, COM1.., LPT1..)
+          5. 限制长度 (默认 120) 保留扩展名空间
+        """
+        if not isinstance(name, str):
+            name = str(name)
+        # 替换非法字符
+        name = re.sub(r'[<>:"/\\|?*]', replacement, name)
+        # 去除控制字符
+        name = ''.join(ch for ch in name if 31 < ord(ch) < 127 or ord(ch) >= 128)
+        # Windows 结尾的点和空格无效
+        name = name.strip().rstrip('. ')
+        if not name:
+            name = 'unnamed'
+        # 保留字处理
+        RESERVED = {"CON","PRN","AUX","NUL","COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9","LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"}
+        upper = name.upper()
+        if upper in RESERVED:
+            name = f"_{name}"
+        # 长度限制
+        if len(name) > max_len:
+            name = name[:max_len].rstrip('. ')
+        return name
 
 
 class GlobalContext(object):

@@ -361,19 +361,26 @@ def _maybe_cleanup_after_finalize(manager, result: int):
         and manager.end
     ):
         return
-    cover_path = manager.status_folder / f"{manager.book_name}.jpg"
+    # 新版封面采用安全文件名，仍兼容旧文件名用于清理
+    try:
+        safe_name = manager.config.safe_fs_name(manager.book_name)
+    except Exception:
+        safe_name = manager.book_name
+    cover_path = manager.status_folder / f"{safe_name}.jpg"
+    legacy_cover_path = manager.status_folder / f"{manager.book_name}.jpg"
     if manager.status_file.exists():
         try:
             manager.status_file.unlink()
             manager.logger.debug(f"断点缓存文件已清理: {manager.status_file}")
         except Exception:
             pass
-    if cover_path.exists():
-        try:
-            cover_path.unlink()
-            manager.logger.debug(f"封面文件已清理: {cover_path}")
-        except Exception:
-            pass
+    for p in [cover_path, legacy_cover_path]:
+        if p.exists():
+            try:
+                p.unlink()
+                manager.logger.debug(f"封面文件已清理: {p}")
+            except Exception:
+                pass
     try:
         FileCleaner.clean_dump_folder(manager.config.get_status_folder_path)
     except Exception:

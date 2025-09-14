@@ -933,20 +933,13 @@ class TNDApp:
                     continue
                 if not chapters:
                     continue
-                # 新版状态文件为 status.json（不再使用 chapter_status_{book_id}.json）
-                status_path = save_dir / folder / "status.json"
+                folder_path = save_dir / folder
+                status_new = folder_path / "status.json"
+                status_old = folder_path / f"chapter_status_{book_id}.json"
+                status_path = status_new if status_new.exists() else status_old
                 status = load_download_status(status_path)
-                downloaded = status.get("downloaded", {}) or {}
-                # 仅统计成功的章节（content 不为 None 且不为 'Error'）
-                try:
-                    success_cnt = sum(
-                        1
-                        for v in downloaded.values()
-                        if isinstance(v, list) and len(v) >= 2 and (v[1] not in (None, "Error"))
-                    )
-                except Exception:
-                    success_cnt = 0
-                new_count = max(len(chapters) - success_cnt, 0)
+                downloaded = status.get("downloaded", {}) if isinstance(status, dict) else {}
+                new_count = max(len(chapters) - len(downloaded), 0)
                 desc = f"《{book_name}》({book_id}) — 新章节: {new_count}"
                 if new_count > 0:
                     update_choices.append((book_id, desc))
@@ -1015,7 +1008,11 @@ class TNDApp:
             return
         self._in_cover_preview = True
         # 1. 找到封面图片路径
-        cover_path = Path(self.config.get_status_folder_path) / f"{book_name}.jpg"
+        try:
+            safe_name = self.config.safe_fs_name(book_name)
+        except Exception:
+            safe_name = book_name.replace(':', '_')
+        cover_path = Path(self.config.get_status_folder_path) / f"{safe_name}.jpg"
         if not cover_path.exists():
             # 如果没有封面文件，跳出一个弹窗提示
             self.show_popup("未找到封面图片，无法预览")
@@ -1172,35 +1169,63 @@ class TNDApp:
             pass
 
     def _wait_for_enter(self, prompt: str):
-        """只等待 Enter，忽略其它按键与鼠标滚轮产生的序列，不回显。跨平台回退到 input。"""
+        """等待用户确认返回。
+
+        改进点:
+          1. Windows: 仍使用 msvcrt, 但任意可打印键或 Enter 都立即返回，避免输入法候选面板拦截 Enter。
+          2. POSIX(macOS/Linux): 尝试 termios + select 非阻塞读取单字符；若失败回退 input()。
+          3. 设置最大等待时间(默认无限)可扩展；当前无限等待，未来可按需加超时参数。
+        """
         try:
             self._pause_mouse_tracking()
-            # Windows 下使用 msvcrt 无回显方式读取
+            # Windows 分支
             try:
                 import msvcrt  # type: ignore
                 print(prompt, end="", flush=True)
-                # 先清空残留按键
                 self._flush_key_buffer()
                 while True:
-                    ch = msvcrt.getwch()
-                    # 特殊键前缀（方向键等）：\x00 或 \xe0，额外再读一次丢弃
-                    if ch in ("\x00", "\xe0"):
-                        try:
-                            if msvcrt.kbhit():
-                                msvcrt.getwch()
-                        except Exception:
-                            pass
-                        continue
-                    if ch in ("\r", "\n"):
-                        break
-                    # 其余字符一律忽略
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getwch()
+                        if ch in ("\x00", "\xe0"):
+                            # 丢弃功能键后续码
+                            try:
+                                if msvcrt.kbhit():
+                                    msvcrt.getwch()
+                            except Exception:
+                                pass
+                            continue
+                        # Enter 或 任意非控制字符 -> 返回
+                        if ch in ("\r", "\n") or (ch and ch.isprintable()):
+                            break
+                    time.sleep(0.03)
                 print("")
                 return
             except Exception:
-                # 其它平台退化到 input
+                pass
+
+            # POSIX 分支 (macOS / Linux)
+            try:
+                import sys, termios, tty, select
+                fd = sys.stdin.fileno()
+                old_settings = termios.tcgetattr(fd)
+                print(prompt, end="", flush=True)
+                try:
+                    tty.setcbreak(fd)  # 单字符、无需 Enter
+                    while True:
+                        r, _, _ = select.select([sys.stdin], [], [], 0.2)
+                        if r:
+                            ch = sys.stdin.read(1)
+                            # 直接返回（任意键），兼容输入法场景
+                            break
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                print("")
+                return
+            except Exception:
+                # 最后回退：标准 input（可能仍受输入法影响，但至少不会崩）
                 try:
                     input(prompt)
-                except EOFError:
+                except Exception:
                     pass
         finally:
             self._resume_mouse_tracking()
