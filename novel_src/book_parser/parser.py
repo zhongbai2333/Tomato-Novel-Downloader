@@ -210,14 +210,13 @@ class ContentParser(object):
                     image_url = data["images"][0]
             except:
                 pass
-        img_path = (
-            Path(
-                GlobalContext.get_config().status_folder_path(
-                    book_id=book_id, book_name=title
-                )
-            )
-            / f"{title}.jpg"
+        # 使用安全文件名保存封面，避免 Windows/特殊字符问题；与 old_main / main 预览一致
+        cfg = GlobalContext.get_config()
+        safe_title = cfg.safe_fs_name(title)
+        status_dir = Path(
+            cfg.status_folder_path(book_id=book_id, book_name=title)
         )
+        img_path = status_dir / f"{safe_title}.jpg"
         if image_url:
             resp = requests.get(image_url, verify=False)
             if resp.ok:

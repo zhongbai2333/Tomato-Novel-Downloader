@@ -42,6 +42,74 @@ class BookManager:
         self._media_prefetched = False
         self._media_downloader = None
 
+    # -------- 断点续传：加载既有状态 --------
+    def load_existing_status(self, book_id: str, book_name: str):
+        """尝试加载已存在的下载状态（支持新版 status.json 与旧版 chapter_status_{id}.json）。
+
+        逻辑:
+          1. 优先读取 self.status_file (status.json)
+          2. 若不存在则尝试旧文件 chapter_status_{book_id}.json
+          3. downloaded 字段兼容：
+             - 新格式: { downloaded: {chapter_id: [title, content_or_None]} }
+             - 旧格式: { chapter_id: [title, content_or_None] }
+          4. 填充元数据（若文件中存在且当前未设置）
+        """
+        try:
+            # 防御：确保状态目录正确（可能用户直接传不同 book_name/book_id）
+            try:
+                if not self.status_folder.exists():
+                    self.status_folder.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            data = None
+            if self.status_file.exists():
+                try:
+                    with self.status_file.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = None
+            if data is None:
+                legacy_path = self.status_folder / f"chapter_status_{book_id}.json"
+                if legacy_path.exists():
+                    try:
+                        with legacy_path.open("r", encoding="utf-8") as f:
+                            legacy_data = json.load(f)
+                        # 旧文件可能无 downloaded 包裹
+                        if isinstance(legacy_data, dict) and "downloaded" not in legacy_data:
+                            data = {"downloaded": legacy_data}
+                        else:
+                            data = legacy_data
+                    except Exception:
+                        data = None
+            if not data:
+                return False
+            dl = data.get("downloaded") if isinstance(data, dict) else None
+            if isinstance(dl, dict):
+                self.downloaded.update(dl)
+            # 元数据填充（若为空）
+            self.book_id = self.book_id or str(data.get("book_id", book_id))
+            self.book_name = self.book_name or str(data.get("book_name", book_name))
+            self.author = self.author or str(data.get("author", ""))
+            self.tags = self.tags or str(data.get("tags", ""))
+            try:
+                self.end = bool(data.get("end", self.end))
+            except Exception:
+                pass
+            self.description = self.description or str(data.get("description", ""))
+            try:
+                self.logger.info(
+                    f"[断点续传] 已加载历史进度: chapters={len(self.downloaded)}"
+                )
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            try:
+                self.logger.debug(f"加载历史进度失败: {e}")
+            except Exception:
+                pass
+            return False
+
     # -------- finalize 输出（委托 finalize_utils） --------
     def finalize(self, chapters: List[dict], result: int = 0):
         try:

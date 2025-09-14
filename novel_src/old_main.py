@@ -234,26 +234,47 @@ def update_menu(
         if "_" not in folder:
             continue
         book_id, book_name = folder.split("_", 1)
+        if not book_id.isdigit():
+            continue
+
+        folder_path = save_dir / folder
+
+        # 1. 先尝试新版 status.json
+        status_json_path = folder_path / "status.json"
+        status_data = {}
+        downloaded = {}
+        if status_json_path.exists():
+            status_data = load_download_status(status_json_path)
+            downloaded = status_data.get("downloaded") or {}
+        else:
+            # 2. 回退旧版 chapter_status_{book_id}.json
+            legacy_path = folder_path / f"chapter_status_{book_id}.json"
+            if legacy_path.exists():
+                legacy_data = load_download_status(legacy_path)
+                # 旧文件有可能直接就是 {chapter_id: [...]} 结构
+                if "downloaded" in legacy_data:
+                    downloaded = legacy_data.get("downloaded") or {}
+                else:
+                    downloaded = legacy_data
+            else:
+                # 两种文件都不存在，跳过
+                continue
+
+        # 拉取最新章节目录（放在读取本地状态后，若远端失败可更好诊断）
         try:
             chapters = network.fetch_chapter_list(book_id)
         except Exception as e:
             logger.error(f"获取章节列表失败：{book_id}，原因：{e}")
             continue
 
-        # 使用新版状态文件 status.json，并仅统计成功章节
-        status_path = save_dir / folder / "status.json"
-        status = load_download_status(status_path)
-        downloaded = status.get("downloaded", {}) or {}
+        # 计算新增章节数量
         try:
-            success_cnt = sum(
-                1 for v in downloaded.values()
-                if isinstance(v, list) and len(v) >= 2 and (v[1] not in (None, "Error"))
-            )
+            downloaded_count = len(downloaded)
+            new_count = max(len(chapters) - downloaded_count, 0)
         except Exception:
-            success_cnt = 0
-        new_count = max(len(chapters) - success_cnt, 0)
-        desc = f"《{book_name}》({book_id}) — 新章节：{new_count}"
+            new_count = 0
 
+        desc = f"《{book_name}》({book_id}) — 新章节：{new_count}"
         if new_count > 0:
             update_choices.append((book_id, desc))
         else:
@@ -464,8 +485,16 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             except Exception:
                 folder_path = Path(config.default_save_dir) / f"{book_id}_{book_name}"
                 folder_path.mkdir(parents=True, exist_ok=True)
-            cover_path = folder_path / f"{book_name}.jpg"
-            preview_ascii(cover_path)
+            try:
+                safe_name = config.safe_fs_name(book_name)
+            except Exception:
+                safe_name = book_name.replace(':', '_')
+            cover_path = folder_path / f"{safe_name}.jpg"
+            # 仅在封面文件已存在时才进行 ASCII 预览，避免 FileNotFoundError
+            if cover_path.exists():
+                preview_ascii(cover_path)
+            else:
+                logger.debug(f"封面尚未下载，跳过预览: {cover_path}")
             logger.info(f"\n书名: {book_name}")
             logger.info(f"作者: {author}")
             logger.info(f"是否完结: {tags[0]} | 共 {chapter_count} 章")
@@ -489,67 +518,113 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite
             except Exception:
                 pass
 
+            # 加载既有下载进度（断点续传）
+            try:
+                if manager.load_existing_status(book_id, book_name):
+                    logger.info("已检测到历史下载记录，可继续下载或选择重新下载。")
+            except Exception:
+                logger.debug("加载历史进度时出现异常，忽略继续")
+
             log_system.add_safe_exit_func(manager.save_download_status)
 
-            # 用户确认
-            chapter_count_list = []
-            confirm = (
-                input(
-                    "\n是否开始下载？(Y/n [输入数字xx~xx可选定下载章节范围(分卷章节从全书最开始累加计算)]): "
-                )
-                .strip()
-                .lower()
-            )
-            if confirm not in ("", "y", "yes") and "~" not in confirm:
-                if cover_path.exists():
-                    os.remove(cover_path)
-                    logger.debug(f"封面文件已清理！{cover_path}")
-                    if FileCleaner.is_empty_dir(folder_path):
-                        FileCleaner.clean_dump_folder(folder_path)
+            # ========== 断点续传 / 下载模式选择 ==========
+            all_chapters = network.fetch_chapter_list(book_id)
+            if all_chapters is None:
                 continue
-            elif "~" in confirm:
-                chapter_count_list = list(map(int, confirm.split("~")))
-
-            chapter_list = network.fetch_chapter_list(book_id)
-            if chapter_count_list:
-                chapter_list_for = chapter_list.copy()
-                chapter_list = []
-                for chapter in chapter_list_for:
-                    if (
-                        chapter_count_list[0] - 1
-                        <= int(chapter["index"])
-                        <= chapter_count_list[1] - 1
-                    ):
-                        chapter_list.append(chapter)
-            if chapter_list is None:
-                continue
-
-            total = len(chapter_list)
-            keys = [
-                key
-                for key, value in manager.downloaded.items()
-                if value == [key, "Error"]
+            total = len(all_chapters)
+            # 失败章节: content 为空或第二项为 None / 'Error'
+            failed_chapter_ids = [
+                cid for cid, val in manager.downloaded.items() if not val or len(val) < 2 or val[1] in (None, "Error")
             ]
-            downloaded_failed = len(keys)
-            downloaded_count = len(manager.downloaded) - len(keys)
+            downloaded_ok = len(manager.downloaded) - len(failed_chapter_ids)
             logger.info(
-                f"共发现 {total} 章，下载失败 {downloaded_failed} 章，已下载 {downloaded_count} 章"
+                f"共发现 {total} 章，下载失败 {len(failed_chapter_ids)} 章，已下载 {downloaded_ok} 章"
             )
-            # 检查已有下载
-            if downloaded_count > 0:
-                choice = input(
-                    "检测到已有下载记录：\n1. 继续下载\n2. 重新下载\n请选择(默认1): "
-                ).strip()
-                if choice == "2":
-                    manager.downloaded.clear()
-                    logger.info("已清除下载记录，将重新下载全部章节")
+
+            # 如果没有任何历史记录且没有失败章节，直接询问范围或全部
+            def _select_range(ch_list: list[dict]) -> list[dict]:
+                rng = input("输入章节范围 形如 10~200 (留空表示全部): ").strip()
+                if not rng:
+                    return ch_list
+                if "~" not in rng:
+                    print("范围格式错误，应为 a~b")
+                    return ch_list
+                try:
+                    a, b = map(int, rng.split("~", 1))
+                except Exception:
+                    print("范围解析失败，使用全部章节")
+                    return ch_list
+                a = max(a, 1)
+                b = min(b, len(ch_list))
+                if a > b:
+                    a, b = b, a
+                subset = [c for c in ch_list if a - 1 <= int(c.get("index", -1)) <= b - 1]
+                logger.info(f"已选择章节范围: {a}~{b} -> {len(subset)} 章")
+                return subset or ch_list
+
+            mode = None
+            if downloaded_ok > 0 or failed_chapter_ids:
+                print("\n===== 下载模式选择 =====")
+                print("1. 继续下载未完成章节")
+                print("2. 全部重新下载")
+                if failed_chapter_ids:
+                    print("3. 仅重新下载失败章节")
+                print("4. 指定章节范围重新下载 (忽略历史记录)")
+                print("q. 取消")
+                sel = input("请选择(默认1): ").strip().lower()
+                if sel in ("", "1"):
+                    mode = "resume"
+                elif sel == "2":
+                    mode = "full"
+                elif sel == "3" and failed_chapter_ids:
+                    mode = "failed"
+                elif sel == "4":
+                    mode = "range"
+                elif sel == "q":
+                    # 取消执行，清理可能生成的空封面
+                    if cover_path.exists() and FileCleaner.is_empty_dir(folder_path):
+                        try:
+                            cover_path.unlink()
+                        except Exception:
+                            pass
+                    continue
+                else:
+                    mode = "resume"
+            else:
+                # 没有历史记录
+                mode = "range_or_all"
+
+            # 根据模式准备章节列表
+            if mode == "full":
+                manager.downloaded.clear()
+                chapter_list = all_chapters
+                logger.info("将重新下载全部章节")
+            elif mode == "failed":
+                # 仅失败章节
+                failed_set = set(failed_chapter_ids)
+                chapter_list = [c for c in all_chapters if str(c.get("id")) in failed_set]
+                logger.info(f"将重新下载失败章节: {len(chapter_list)} 章")
+            elif mode == "range":
+                manager.downloaded.clear()
+                chapter_list = _select_range(all_chapters)
+            elif mode == "range_or_all":
+                chapter_list = _select_range(all_chapters)
+            else:  # resume
+                # 继续：过滤掉已成功的章节
+                existing_ids_ok = {
+                    cid for cid, val in manager.downloaded.items() if val and len(val) >= 2 and val[1] not in (None, "Error")
+                }
+                chapter_list = [c for c in all_chapters if str(c.get("id")) not in existing_ids_ok]
+                logger.info(f"继续下载剩余章节: {len(chapter_list)} 章 (已完成 {downloaded_ok})")
+
+            if not chapter_list:
+                logger.info("没有需要下载的章节，操作结束。")
+                continue
 
             # --- 执行下载 ---
             logger.info("\n开始下载...")
             start_time = time.time()
-
             downloader = ChapterDownloader(book_id, network)
-            # 执行下载流程
             result = downloader.download_book(manager, book_name, chapter_list)
 
             # 显示统计信息
