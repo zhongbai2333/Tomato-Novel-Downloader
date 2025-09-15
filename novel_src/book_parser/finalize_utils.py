@@ -29,10 +29,23 @@ def run_finalize(manager, chapters: list[dict], result: int = 0):
 
 # -------- 公共路径 --------
 def _prepare_output_path(manager, fmt: str) -> Path:
+    """生成最终输出文件路径（应用安全文件名）。
+
+    行为:
+      1. 使用 config.safe_fs_name(manager.book_name) 生成跨平台安全基名。
+      2. 若存在同名旧文件（未清洗书名）且新文件不存在，则后续写入仍会使用新安全名（不覆盖旧文件）。
+      3. 兼容空书名：使用 'book' 前缀。
+    """
     output_dir = Path(getattr(manager.config, "output_dir", "."))
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = "epub" if fmt == "epub" else "txt"
-    return output_dir / f"{manager.book_name}.{suffix}"
+    raw_name = manager.book_name or "book"
+    try:
+        safe_name = manager.config.safe_fs_name(raw_name)
+    except Exception:
+        safe_name = raw_name.replace(':', '_')
+    new_path = output_dir / f"{safe_name}.{suffix}"
+    return new_path
 
 
 # -------- TXT 输出 --------

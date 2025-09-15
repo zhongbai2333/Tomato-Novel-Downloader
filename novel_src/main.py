@@ -1169,64 +1169,287 @@ class TNDApp:
             pass
 
     def _wait_for_enter(self, prompt: str):
-        """等待用户确认返回。
+        """等待用户确认返回（任意键或鼠标点击）。
 
-        改进点:
-          1. Windows: 仍使用 msvcrt, 但任意可打印键或 Enter 都立即返回，避免输入法候选面板拦截 Enter。
-          2. POSIX(macOS/Linux): 尝试 termios + select 非阻塞读取单字符；若失败回退 input()。
-          3. 设置最大等待时间(默认无限)可扩展；当前无限等待，未来可按需加超时参数。
+        统一策略:
+          - Windows: 使用 msvcrt 读取按键（无法直接读取鼠标，退化为任意键返回）。
+          - POSIX: 进入 cbreak + 开启 XTerm 鼠标跟踪，解析 ESC 序列（左/右键单击立即返回）。
+          - 任意可打印键 / Enter / 功能键（方向键等） / 鼠标点击 均触发返回。
+          - 失败则回退打印提示并直接返回，避免卡死。
         """
         try:
             self._pause_mouse_tracking()
-            # Windows 分支
-            try:
-                import msvcrt  # type: ignore
-                print(prompt, end="", flush=True)
-                self._flush_key_buffer()
-                while True:
-                    if msvcrt.kbhit():
-                        ch = msvcrt.getwch()
-                        if ch in ("\x00", "\xe0"):
-                            # 丢弃功能键后续码
-                            try:
-                                if msvcrt.kbhit():
-                                    msvcrt.getwch()
-                            except Exception:
-                                pass
-                            continue
-                        # Enter 或 任意非控制字符 -> 返回
-                        if ch in ("\r", "\n") or (ch and ch.isprintable()):
-                            break
-                    time.sleep(0.03)
-                print("")
-                return
-            except Exception:
-                pass
+            # 可配置：任意键返回或仅 Enter，后续可接入 config（先硬编码任意键）
+            return_on_any_key = True
 
-            # POSIX 分支 (macOS / Linux)
+            # ---------- Windows 实现 (扩展: 键盘 + 鼠标左键) ----------
             try:
-                import sys, termios, tty, select
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                print(prompt, end="", flush=True)
+                import sys as _sys
+                import msvcrt  # type: ignore
+                import ctypes
+                from ctypes import wintypes
+
+                print(prompt + " (任意键/鼠标点击返回)", end="", flush=True)
+                self._flush_key_buffer()
+
+                # Win32 常量
+                STD_INPUT_HANDLE = -10
+                ENABLE_MOUSE_INPUT = 0x0010
+                ENABLE_EXTENDED_FLAGS = 0x0080
+                ENABLE_QUICK_EDIT_MODE = 0x0040
+
+                # 结构体定义
+                class COORD(ctypes.Structure):
+                    _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
+
+                class MOUSE_EVENT_RECORD(ctypes.Structure):
+                    _fields_ = [
+                        ("dwMousePosition", COORD),
+                        ("dwButtonState", ctypes.c_ulong),
+                        ("dwControlKeyState", ctypes.c_ulong),
+                        ("dwEventFlags", ctypes.c_ulong),
+                    ]
+
+                class KEY_EVENT_RECORD(ctypes.Structure):
+                    _fields_ = [
+                        ("bKeyDown", wintypes.BOOL),
+                        ("wRepeatCount", wintypes.WORD),
+                        ("wVirtualKeyCode", wintypes.WORD),
+                        ("wVirtualScanCode", wintypes.WORD),
+                        ("uChar", wintypes.WCHAR),
+                        ("dwControlKeyState", wintypes.DWORD),
+                    ]
+
+                class WINDOW_BUFFER_SIZE_RECORD(ctypes.Structure):
+                    _fields_ = [("dwSize", COORD)]
+
+                class MENU_EVENT_RECORD(ctypes.Structure):
+                    _fields_ = [("dwCommandId", wintypes.UINT)]
+
+                class FOCUS_EVENT_RECORD(ctypes.Structure):
+                    _fields_ = [("bSetFocus", wintypes.BOOL)]
+
+                class EVENT_UNION(ctypes.Union):
+                    _fields_ = [
+                        ("KeyEvent", KEY_EVENT_RECORD),
+                        ("MouseEvent", MOUSE_EVENT_RECORD),
+                        ("WindowBufferSizeEvent", WINDOW_BUFFER_SIZE_RECORD),
+                        ("MenuEvent", MENU_EVENT_RECORD),
+                        ("FocusEvent", FOCUS_EVENT_RECORD),
+                    ]
+
+                class INPUT_RECORD(ctypes.Structure):
+                    _fields_ = [("EventType", wintypes.WORD), ("Event", EVENT_UNION)]
+
+                KEY_EVENT = 0x0001
+                MOUSE_EVENT = 0x0002
+                FROM_LEFT_1ST_BUTTON_PRESSED = 0x0001
+
+                k32 = ctypes.windll.kernel32
+                h_in = k32.GetStdHandle(STD_INPUT_HANDLE)
+                original_mode = wintypes.DWORD()
+                if not k32.GetConsoleMode(h_in, ctypes.byref(original_mode)):
+                    raise OSError("GetConsoleMode failed")
+                # 启用鼠标输入并关闭 QuickEdit（否则鼠标事件不会投递）
+                new_mode = original_mode.value
+                new_mode |= ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS
+                new_mode &= ~ENABLE_QUICK_EDIT_MODE
+                k32.SetConsoleMode(h_in, new_mode)
+
+                ime_pending_enter_drops = 0
                 try:
-                    tty.setcbreak(fd)  # 单字符、无需 Enter
                     while True:
-                        r, _, _ = select.select([sys.stdin], [], [], 0.2)
-                        if r:
-                            ch = sys.stdin.read(1)
-                            # 直接返回（任意键），兼容输入法场景
-                            break
+                        # 先处理立即可用的键（减少延迟）
+                        if msvcrt.kbhit():
+                            ch = msvcrt.getwch()
+                            if ch in ("\x00", "\xe0"):
+                                # 功能键第二码丢弃
+                                try:
+                                    if msvcrt.kbhit():
+                                        msvcrt.getwch()
+                                except Exception:
+                                    pass
+                                # 功能键视为一次交互
+                                break
+                            if return_on_any_key:
+                                if ch in ("\r", "\n") or ch.isprintable():
+                                    break
+                            else:
+                                if ch in ("\r", "\n"):
+                                    if ime_pending_enter_drops == 0:
+                                        ime_pending_enter_drops += 1
+                                        continue
+                                    break
+                        # 读取控制台输入事件（阻塞等待，但快速循环内有键处理）
+                        records_read = wintypes.DWORD()
+                        buf = (INPUT_RECORD * 16)()
+                        if not k32.PeekConsoleInputW(h_in, buf, 16, ctypes.byref(records_read)):
+                            time.sleep(0.03)
+                            continue
+                        if records_read.value == 0:
+                            time.sleep(0.02)
+                            continue
+                        # 真正取走事件
+                        if not k32.ReadConsoleInputW(h_in, buf, records_read, ctypes.byref(records_read)):
+                            time.sleep(0.02)
+                            continue
+                        for i in range(records_read.value):
+                            rec = buf[i]
+                            if rec.EventType == MOUSE_EVENT:
+                                me = rec.Event.MouseEvent
+                                if me.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED:
+                                    raise StopIteration  # 使用异常快速跳出多层
+                            elif rec.EventType == KEY_EVENT:
+                                ke = rec.Event.KeyEvent
+                                if ke.bKeyDown:
+                                    ch = ke.uChar
+                                    if not ch:
+                                        # 功能键也直接返回
+                                        raise StopIteration
+                                    if return_on_any_key:
+                                        raise StopIteration
+                                    if ch in ("\r", "\n"):
+                                        if ime_pending_enter_drops == 0:
+                                            ime_pending_enter_drops += 1
+                                            continue
+                                        raise StopIteration
+                        # 循环继续
+                    # 结束条件：正常 break
+                except StopIteration:
+                    pass
+                except Exception:
+                    # 任何异常回退到最基础键处理
+                    pass
                 finally:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    try:
+                        k32.SetConsoleMode(h_in, original_mode)
+                    except Exception:
+                        pass
                 print("")
                 return
             except Exception:
-                # 最后回退：标准 input（可能仍受输入法影响，但至少不会崩）
+                # 回退到最初 msvcrt 简单键模式
                 try:
-                    input(prompt)
+                    import msvcrt  # type: ignore
+                    print(prompt + " (任意键返回)", end="", flush=True)
+                    self._flush_key_buffer()
+                    while True:
+                        if msvcrt.kbhit():
+                            ch = msvcrt.getwch()
+                            if ch in ("\x00", "\xe0"):
+                                try:
+                                    if msvcrt.kbhit():
+                                        msvcrt.getwch()
+                                except Exception:
+                                    pass
+                                break
+                            if ch in ("\r", "\n") or ch.isprintable():
+                                break
+                        time.sleep(0.03)
+                    print("")
+                    return
                 except Exception:
                     pass
+
+            # ---------- POSIX 实现 (macOS / Linux) ----------
+            try:
+                import sys, termios, tty, select
+                # 优先使用 /dev/tty 防止 stdin 被重定向或被 urwid/raw 模式影响
+                tty_stream = None
+                try:
+                    tty_stream = open("/dev/tty", "rb+", buffering=0)
+                except Exception:
+                    pass
+                in_file = tty_stream if tty_stream else sys.stdin
+                fd = in_file.fileno()
+                old_settings = termios.tcgetattr(fd)
+                print(prompt + " (任意键/鼠标点击返回)", end="", flush=True)
+                # 启用 xterm 鼠标跟踪模式 (1000: 普通点击, 1006: SGR, 1015: urxvt, 1002/1003: 拖/移动可按需)
+                enable_mouse_seq = b"\x1b[?1000h\x1b[?1006h"
+                disable_mouse_seq = b"\x1b[?1000l\x1b[?1006l"
+                try:
+                    tty.setcbreak(fd)
+                    # 尝试向终端写入启用鼠标序列（可能失败，比如非 xterm）
+                    try:
+                        if tty_stream:
+                            tty_stream.write(enable_mouse_seq)
+                        else:
+                            sys.stdout.buffer.write(enable_mouse_seq)  # type: ignore
+                            sys.stdout.flush()
+                    except Exception:
+                        pass
+                    ime_enter_defer = 0
+                    esc_buffer = b""
+                    while True:
+                        r, _, _ = select.select([in_file], [], [], 0.2)
+                        if not r:
+                            continue
+                        ch = in_file.read(1)
+                        if not ch:
+                            continue
+                        # ESC 序列聚合 (鼠标或功能键)  - 解析 SGR 鼠标点击: ESC [ < b ; x ; y M 或 m
+                        if ch == b"\x1b":
+                            esc_buffer = ch
+                            # 继续读取其后可能的序列（设一个很小的窗口）
+                            while True:
+                                r2, _, _ = select.select([in_file], [], [], 0.01)
+                                if not r2:
+                                    break
+                                ch2 = in_file.read(1)
+                                if not ch2:
+                                    break
+                                esc_buffer += ch2
+                                # 简单界定：超过一定长度认为是完整；或以 'M' 'm' 结尾（鼠标事件）
+                                if len(esc_buffer) > 32 or esc_buffer.endswith((b"M", b"m")):
+                                    break
+                            # 鼠标事件（SGR 模式 ESC [ < ... M/m）
+                            if b"[<" in esc_buffer and esc_buffer.endswith((b"M", b"m")):
+                                # 不区分按下抬起，直接返回
+                                break
+                            # 其它功能键序列当作一次交互直接返回（方向键等）
+                            if return_on_any_key:
+                                break
+                            else:
+                                continue
+                        # 回车或换行
+                        if ch in (b"\r", b"\n"):
+                            if return_on_any_key:
+                                break
+                            if ime_enter_defer == 0:
+                                ime_enter_defer += 1
+                                continue
+                            break
+                        # 普通字节：直接返回
+                        if return_on_any_key:
+                            break
+                    print("")
+                finally:
+                    try:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    except Exception:
+                        pass
+                    # 关闭鼠标跟踪
+                    try:
+                        if tty_stream:
+                            tty_stream.write(disable_mouse_seq)
+                        else:
+                            sys.stdout.buffer.write(disable_mouse_seq)  # type: ignore
+                            sys.stdout.flush()
+                    except Exception:
+                        pass
+                    if tty_stream:
+                        try:
+                            tty_stream.close()
+                        except Exception:
+                            pass
+                return
+            except Exception:
+                # 回退：如果仍卡住，打印一次提示并直接返回，避免“卡死”体验
+                try:
+                    print(prompt + " (自动返回)" )
+                except Exception:
+                    pass
+                return
         finally:
             self._resume_mouse_tracking()
 
