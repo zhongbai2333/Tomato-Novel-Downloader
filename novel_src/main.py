@@ -1178,55 +1178,101 @@ class TNDApp:
         """
         try:
             self._pause_mouse_tracking()
-            # Windows 分支
+            # 可配置：任意键返回或仅 Enter，后续可接入 config（先硬编码任意键）
+            return_on_any_key = True
+
+            # ---------- Windows 实现 ----------
             try:
                 import msvcrt  # type: ignore
                 print(prompt, end="", flush=True)
                 self._flush_key_buffer()
+                ime_pending_enter_drops = 0
                 while True:
                     if msvcrt.kbhit():
                         ch = msvcrt.getwch()
+                        # 功能键前缀，丢弃其后一个扫描码
                         if ch in ("\x00", "\xe0"):
-                            # 丢弃功能键后续码
                             try:
                                 if msvcrt.kbhit():
                                     msvcrt.getwch()
                             except Exception:
                                 pass
                             continue
-                        # Enter 或 任意非控制字符 -> 返回
-                        if ch in ("\r", "\n") or (ch and ch.isprintable()):
-                            break
-                    time.sleep(0.03)
+                        # 一些输入法（如搜狗、微软拼音）候选上屏阶段会吞掉第一下 Enter，这里如果大量连续 Enter 无其它字符，可以延迟一次
+                        if not return_on_any_key and ch not in ("\r", "\n") and not ch.isprintable():
+                            continue
+                        if return_on_any_key:
+                            # Enter 或 任意可打印字符
+                            if ch in ("\r", "\n") or ch.isprintable():
+                                break
+                        else:
+                            if ch in ("\r", "\n"):
+                                # 允许一次“空 Enter”被视作 IME 上屏，第二次才真正返回（简单启发）
+                                if ime_pending_enter_drops == 0:
+                                    ime_pending_enter_drops += 1
+                                    continue
+                                break
+                    time.sleep(0.035)
                 print("")
                 return
             except Exception:
                 pass
 
-            # POSIX 分支 (macOS / Linux)
+            # ---------- POSIX 实现 (macOS / Linux) ----------
             try:
                 import sys, termios, tty, select
-                fd = sys.stdin.fileno()
+                # 优先使用 /dev/tty 防止 stdin 被重定向或被 urwid/raw 模式影响
+                tty_stream = None
+                try:
+                    tty_stream = open("/dev/tty", "rb+", buffering=0)
+                except Exception:
+                    pass
+                in_file = tty_stream if tty_stream else sys.stdin
+                fd = in_file.fileno()
                 old_settings = termios.tcgetattr(fd)
                 print(prompt, end="", flush=True)
                 try:
-                    tty.setcbreak(fd)  # 单字符、无需 Enter
+                    tty.setcbreak(fd)
+                    ime_enter_defer = 0
                     while True:
-                        r, _, _ = select.select([sys.stdin], [], [], 0.2)
-                        if r:
-                            ch = sys.stdin.read(1)
-                            # 直接返回（任意键），兼容输入法场景
+                        r, _, _ = select.select([in_file], [], [], 0.25)
+                        if not r:
+                            continue
+                        ch = in_file.read(1)
+                        if not ch:
+                            continue
+                        # 回车或换行
+                        if ch in (b"\r", b"\n"):
+                            if return_on_any_key:
+                                break
+                            # 仅 Enter 模式：第一次 Enter 可能是 IME 上屏，延迟一次
+                            if ime_enter_defer == 0:
+                                ime_enter_defer += 1
+                                continue
                             break
+                        # 其它字节：直接返回（任意键）
+                        if return_on_any_key:
+                            break
+                        # 仅 Enter 模式下忽略其它字符
+                    print("")
                 finally:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                print("")
+                    try:
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    except Exception:
+                        pass
+                    if tty_stream:
+                        try:
+                            tty_stream.close()
+                        except Exception:
+                            pass
                 return
             except Exception:
-                # 最后回退：标准 input（可能仍受输入法影响，但至少不会崩）
+                # 回退：如果仍卡住，打印一次提示并直接返回，避免“卡死”体验
                 try:
-                    input(prompt)
+                    print(prompt + " (自动返回)" )
                 except Exception:
                     pass
+                return
         finally:
             self._resume_mouse_tracking()
 

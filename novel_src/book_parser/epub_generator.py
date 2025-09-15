@@ -39,7 +39,12 @@ class EpubGenerator:
             base_folder = Path(os.getcwd())
         cover_path_safe = Path(base_folder) / f"{safe_title}.jpg"
         cover_path_legacy = Path(base_folder) / f"{title}.jpg"  # 兼容旧文件名
-        self.book.set_identifier(identifier)
+        # 标识符也做一次安全清洗（某些站点可能返回含冒号或空格的 id，会触发部分阅读器警告）
+        try:
+            cfg_safe = cfg.safe_fs_name(str(identifier))
+        except Exception:
+            cfg_safe = str(identifier).replace(':', '_').strip() or 'id'
+        self.book.set_identifier(cfg_safe)
         self.book.set_title(title)
         self.book.set_language(language)
         try:
@@ -229,8 +234,30 @@ class EpubGenerator:
 
         self.book.spine = self.chapters
 
-        # 生成文件
-        epub.write_epub(output_path, self.book)
+        # 生成文件（带补救逻辑）
+        from ..base_system.context import GlobalContext as _GC
+        logger = None
+        try:
+            logger = _GC.get_logger()
+        except Exception:
+            pass
+        try:
+            epub.write_epub(output_path, self.book)
+        except Exception as e:
+            # 某些奇怪路径/编码问题时重试一次使用安全文件名
+            try:
+                if logger:
+                    logger.error(f"EPUB 写入失败: {e}，尝试使用安全文件名重试")
+                p = Path(output_path)
+                safe_stem = _GC.get_config().safe_fs_name(p.stem)
+                fallback_path = p.with_name(f"{safe_stem}.epub")
+                epub.write_epub(fallback_path, self.book)
+                if logger:
+                    logger.info(f"EPUB 已使用回退路径生成: {fallback_path}")
+            except Exception as e2:
+                if logger:
+                    logger.error(f"EPUB 回退写入仍失败: {e2}")
+                raise
 
     def add_metadata(self, namespace, name, value):
         """
