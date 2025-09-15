@@ -1169,12 +1169,13 @@ class TNDApp:
             pass
 
     def _wait_for_enter(self, prompt: str):
-        """等待用户确认返回。
+        """等待用户确认返回（任意键或鼠标点击）。
 
-        改进点:
-          1. Windows: 仍使用 msvcrt, 但任意可打印键或 Enter 都立即返回，避免输入法候选面板拦截 Enter。
-          2. POSIX(macOS/Linux): 尝试 termios + select 非阻塞读取单字符；若失败回退 input()。
-          3. 设置最大等待时间(默认无限)可扩展；当前无限等待，未来可按需加超时参数。
+        统一策略:
+          - Windows: 使用 msvcrt 读取按键（无法直接读取鼠标，退化为任意键返回）。
+          - POSIX: 进入 cbreak + 开启 XTerm 鼠标跟踪，解析 ESC 序列（左/右键单击立即返回）。
+          - 任意可打印键 / Enter / 功能键（方向键等） / 鼠标点击 均触发返回。
+          - 失败则回退打印提示并直接返回，避免卡死。
         """
         try:
             self._pause_mouse_tracking()
@@ -1230,34 +1231,78 @@ class TNDApp:
                 in_file = tty_stream if tty_stream else sys.stdin
                 fd = in_file.fileno()
                 old_settings = termios.tcgetattr(fd)
-                print(prompt, end="", flush=True)
+                print(prompt + " (任意键/鼠标点击返回)", end="", flush=True)
+                # 启用 xterm 鼠标跟踪模式 (1000: 普通点击, 1006: SGR, 1015: urxvt, 1002/1003: 拖/移动可按需)
+                enable_mouse_seq = b"\x1b[?1000h\x1b[?1006h"
+                disable_mouse_seq = b"\x1b[?1000l\x1b[?1006l"
                 try:
                     tty.setcbreak(fd)
+                    # 尝试向终端写入启用鼠标序列（可能失败，比如非 xterm）
+                    try:
+                        if tty_stream:
+                            tty_stream.write(enable_mouse_seq)
+                        else:
+                            sys.stdout.buffer.write(enable_mouse_seq)  # type: ignore
+                            sys.stdout.flush()
+                    except Exception:
+                        pass
                     ime_enter_defer = 0
+                    esc_buffer = b""
                     while True:
-                        r, _, _ = select.select([in_file], [], [], 0.25)
+                        r, _, _ = select.select([in_file], [], [], 0.2)
                         if not r:
                             continue
                         ch = in_file.read(1)
                         if not ch:
                             continue
+                        # ESC 序列聚合 (鼠标或功能键)  - 解析 SGR 鼠标点击: ESC [ < b ; x ; y M 或 m
+                        if ch == b"\x1b":
+                            esc_buffer = ch
+                            # 继续读取其后可能的序列（设一个很小的窗口）
+                            while True:
+                                r2, _, _ = select.select([in_file], [], [], 0.01)
+                                if not r2:
+                                    break
+                                ch2 = in_file.read(1)
+                                if not ch2:
+                                    break
+                                esc_buffer += ch2
+                                # 简单界定：超过一定长度认为是完整；或以 'M' 'm' 结尾（鼠标事件）
+                                if len(esc_buffer) > 32 or esc_buffer.endswith((b"M", b"m")):
+                                    break
+                            # 鼠标事件（SGR 模式 ESC [ < ... M/m）
+                            if b"[<" in esc_buffer and esc_buffer.endswith((b"M", b"m")):
+                                # 不区分按下抬起，直接返回
+                                break
+                            # 其它功能键序列当作一次交互直接返回（方向键等）
+                            if return_on_any_key:
+                                break
+                            else:
+                                continue
                         # 回车或换行
                         if ch in (b"\r", b"\n"):
                             if return_on_any_key:
                                 break
-                            # 仅 Enter 模式：第一次 Enter 可能是 IME 上屏，延迟一次
                             if ime_enter_defer == 0:
                                 ime_enter_defer += 1
                                 continue
                             break
-                        # 其它字节：直接返回（任意键）
+                        # 普通字节：直接返回
                         if return_on_any_key:
                             break
-                        # 仅 Enter 模式下忽略其它字符
                     print("")
                 finally:
                     try:
                         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    except Exception:
+                        pass
+                    # 关闭鼠标跟踪
+                    try:
+                        if tty_stream:
+                            tty_stream.write(disable_mouse_seq)
+                        else:
+                            sys.stdout.buffer.write(disable_mouse_seq)  # type: ignore
+                            sys.stdout.flush()
                     except Exception:
                         pass
                     if tty_stream:
