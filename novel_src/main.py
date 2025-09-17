@@ -1182,174 +1182,22 @@ class TNDApp:
             # 可配置：任意键返回或仅 Enter，后续可接入 config（先硬编码任意键）
             return_on_any_key = True
 
-            # ---------- Windows 实现 (扩展: 键盘 + 鼠标左键) ----------
+            # ---------- Windows 简化方案A：最兼容 input() ----------
             try:
-                import sys as _sys
-                import msvcrt  # type: ignore
-                import ctypes
-                from ctypes import wintypes
-
-                print(prompt + " (任意键/鼠标点击返回)", end="", flush=True)
-                self._flush_key_buffer()
-
-                # Win32 常量
-                STD_INPUT_HANDLE = -10
-                ENABLE_MOUSE_INPUT = 0x0010
-                ENABLE_EXTENDED_FLAGS = 0x0080
-                ENABLE_QUICK_EDIT_MODE = 0x0040
-
-                # 结构体定义
-                class COORD(ctypes.Structure):
-                    _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
-
-                class MOUSE_EVENT_RECORD(ctypes.Structure):
-                    _fields_ = [
-                        ("dwMousePosition", COORD),
-                        ("dwButtonState", ctypes.c_ulong),
-                        ("dwControlKeyState", ctypes.c_ulong),
-                        ("dwEventFlags", ctypes.c_ulong),
-                    ]
-
-                class KEY_EVENT_RECORD(ctypes.Structure):
-                    _fields_ = [
-                        ("bKeyDown", wintypes.BOOL),
-                        ("wRepeatCount", wintypes.WORD),
-                        ("wVirtualKeyCode", wintypes.WORD),
-                        ("wVirtualScanCode", wintypes.WORD),
-                        ("uChar", wintypes.WCHAR),
-                        ("dwControlKeyState", wintypes.DWORD),
-                    ]
-
-                class WINDOW_BUFFER_SIZE_RECORD(ctypes.Structure):
-                    _fields_ = [("dwSize", COORD)]
-
-                class MENU_EVENT_RECORD(ctypes.Structure):
-                    _fields_ = [("dwCommandId", wintypes.UINT)]
-
-                class FOCUS_EVENT_RECORD(ctypes.Structure):
-                    _fields_ = [("bSetFocus", wintypes.BOOL)]
-
-                class EVENT_UNION(ctypes.Union):
-                    _fields_ = [
-                        ("KeyEvent", KEY_EVENT_RECORD),
-                        ("MouseEvent", MOUSE_EVENT_RECORD),
-                        ("WindowBufferSizeEvent", WINDOW_BUFFER_SIZE_RECORD),
-                        ("MenuEvent", MENU_EVENT_RECORD),
-                        ("FocusEvent", FOCUS_EVENT_RECORD),
-                    ]
-
-                class INPUT_RECORD(ctypes.Structure):
-                    _fields_ = [("EventType", wintypes.WORD), ("Event", EVENT_UNION)]
-
-                KEY_EVENT = 0x0001
-                MOUSE_EVENT = 0x0002
-                FROM_LEFT_1ST_BUTTON_PRESSED = 0x0001
-
-                k32 = ctypes.windll.kernel32
-                h_in = k32.GetStdHandle(STD_INPUT_HANDLE)
-                original_mode = wintypes.DWORD()
-                if not k32.GetConsoleMode(h_in, ctypes.byref(original_mode)):
-                    raise OSError("GetConsoleMode failed")
-                # 启用鼠标输入并关闭 QuickEdit（否则鼠标事件不会投递）
-                new_mode = original_mode.value
-                new_mode |= ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS
-                new_mode &= ~ENABLE_QUICK_EDIT_MODE
-                k32.SetConsoleMode(h_in, new_mode)
-
-                ime_pending_enter_drops = 0
+                hint = (
+                    f"{prompt} (请输入任意字符后回车返回 / 如果中文输入法卡住，请切换英文再输入) > "
+                )
+                # 使用 input()，不捕获具体内容，回车即返回；输入法候选阶段如 Enter 被截获，可提示用户先输入一个字母
                 try:
-                    while True:
-                        # 先处理立即可用的键（减少延迟）
-                        if msvcrt.kbhit():
-                            ch = msvcrt.getwch()
-                            if ch in ("\x00", "\xe0"):
-                                # 功能键第二码丢弃
-                                try:
-                                    if msvcrt.kbhit():
-                                        msvcrt.getwch()
-                                except Exception:
-                                    pass
-                                # 功能键视为一次交互
-                                break
-                            if return_on_any_key:
-                                if ch in ("\r", "\n") or ch.isprintable():
-                                    break
-                            else:
-                                if ch in ("\r", "\n"):
-                                    if ime_pending_enter_drops == 0:
-                                        ime_pending_enter_drops += 1
-                                        continue
-                                    break
-                        # 读取控制台输入事件（阻塞等待，但快速循环内有键处理）
-                        records_read = wintypes.DWORD()
-                        buf = (INPUT_RECORD * 16)()
-                        if not k32.PeekConsoleInputW(h_in, buf, 16, ctypes.byref(records_read)):
-                            time.sleep(0.03)
-                            continue
-                        if records_read.value == 0:
-                            time.sleep(0.02)
-                            continue
-                        # 真正取走事件
-                        if not k32.ReadConsoleInputW(h_in, buf, records_read, ctypes.byref(records_read)):
-                            time.sleep(0.02)
-                            continue
-                        for i in range(records_read.value):
-                            rec = buf[i]
-                            if rec.EventType == MOUSE_EVENT:
-                                me = rec.Event.MouseEvent
-                                if me.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED:
-                                    raise StopIteration  # 使用异常快速跳出多层
-                            elif rec.EventType == KEY_EVENT:
-                                ke = rec.Event.KeyEvent
-                                if ke.bKeyDown:
-                                    ch = ke.uChar
-                                    if not ch:
-                                        # 功能键也直接返回
-                                        raise StopIteration
-                                    if return_on_any_key:
-                                        raise StopIteration
-                                    if ch in ("\r", "\n"):
-                                        if ime_pending_enter_drops == 0:
-                                            ime_pending_enter_drops += 1
-                                            continue
-                                        raise StopIteration
-                        # 循环继续
-                    # 结束条件：正常 break
-                except StopIteration:
+                    _ = input(hint)
+                except EOFError:
+                    # 可能在无交互环境，直接返回
                     pass
-                except Exception:
-                    # 任何异常回退到最基础键处理
+                except KeyboardInterrupt:
                     pass
-                finally:
-                    try:
-                        k32.SetConsoleMode(h_in, original_mode)
-                    except Exception:
-                        pass
-                print("")
                 return
             except Exception:
-                # 回退到最初 msvcrt 简单键模式
-                try:
-                    import msvcrt  # type: ignore
-                    print(prompt + " (任意键返回)", end="", flush=True)
-                    self._flush_key_buffer()
-                    while True:
-                        if msvcrt.kbhit():
-                            ch = msvcrt.getwch()
-                            if ch in ("\x00", "\xe0"):
-                                try:
-                                    if msvcrt.kbhit():
-                                        msvcrt.getwch()
-                                except Exception:
-                                    pass
-                                break
-                            if ch in ("\r", "\n") or ch.isprintable():
-                                break
-                        time.sleep(0.03)
-                    print("")
-                    return
-                except Exception:
-                    pass
+                pass
 
             # ---------- POSIX 实现 (macOS / Linux) ----------
             try:
