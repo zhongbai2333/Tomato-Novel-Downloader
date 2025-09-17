@@ -1257,8 +1257,18 @@ class TNDApp:
                 k32.SetConsoleMode(h_in, new_mode)
 
                 ime_pending_enter_drops = 0
+                start_ts = time.time()
+                timeout_sec = 25  # 防止在某些输入法拦截下永久卡死
+                event_count = 0
                 try:
                     while True:
+                        # 超时自动返回
+                        if timeout_sec and (time.time() - start_ts) > timeout_sec:
+                            try:
+                                print("\n[DEBUG] Windows 输入等待超时自动返回", end="")
+                            except Exception:
+                                pass
+                            break
                         # 先处理立即可用的键（减少延迟）
                         if msvcrt.kbhit():
                             ch = msvcrt.getwch()
@@ -1270,15 +1280,18 @@ class TNDApp:
                                 except Exception:
                                     pass
                                 # 功能键视为一次交互
+                                event_count += 1
                                 break
                             if return_on_any_key:
                                 if ch in ("\r", "\n") or ch.isprintable():
+                                    event_count += 1
                                     break
                             else:
                                 if ch in ("\r", "\n"):
                                     if ime_pending_enter_drops == 0:
                                         ime_pending_enter_drops += 1
                                         continue
+                                    event_count += 1
                                     break
                         # 读取控制台输入事件（阻塞等待，但快速循环内有键处理）
                         records_read = wintypes.DWORD()
@@ -1298,6 +1311,7 @@ class TNDApp:
                             if rec.EventType == MOUSE_EVENT:
                                 me = rec.Event.MouseEvent
                                 if me.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED:
+                                    event_count += 1
                                     raise StopIteration  # 使用异常快速跳出多层
                             elif rec.EventType == KEY_EVENT:
                                 ke = rec.Event.KeyEvent
@@ -1305,13 +1319,16 @@ class TNDApp:
                                     ch = ke.uChar
                                     if not ch:
                                         # 功能键也直接返回
+                                        event_count += 1
                                         raise StopIteration
                                     if return_on_any_key:
+                                        event_count += 1
                                         raise StopIteration
                                     if ch in ("\r", "\n"):
                                         if ime_pending_enter_drops == 0:
                                             ime_pending_enter_drops += 1
                                             continue
+                                        event_count += 1
                                         raise StopIteration
                         # 循环继续
                     # 结束条件：正常 break
@@ -1325,6 +1342,10 @@ class TNDApp:
                         k32.SetConsoleMode(h_in, original_mode)
                     except Exception:
                         pass
+                try:
+                    print(f"\n[DEBUG] Windows 输入结束 event_count={event_count}")
+                except Exception:
+                    pass
                 print("")
                 return
             except Exception:
@@ -1346,6 +1367,10 @@ class TNDApp:
                             if ch in ("\r", "\n") or ch.isprintable():
                                 break
                         time.sleep(0.03)
+                    try:
+                        print("\n[DEBUG] Windows fallback 模式退出")
+                    except Exception:
+                        pass
                     print("")
                     return
                 except Exception:
