@@ -33,6 +33,12 @@ def show_config_menu(config: Config):
         {"name": "是否以散装形式保存小说", "field": "bulk_files", "type": bool},
         {"name": "优雅退出模式", "field": "graceful_exit", "type": bool},
         {"name": "是否自动清理缓存文件", "field": "auto_clear_dump", "type": bool},
+    {"name": "是否生成有声小说", "field": "enable_audiobook", "type": bool},
+    {"name": "有声小说发音人", "field": "audiobook_voice", "type": str},
+    {"name": "有声小说语速(如+0%)", "field": "audiobook_rate", "type": str},
+    {"name": "有声小说音量(如+0%)", "field": "audiobook_volume", "type": str},
+    {"name": "有声小说音调(如+0%)", "field": "audiobook_pitch", "type": str},
+    {"name": "有声小说格式(mp3/wav)", "field": "audiobook_format", "type": str},
         # 网络
         {"name": "最大线程数", "field": "max_workers", "type": int},
         {"name": "请求超时(秒)", "field": "request_timeout", "type": int},
@@ -129,6 +135,12 @@ def show_config_menu(config: Config):
         if field == "novel_format" and new_val not in ("txt", "epub"):
             print("小说保存格式必须为 txt 或 epub")
             continue
+        if field == "audiobook_format":
+            lowered = new_val.lower()
+            if lowered not in ("mp3", "wav"):
+                print("有声小说格式必须为 mp3 或 wav")
+                continue
+            new_val = lowered
         if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "media_limit_per_chapter", "media_max_dimension_px", "media_total_limit_mb", "force_exit_timeout"):
             if new_val < 0:
                 print("该数值不能为负")

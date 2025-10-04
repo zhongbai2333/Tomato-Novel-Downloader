@@ -33,6 +33,24 @@ class Config(BaseConfig):
     )
     bulk_files: bool = Field(default=False, description="是否以散装形式保存小说")
     auto_clear_dump: bool = Field(default=True, description="是否自动清理缓存文件")
+    enable_audiobook: bool = Field(
+        default=False, description="是否使用 Edge TTS 生成有声小说"
+    )
+    audiobook_voice: str = Field(
+        default="zh-CN-XiaoxiaoNeural", description="Edge TTS 发音人"
+    )
+    audiobook_rate: str = Field(
+        default="+0%", description="Edge TTS 语速调整，例如 +0%、-10%"
+    )
+    audiobook_volume: str = Field(
+        default="+0%", description="Edge TTS 音量调整，例如 +0%、-10%"
+    )
+    audiobook_pitch: str = Field(
+        default="+0%", description="Edge TTS 音调调整，例如 +0%、-5%"
+    )
+    audiobook_format: str = Field(
+        default="mp3", description="有声小说输出格式，可选 mp3 或 wav"
+    )
 
     # 路径配置
     save_path: str = Field(default="", description="保存路径")

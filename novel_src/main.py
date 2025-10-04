@@ -257,6 +257,12 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否以散装形式保存小说": ("bulk_files", bool),
         "优雅退出模式": ("graceful_exit", bool),
         "是否自动清理缓存文件": ("auto_clear_dump", bool),
+    "是否生成有声小说": ("enable_audiobook", bool),
+    "有声小说发音人": ("audiobook_voice", str),
+    "有声小说语速(如+0%)": ("audiobook_rate", str),
+    "有声小说音量(如+0%)": ("audiobook_volume", str),
+    "有声小说音调(如+0%)": ("audiobook_pitch", str),
+    "有声小说格式(mp3/wav)": ("audiobook_format", str),
         # 网络
         "最大线程数": ("max_workers", int),
         "请求超时(秒)": ("request_timeout", int),

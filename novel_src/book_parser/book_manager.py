@@ -116,6 +116,15 @@ class BookManager:
             finalize_utils.run_finalize(self, chapters, result)
         except Exception as e:
             self.logger.error(f"finalize 生成失败: {e}")
+        try:
+            from .audio_generator import generate_audiobook
+
+            generate_audiobook(self, chapters)
+        except Exception as e:
+            try:
+                self.logger.error(f"有声小说生成失败: {e}")
+            except Exception:
+                pass
 
     # -------- 兼容旧 downloader 接口：保存章节与进度 --------
     def save_chapter(self, chapter_id: str, title: str, content: str):
