@@ -5,7 +5,6 @@
 import time
 import logging
 import requests
-import shutil
 import random
 import threading
 import signal
@@ -21,6 +20,11 @@ from ..book_parser.book_manager import BookManager
 from ..book_parser.parser import ContentParser
 from ..base_system.context import GlobalContext
 from ..base_system.log_system import TqdmLoggingHandler
+from ..base_system.progress import (
+    build_tqdm_common_kwargs,
+    get_terminal_columns,
+    refresh_progress_bars,
+)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
@@ -162,23 +166,8 @@ class ChapterDownloader:
         # ============ 并发执行 ============
 
         # 预先创建进度条，避免首批极快完成导致未创建无法更新
-        # 使用 dynamic_ncols 让 tqdm 自动填满整行；自定义 bar_format 统一显示
-        # 重新计算终端宽度，确保 tqdm 占满（Windows 下 tqdm 对 dynamic_ncols 偶尔失效）
-        try:
-            cols, _ = shutil.get_terminal_size(fallback=(120, 30))
-        except Exception:
-            cols = 120
-        # 使用动态列宽：交给 tqdm 自适应栏宽度，不再固定 {bar:width}
-        bar_fmt = "[{}] {{desc}} {{percentage:3.0f}}%|{{bar}}| {{n_fmt}}/{{total_fmt}} ETA:{{remaining}}".format(
-            "{elapsed}"
-        )
-        common_kwargs = dict(
-            mininterval=0.25,
-            dynamic_ncols=False,  # 改为手动控制，提升 Windows 稳定性
-            leave=True,
-            ncols=cols,
-            bar_format=bar_fmt,
-        )
+        # 使用统一的进度条样式与列宽
+        cols, common_kwargs = build_tqdm_common_kwargs()
         last_cols = cols
         if self.config.use_official_api:
             download_bar = tqdm(total=len(groups), desc="章节下载 -", position=0, **common_kwargs)
@@ -196,13 +185,7 @@ class ChapterDownloader:
         else:
             book_manager.media_progress = None
         # 刚创建后强制刷新一次，确保初始 ncols 生效
-        for pb in (download_bar, save_bar, media_bar):
-            if pb is not None:
-                try:
-                    pb.ncols = cols
-                    pb.refresh(nolock=True)
-                except Exception:
-                    pass
+        refresh_progress_bars((download_bar, save_bar, media_bar), columns=cols)
         # 缓冲保存进度更新，减少闪烁
         pending_save_updates = 0
         save_update_batch = 1 if tasks_count <= 80 else 3
@@ -232,22 +215,11 @@ class ChapterDownloader:
             
             def _maybe_resize_bars():
                 nonlocal last_cols
-                try:
-                    new_cols, _ = shutil.get_terminal_size(fallback=(120, 30))
-                except Exception:
-                    return
-                if not isinstance(new_cols, int) or new_cols <= 0:
-                    return
+                new_cols = get_terminal_columns()
                 if new_cols == last_cols:
                     return
                 last_cols = new_cols
-                for pb in (download_bar, save_bar, media_bar):
-                    if pb is not None:
-                        try:
-                            pb.ncols = new_cols
-                            pb.refresh(nolock=True)
-                        except Exception:
-                            pass
+                refresh_progress_bars((download_bar, save_bar, media_bar), columns=new_cols)
 
             while pending:
                 if self._stop_event.is_set():

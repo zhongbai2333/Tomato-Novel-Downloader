@@ -7,6 +7,7 @@ import json
 import urwid
 import shutil
 import time
+import stat
 import pyperclip
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Dict
@@ -47,6 +48,36 @@ def load_download_status(status_path: Path) -> dict:
         return {}
 
 
+def safe_remove_tree(path: Path, logger=None) -> bool:
+    """尽力删除目录，即使目录包含只读文件。成功返回 True，失败返回 False。"""
+
+    def _make_writable(target: Path):
+        try:
+            if target.exists():
+                os.chmod(target, stat.S_IWRITE | stat.S_IREAD)
+        except Exception:
+            pass
+
+    def _onerror(func, path_str, exc_info):
+        target = Path(path_str)
+        _make_writable(target)
+        try:
+            func(path_str)
+        except Exception:
+            raise
+
+    try:
+        shutil.rmtree(path, onerror=_onerror)
+        return True
+    except Exception as err:  # noqa: BLE001
+        if logger is not None:
+            try:
+                logger.warning(f"清理缓存目录失败: {path}，错误: {err}")
+            except Exception:
+                pass
+        return False
+
+
 def preview_ascii(image_path: Path):
     """在终端中渲染封面 ASCII 图（若失败则静默）。"""
     try:
@@ -58,32 +89,6 @@ def preview_ascii(image_path: Path):
     except Exception as e:  # noqa: BLE001
         logger = GlobalContext.get_logger()
         logger.debug(f"生成 ASCII 预览失败: {e}")
-
-
-def _preflight_get_iid(max_retries: int = 5, delay: float = 1.0) -> str | None:
-    """在进入界面前尝试获取 fanqie_mod 的 install_id（get_iid），成功则返回并打印，失败重试最多 max_retries 次。"""
-    logger = GlobalContext.get_logger()
-    try:
-        from fanqie_mod import get_iid  # 本地二进制扩展
-    except Exception as ie:
-        logger.error(f"加载 fanqie_mod 失败：{ie}")
-        return None
-
-    last_err = None
-    for i in range(1, max_retries + 1):
-        try:
-            iid = get_iid()
-            if iid:
-                print(f"初始化 install_id 成功：{iid}")
-                logger.info(f"install_id 初始化成功：{iid}")
-                return str(iid)
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            logger.debug(f"第 {i} 次获取 install_id 失败：{e}")
-        time.sleep(delay)
-    if last_err:
-        logger.error(f"多次获取 install_id 失败：{last_err}")
-    return None
 
 
 # ------------------------------------------------------------
@@ -210,14 +215,8 @@ class AboutPage(urwid.WidgetWrap):
         super().__init__(urwid.LineBox(urwid.Filler(piled, "top")))
 
 
-def menu_button(label: str, callback):
-    btn = urwid.Button(label)
-    urwid.connect_signal(btn, "click", callback)
-    return urwid.AttrMap(btn, None, focus_map="reversed")
-
-
 class SavePathPage(urwid.WidgetWrap):
-    """让用户输入保存路径，回车就等同点击“确定”"""
+    """让用户输入保存路径，可直接返回主菜单"""
 
     def __init__(self, app: "TNDApp", book_id: str):
         self.app = app
@@ -226,21 +225,45 @@ class SavePathPage(urwid.WidgetWrap):
         # 输入框
         self.edit = PasteableEdit(f"保存路径 (默认: {default}): ")
         # 确定按钮
-        ok_btn = menu_button("确定", lambda btn: self.on_confirm())
-        pile = urwid.Pile([self.edit, urwid.Divider(), ok_btn])
+        self.ok_btn = menu_button("确定", lambda btn: self.on_confirm())
+        self.cancel_btn = menu_button("返回主菜单", lambda btn: self.on_cancel())
+        pile = urwid.Pile([self.edit, urwid.Divider(), self.ok_btn, urwid.Divider(), self.cancel_btn])
         fill = urwid.Filler(pile, valign="top")
         super().__init__(urwid.LineBox(fill))
 
     def keypress(self, size, key):
         # 在输入框或按钮上按回车，都触发 on_confirm()
         if key == "enter":
-            self.on_confirm()
+            focus_widget = None
+            try:
+                linebox = self._w
+                fill = getattr(linebox, "original_widget", None)
+                if isinstance(fill, urwid.Filler):
+                    pile = fill.body
+                    if isinstance(pile, urwid.Pile):
+                        focus_info = pile.get_focus()
+                        if isinstance(focus_info, tuple):
+                            focus_widget = focus_info[0]
+                        else:
+                            focus_widget = focus_info
+            except Exception:
+                focus_widget = None
+            if focus_widget is self.cancel_btn:
+                self.on_cancel()
+            else:
+                self.on_confirm()
+            return None
+        if key in ("esc", "q", "Q"):
+            self.on_cancel()
             return None
         return super().keypress(size, key)
 
     def on_confirm(self):
         path = self.edit.edit_text.strip() or str(self.app.config.default_save_dir)
         self.app._download(self.book_id, path)
+
+    def on_cancel(self):
+        self.app.show_main()
 
 
 class ConfigMenu(urwid.WidgetPlaceholder):
@@ -257,12 +280,13 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否以散装形式保存小说": ("bulk_files", bool),
         "优雅退出模式": ("graceful_exit", bool),
         "是否自动清理缓存文件": ("auto_clear_dump", bool),
-    "是否生成有声小说": ("enable_audiobook", bool),
-    "有声小说发音人": ("audiobook_voice", str),
-    "有声小说语速(如+0%)": ("audiobook_rate", str),
-    "有声小说音量(如+0%)": ("audiobook_volume", str),
-    "有声小说音调(如+0%)": ("audiobook_pitch", str),
-    "有声小说格式(mp3/wav)": ("audiobook_format", str),
+        "是否生成有声小说": ("enable_audiobook", bool),
+        "有声小说发音人": ("audiobook_voice", str),
+        "有声小说语速(如+0%)": ("audiobook_rate", str),
+        "有声小说音量(如+0%)": ("audiobook_volume", str),
+        "有声小说音调(如+2Hz/-1st, 可留空)": ("audiobook_pitch", str),
+        "有声小说并发数": ("audiobook_concurrency", int),
+        "有声小说格式(mp3/wav)": ("audiobook_format", str),
         # 网络
         "最大线程数": ("max_workers", int),
         "请求超时(秒)": ("request_timeout", int),
@@ -355,8 +379,8 @@ class ConfigMenu(urwid.WidgetPlaceholder):
     def _on_bool_toggle(self, field: str, new_state: bool):
         """
         当某个布尔选项被勾选/取消时触发：
-    - 更新对应的 config.<field> = new_state
-    - 保存 config 并重建整张页面
+        - 更新对应的 config.<field> = new_state
+        - 保存 config 并重建整张页面
         """
         cfg = self.app.config
 
@@ -858,6 +882,7 @@ class TNDApp:
         self._spinner_frames = ["|", "/", "-", "\\"]
         self._spinner_index = 0
         self._spinner_alarm = None
+        self._active_manager: Optional[BookManager] = None
         self.show_main()
         # 封面预览状态标志防止重复进入
         self._in_cover_preview = False
@@ -866,7 +891,162 @@ class TNDApp:
     # 页面切换方法
     # --------------------------------------------------------
     def show_main(self):
+        self._maybe_cleanup_idle_session()
         self.main_placeholder.original_widget = InputPage(self)
+
+    def _maybe_cleanup_idle_session(self):
+        manager = getattr(self, "_active_manager", None)
+        if not manager:
+            self._cleanup_orphan_status_folder()
+            return
+        try:
+            auto_clear = bool(getattr(manager.config, "auto_clear_dump", False))
+        except Exception:
+            auto_clear = False
+        should_clean = (
+            auto_clear
+            and not getattr(manager, "_has_download_activity", False)
+            and not getattr(manager, "_cleanup_pending", False)
+            and not getattr(manager, "_status_folder_preexisting", True)
+        )
+        if should_clean:
+            status_folder = getattr(manager, "status_folder", None)
+            if isinstance(status_folder, Path) and status_folder.exists():
+                removed = safe_remove_tree(status_folder, logger=manager.logger)
+                if removed:
+                    try:
+                        manager.logger.info(f"已清理未使用缓存目录: {status_folder}")
+                    except Exception:
+                        pass
+                    try:
+                        manager.config.mark_status_folder_removed(status_folder)
+                    except Exception:
+                        pass
+        self._active_manager = None
+        self._cleanup_orphan_status_folder(
+            exclude=getattr(manager, "status_folder", None)
+        )
+
+    def _cleanup_orphan_status_folder(self, exclude: Optional[Path] = None):
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            return
+        try:
+            pending = cfg.pending_unclaimed_status_folders(exclude=exclude)
+        except Exception:
+            pending = []
+        if not pending:
+            self._cleanup_cover_only_download_dirs(exclude=exclude)
+            return
+        for folder in pending:
+            folder_path = Path(folder)
+            try:
+                if not folder_path.exists():
+                    cfg.mark_status_folder_removed(folder_path)
+                    continue
+            except Exception:
+                continue
+            removed = safe_remove_tree(folder_path, logger=self.logger)
+            if removed:
+                try:
+                    self.logger.info(f"已清理未使用缓存目录: {folder_path}")
+                except Exception:
+                    pass
+                try:
+                    cfg.mark_status_folder_removed(folder_path)
+                except Exception:
+                    pass
+        self._cleanup_cover_only_download_dirs(exclude=exclude)
+
+    def _cleanup_cover_only_download_dirs(self, exclude: Optional[Path] = None):
+        cfg = getattr(self, "config", None)
+        if cfg is None:
+            return
+        exclude_path = Path(exclude) if exclude else None
+        base_dirs: set[Path] = set()
+        try:
+            base_dirs.add(Path(cfg.default_save_dir))
+        except Exception:
+            pass
+        output_dir = getattr(cfg, "output_dir", None)
+        if output_dir:
+            try:
+                base_dirs.add(Path(output_dir))
+            except Exception:
+                pass
+        if not base_dirs:
+            return
+        for base_dir in base_dirs:
+            try:
+                if not base_dir or not base_dir.exists():
+                    continue
+            except Exception:
+                continue
+            try:
+                children = list(base_dir.iterdir())
+            except Exception:
+                continue
+            for child in children:
+                try:
+                    if not child.is_dir():
+                        continue
+                except Exception:
+                    continue
+                if exclude_path and child == exclude_path:
+                    continue
+                name = child.name
+                if not name or name.startswith("_") or "_" not in name:
+                    continue
+                id_part, _, book_part = name.partition("_")
+                if not id_part or not book_part:
+                    continue
+                if not id_part.isdigit():
+                    continue
+                try:
+                    entries = list(child.iterdir())
+                except Exception:
+                    continue
+                files = []
+                has_subdirs = False
+                for entry in entries:
+                    try:
+                        if entry.is_dir():
+                            has_subdirs = True
+                            break
+                        if entry.is_file():
+                            files.append(entry)
+                    except Exception:
+                        has_subdirs = True
+                        break
+                if has_subdirs or len(files) != 1:
+                    continue
+                cover_file = files[0]
+                try:
+                    suffix = cover_file.suffix.lower()
+                except Exception:
+                    continue
+                if suffix not in {".jpg", ".jpeg"}:
+                    continue
+                try:
+                    cover_stem = cover_file.stem
+                except Exception:
+                    continue
+                try:
+                    normalized_stem = cfg.safe_fs_name(cover_stem)
+                except Exception:
+                    normalized_stem = cover_stem
+                if normalized_stem != book_part:
+                    continue
+                removed = safe_remove_tree(child, logger=self.logger)
+                if removed:
+                    try:
+                        self.logger.info(f"已清理仅包含封面文件的缓存目录: {child}")
+                    except Exception:
+                        pass
+                    try:
+                        cfg.mark_status_folder_removed(child)
+                    except Exception:
+                        pass
 
     def show_config(self):
         self.main_placeholder.original_widget = ConfigMenu(self)
@@ -1116,19 +1296,6 @@ class TNDApp:
         except Exception:
             pass
 
-    # -------- 键盘输入辅助 --------
-    def _flush_key_buffer(self):
-        """在 Windows 控制台清空残留按键，避免被后续读取；其它平台忽略。"""
-        try:
-            import msvcrt  # type: ignore
-            while msvcrt.kbhit():
-                try:
-                    msvcrt.getwch()
-                except Exception:
-                    break
-        except Exception:
-            pass
-
     def _wait_for_enter(self, prompt: str):
         """等待用户确认返回（任意键或鼠标点击）。
 
@@ -1371,6 +1538,7 @@ class TNDApp:
                 except Exception:
                     pass
                 manager = BookManager(self.config, self.logger)
+                self._active_manager = manager
                 manager.book_name = book_name or ""
                 manager.book_id = book_id or ""
                 manager.author = author or ""
@@ -1555,6 +1723,7 @@ class TNDApp:
         # 6. 清屏并恢复Urwid主界面
         os.system("cls" if os.name == "nt" else "clear")
         self.show_main()
+        self._active_manager = None
 
     # --------------------------------------------------------
     # 启动应用

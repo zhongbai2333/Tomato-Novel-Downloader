@@ -13,7 +13,7 @@ from .segment_utils import (
 )
 
 
-def run_finalize(manager, chapters: list[dict], result: int = 0):
+def run_finalize(manager, chapters: list[dict], result: int = 0) -> bool:
     # 以 novel_format 为准；兼容旧字段 output_format
     fmt = (
         getattr(manager.config, "novel_format", None)
@@ -24,7 +24,7 @@ def run_finalize(manager, chapters: list[dict], result: int = 0):
         _finalize_epub(manager, chapters, output_file)
     else:
         _finalize_txt(manager, chapters, output_file)
-    _maybe_cleanup_after_finalize(manager, result)
+    return _maybe_cleanup_after_finalize(manager, result)
 
 
 # -------- 公共路径 --------
@@ -365,7 +365,7 @@ def _resolve_chapter_title(manager, chapters: list[dict], chap_id: str):
 
 
 # -------- finalize 后清理 --------
-def _maybe_cleanup_after_finalize(manager, result: int):
+def _maybe_cleanup_after_finalize(manager, result: int) -> bool:
     from ..base_system.storage_system import FileCleaner  # 延迟导入避免循环
 
     if not (
@@ -373,7 +373,24 @@ def _maybe_cleanup_after_finalize(manager, result: int):
         and getattr(manager.config, "auto_clear_dump", False)
         and manager.end
     ):
-        return
+        return False
+
+    if getattr(manager.config, "enable_audiobook", False):
+        # 延迟到音频生成完成后再执行清理
+        return True
+
+    _execute_cleanup(manager, FileCleaner)
+    return False
+
+
+def perform_deferred_cleanup(manager):
+    """在 finalize 后需要延迟执行清理时调用。"""
+    from ..base_system.storage_system import FileCleaner  # 延迟导入避免循环
+
+    _execute_cleanup(manager, FileCleaner)
+
+
+def _execute_cleanup(manager, FileCleaner):
     # 新版封面采用安全文件名，仍兼容旧文件名用于清理
     try:
         safe_name = manager.config.safe_fs_name(manager.book_name)
@@ -396,5 +413,9 @@ def _maybe_cleanup_after_finalize(manager, result: int):
                 pass
     try:
         FileCleaner.clean_dump_folder(manager.config.get_status_folder_path)
+    except Exception:
+        pass
+    try:
+        manager.logger.debug("自动清理已完成")
     except Exception:
         pass

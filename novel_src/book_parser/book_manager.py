@@ -20,6 +20,8 @@ class BookManager:
         self.description = ""
         self.end = False
         self.downloaded = {}
+        self._has_download_activity = False
+        self._cleanup_pending = False
         # 状态目录：优先使用 Config 的 get_status_folder_path（属性），否则回退到默认
         try:
             existing_folder = getattr(self.config, "get_status_folder_path", None)
@@ -36,6 +38,19 @@ class BookManager:
         self.status_folder = Path(existing_folder)
         self.status_folder.mkdir(parents=True, exist_ok=True)
         self.status_file = self.status_folder / "status.json"
+        try:
+            self.config.mark_status_folder_claimed(self.status_folder)
+        except Exception:
+            try:
+                self.config._last_status_folder_claimed = True
+            except Exception:
+                pass
+        try:
+            self._status_folder_preexisting = not bool(
+                self.config.status_folder_was_created_this_session(self.status_folder)
+            )
+        except Exception:
+            self._status_folder_preexisting = True
         # 媒体进度结构
         self._media_progress_lock = threading.Lock()
         self._media_progress_done = set()
@@ -112,25 +127,47 @@ class BookManager:
 
     # -------- finalize 输出（委托 finalize_utils） --------
     def finalize(self, chapters: List[dict], result: int = 0):
+        cleanup_deferred = False
+        tts_completed = True
         try:
-            finalize_utils.run_finalize(self, chapters, result)
+            cleanup_deferred = finalize_utils.run_finalize(self, chapters, result)
+            self._cleanup_pending = cleanup_deferred
         except Exception as e:
             self.logger.error(f"finalize 生成失败: {e}")
         try:
             from .audio_generator import generate_audiobook
 
-            generate_audiobook(self, chapters)
+            result_flag = generate_audiobook(self, chapters)
+            if result_flag is False:
+                tts_completed = False
         except Exception as e:
+            tts_completed = False
             try:
                 self.logger.error(f"有声小说生成失败: {e}")
             except Exception:
                 pass
+        finally:
+            if cleanup_deferred and tts_completed:
+                try:
+                    finalize_utils.perform_deferred_cleanup(self)
+                    self._cleanup_pending = False
+                except Exception as e:
+                    try:
+                        self.logger.error(f"自动清理失败: {e}")
+                    except Exception:
+                        pass
+            elif cleanup_deferred and not tts_completed:
+                try:
+                    self.logger.info("已保留缓存文件，可在修复问题后继续生成有声小说。")
+                except Exception:
+                    pass
 
     # -------- 兼容旧 downloader 接口：保存章节与进度 --------
     def save_chapter(self, chapter_id: str, title: str, content: str):
         """保存单章正文。content 为已清洗 HTML/文本。"""
         try:
             self.downloaded[chapter_id] = [title, content]
+            self._has_download_activity = True
         except Exception:
             pass
 
@@ -138,6 +175,7 @@ class BookManager:
         """记录失败章节，占位避免重复下载。"""
         try:
             self.downloaded[chapter_id] = [title, None]
+            self._has_download_activity = True
         except Exception:
             pass
 
