@@ -246,8 +246,7 @@ class SavePathPage(urwid.WidgetWrap):
 class ConfigMenu(urwid.WidgetPlaceholder):
     """配置编辑页面：
     - 布尔型选项用复选框 (CheckBox)；
-    - “官方 API” 与 “helloplhm_qwq API” 互斥；
-    - 当 helloplhm_qwq API 为 True 时，强制 max_workers=1，min_wait_time ≥ 1000，max_wait_time ≥ 1200。
+    - 各项修改实时保存并刷新视图。
     """
 
     # 配置项元数据：显示名称 -> (Config 属性名, 类型)
@@ -268,7 +267,6 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "强制退出等待时间(秒)": ("force_exit_timeout", int),
         # API 相关
         "是否使用官方API": ("use_official_api", bool),
-        "是否使用 helloplhm_qwq API": ("use_helloplhm_qwq_api", bool),
         "自定义API列表(逗号分隔)": ("api_endpoints", list),
         # 段评
         "是否下载段评": ("enable_segment_comments", bool),
@@ -279,10 +277,10 @@ class ConfigMenu(urwid.WidgetPlaceholder):
         "是否下载评论区头像": ("download_comment_avatars", bool),
         "评论图片下载线程数": ("media_download_workers", int),
         "图片域名黑名单(逗号分隔)": ("blocked_media_domains", list),
-    # 媒体体积/数量控制
-    "每章媒体数量上限(0为不限制)": ("media_limit_per_chapter", int),
-    "图片最长边像素上限(>0生效)": ("media_max_dimension_px", int),
-    "会话媒体总下载上限(MB,0不限制)": ("media_total_limit_mb", int),
+        # 媒体体积/数量控制
+        "每章媒体数量上限(0为不限制)": ("media_limit_per_chapter", int),
+        "图片最长边像素上限(>0生效)": ("media_max_dimension_px", int),
+        "会话媒体总下载上限(MB,0不限制)": ("media_total_limit_mb", int),
         # 图片转码/格式控制
         "强制所有图片转JPEG": ("force_convert_images_to_jpeg", bool),
         "非JPEG尝试转JPEG": ("jpeg_retry_convert", bool),
@@ -351,10 +349,8 @@ class ConfigMenu(urwid.WidgetPlaceholder):
     def _on_bool_toggle(self, field: str, new_state: bool):
         """
         当某个布尔选项被勾选/取消时触发：
-        - 更新对应的 config.<field> = new_state
-        - 针对 use_official_api 与 use_helloplhm_qwq_api 做互斥
-        - 如果启用了 helloplhm_qwq_api，则自动调整 max_workers、min_wait_time、max_wait_time
-        - 保存 config 并重建整张页面
+    - 更新对应的 config.<field> = new_state
+    - 保存 config 并重建整张页面
         """
         cfg = self.app.config
 
@@ -366,31 +362,6 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                 self.app.show_popup("已自动将保存格式切换为 EPUB 以启用段评功能。")
         # 其余布尔项照常赋值
         setattr(cfg, field, new_state)
-
-    # —— 互斥逻辑：使用官方 API 与 使用 helloplhm_qwq API 不能同时为 True ——
-        if field == "use_official_api" and new_state:
-            cfg.use_helloplhm_qwq_api = False
-
-        if field == "use_helloplhm_qwq_api" and new_state:
-            cfg.use_official_api = False
-
-        # —— 当启用 helloplhm_qwq API 时，强制调整相关参数 ——
-        changed = False
-        if getattr(cfg, "max_workers", None) != 1:
-            cfg.max_workers = 1
-            changed = True
-        if getattr(cfg, "min_wait_time", 0) < 1000:
-            cfg.min_wait_time = 1000
-            changed = True
-        if getattr(cfg, "max_wait_time", 0) < 1200:
-            cfg.max_wait_time = 1200
-            changed = True
-
-        if changed:
-            self.app.show_popup(
-                "启用 helloplhm_qwq API 时已自动调整：\n"
-                "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
-            )
 
         cfg.save()
         # 重建整个面板以刷新所有 CheckBox 和按钮文字状态
@@ -469,23 +440,7 @@ class ConfigMenu(urwid.WidgetPlaceholder):
                 if field == "api_endpoints" and not isinstance(new_val, list):
                     raise ValueError("内部错误: 解析API列表失败")
 
-                # 3) 互斥逻辑：官方API 与 helloplhm_qwq API
-                if field == "use_official_api" and new_val:
-                    cfg.use_helloplhm_qwq_api = False
-                if field == "use_helloplhm_qwq_api" and new_val:
-                    cfg.use_official_api = False
-                    if cfg.max_workers != 1:
-                        cfg.max_workers = 1
-                    if cfg.min_wait_time < 1000:
-                        cfg.min_wait_time = 1000
-                    if cfg.max_wait_time < 1200:
-                        cfg.max_wait_time = 1200
-                    self.app.show_popup(
-                        "由于启用 helloplhm_qwq API，已自动调整：\n"
-                        "最大线程数 = 1；最小等待 ≥ 1000；最大等待 ≥ 1200。"
-                    )
-
-                # 3.1) 互斥逻辑：段评 与 TXT
+                # 3) 互斥逻辑：段评 与 TXT
                 if field == "enable_segment_comments" and bool(new_val):
                     if getattr(cfg, "novel_format", "epub") == "txt":
                         # 当用户强制在编辑框里把 enable_segment_comments 设为 True 时，自动切到 EPUB

@@ -52,7 +52,6 @@ jobs:
 
       - name: Copy compiled B extensions into A's root (Linux)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           # Copy auxiliary python module required by fanqie_mod (TTEncrypt.py) from project source
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
@@ -137,7 +136,6 @@ jobs:
 
       - name: Copy compiled B extensions into A's root (Linux ARM64)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
@@ -223,7 +221,6 @@ jobs:
 
       - name: Copy compiled B extensions into A's root (Windows)
         run: |
-          Get-ChildItem B\client_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
           Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
           if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
         shell: powershell
@@ -318,7 +315,6 @@ jobs:
 
       - name: Copy compiled B extensions into A's root (macOS arm64)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
@@ -402,7 +398,6 @@ jobs:
 
       - name: Copy compiled B extensions into A's root (macOS Intel)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 

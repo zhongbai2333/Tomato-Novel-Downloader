@@ -71,7 +71,6 @@ jobs:
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
@@ -154,7 +153,6 @@ jobs:
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
@@ -240,7 +238,6 @@ jobs:
       - name: 将编译好的 .pyd 文件复制到仓库根目录 (Windows)
         shell: pwsh
         run: |
-          Get-ChildItem B\client_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
           Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
           if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
 
@@ -331,7 +328,6 @@ jobs:
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 
@@ -414,7 +410,6 @@ jobs:
 
       - name: 将编译好的 .so 文件复制到仓库根目录 (macOS Intel)
         run: |
-          cp B/client_mod.*.so . 2>/dev/null || true
           cp B/fanqie_mod.*.so . 2>/dev/null || true
           cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
 

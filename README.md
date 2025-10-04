@@ -6,7 +6,7 @@
 
 本项目~~完全~~基于第三方API，~~未~~使用官方API
 
-为了保证第三方API安全，关于helloplhm-qwq的API调用相关代码并不开源，包括地址和token，敬请谅解，谢谢！
+为了保证第三方API安全，部分第三方接口相关代码并不开源，包括地址和token，敬请谅解，谢谢！
 
 为方便视障人士使用，我保留了老的CLI界面，接下来是启用方法：
 
@@ -98,7 +98,7 @@
 
 感谢原作者Dimily的基础项目
 
-感谢来自Github用户@helloplhm-qwq的api！
+项目前期 · 感谢来自Github用户@helloplhm-qwq的api！
 
 项目前期 · 感谢来自QQ用户@终忆的api！
 

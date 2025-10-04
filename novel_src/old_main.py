@@ -24,10 +24,6 @@ def show_config_menu(config: Config):
 
     支持类型:
       bool / int / float / str / list(逗号或换行分隔)
-    互斥逻辑:
-      use_official_api 与 use_helloplhm_qwq_api
-    自动调整:
-      启用 helloplhm_qwq API 时: max_workers=1,min_wait_time>=1000,max_wait_time>=1200
     """
 
     # 定义所有可编辑配置项 (顺序即菜单顺序)
@@ -47,7 +43,6 @@ def show_config_menu(config: Config):
         {"name": "强制退出等待时间(秒)", "field": "force_exit_timeout", "type": int},
         # API
         {"name": "是否使用官方API", "field": "use_official_api", "type": bool},
-        {"name": "是否使用 helloplhm_qwq API", "field": "use_helloplhm_qwq_api", "type": bool},
         {"name": "自定义API列表(逗号分隔)", "field": "api_endpoints", "type": list},
         # 段评
         {"name": "是否下载段评", "field": "enable_segment_comments", "type": bool},
@@ -154,25 +149,6 @@ def show_config_menu(config: Config):
             except Exception as e:
                 print(f"创建目录失败: {e}")
                 continue
-
-        # 互斥与自动调整
-        if field == "use_official_api" and new_val:
-            if getattr(config, "use_helloplhm_qwq_api", False):
-                config.use_helloplhm_qwq_api = False
-                print("已自动关闭 helloplhm_qwq API")
-        if field == "use_helloplhm_qwq_api" and new_val:
-            msgs = []
-            if getattr(config, "use_official_api", False):
-                config.use_official_api = False
-                msgs.append("关闭 官方API")
-            if getattr(config, "max_workers", None) != 1:
-                config.max_workers = 1; msgs.append("max_workers=1")
-            if getattr(config, "min_wait_time", 0) < 1000:
-                config.min_wait_time = 1000; msgs.append("min_wait_time>=1000")
-            if getattr(config, "max_wait_time", 0) < 1200:
-                config.max_wait_time = 1200; msgs.append("max_wait_time>=1200")
-            if msgs:
-                print("启用 helloplhm_qwq API 已自动调整: " + "; ".join(msgs))
 
         # novel_format 与 段评互斥：
         # 1) 当用户把 novel_format 设为 txt，则强制关闭段评并提示

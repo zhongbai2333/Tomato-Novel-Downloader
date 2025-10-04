@@ -16,7 +16,6 @@ from tqdm import tqdm
 from typing import List, Dict, Optional, Tuple
 
 from .network import NetworkClient
-from client_mod import fetch_batch_chapter
 from fanqie_mod import get_iid, get_contents
 from ..book_parser.book_manager import BookManager
 from ..book_parser.parser import ContentParser
@@ -99,10 +98,9 @@ class ChapterDownloader:
         chapters: List[Dict],
     ) -> Dict[str, int]:
         """
-        执行多线程下载任务（支持三种模式）：
+        执行多线程下载任务：
           1. config.use_official_api → 官方批量（每 10 章一组）
-          2. config.use_helloplhm_qwq_api → 新增 helloplhm_qwq 批量（每 300 章一组）
-          3. 否则 → 非官方单章
+          2. 否则 → 非官方单章
         """
         # 仅暂时移除控制台类处理器（StreamHandler），保留文件处理器，以确保 tqdm 期间仍写入日志文件
         orig_handlers = self.logger.handlers.copy()
@@ -133,22 +131,19 @@ class ChapterDownloader:
 
         # ============ 准备要下载的章节列表 & 分组 ============
 
-        # 1. 官方批量模式（修改：每 50 章一组；get_contents 接受 List[str]）
-        # 记录本次会处理的章节 ID（用于段评进度条最终兜底）
-        target_ids: List[str] = []
+        to_download = [
+            ch
+            for ch in chapters
+            if (ch["id"] not in book_manager.downloaded)
+            or (book_manager.downloaded.get(ch["id"])[1] == "Error")
+        ]
+        tasks_count = len(to_download)
+        target_ids: List[str] = [ch["id"] for ch in to_download]
+        groups: List[List[dict]] = []
+
         if self.config.use_official_api:
-            to_download = [
-                ch
-                for ch in chapters
-                if (ch["id"] not in book_manager.downloaded)
-                or (book_manager.downloaded.get(ch["id"])[1] == "Error")
-            ]
-            target_ids = [ch["id"] for ch in to_download]
             # 按 50 章一组（原为 10）
-            groups = [
-                to_download[i : i + 25] for i in range(0, len(to_download), 25)
-            ]
-            tasks_count = len(to_download)
+            groups = [to_download[i : i + 25] for i in range(0, len(to_download), 25)]
             max_workers = self.config.max_workers
 
             def get_submit(exe):
@@ -158,55 +153,11 @@ class ChapterDownloader:
                     for grp in groups
                 }
 
-            desc = f"下载《{book_name}》（官方批量）"
-
-        # 2. 新增 helloplhm_qwq 批量模式
-        elif self.config.use_helloplhm_qwq_api:
-            # 筛选出需要下载的章节
-            to_download = [
-                ch
-                for ch in chapters
-                if (ch["id"] not in book_manager.downloaded)
-                or (book_manager.downloaded.get(ch["id"])[1] == "Error")
-            ]
-            # 提取所有待下载的 ID
-            id_list = [ch["id"] for ch in to_download]
-            # 每 300 个 ID 划分一组
-            id_groups: List[List[str]] = [
-                id_list[i : i + 300] for i in range(0, len(id_list), 300)
-            ]
-            target_ids = id_list[:]
-            # 对应于每个 ID 列表，我们还要记住“这一组对应哪几个章节”，
-            # 以便将来存储和统计时知道哪些 ID 与哪个章节绑定。这里可以用一个 map。
-            # 但为了简单，我们只传递 ID 列表给任务，后面结果处理时只关注 ID 即可。
-            tasks_count = len(id_list)
-            max_workers = 1
-
-            def get_submit(exe):
-                # 把每个 300 ID 的列表提交给线程池
-                return {
-                    exe.submit(self._download_helloplhm_batch, grp): grp
-                    for grp in id_groups
-                }
-
-            desc = f"下载《{book_name}》（helloplhm_qwq 批量）"
-
-        # 3. 非官方单章模式
         else:
-            to_download = [
-                ch
-                for ch in chapters
-                if (ch["id"] not in book_manager.downloaded)
-                or (book_manager.downloaded.get(ch["id"])[1] == "Error")
-            ]
-            tasks_count = len(to_download)
             max_workers = min(self.config.max_workers, len(self.config.api_endpoints))
-            target_ids = [ch["id"] for ch in to_download]
 
             def get_submit(exe):
                 return {exe.submit(self._download_single, ch): ch for ch in to_download}
-
-            desc = f"下载《{book_name}》"
 
         # ============ 并发执行 ============
 
@@ -231,9 +182,6 @@ class ChapterDownloader:
         last_cols = cols
         if self.config.use_official_api:
             download_bar = tqdm(total=len(groups), desc="章节下载 -", position=0, **common_kwargs)
-            self._batch_progress_bar = download_bar
-        elif self.config.use_helloplhm_qwq_api:
-            download_bar = tqdm(total=len(id_groups), desc="章节下载 -", position=0, **common_kwargs)
             self._batch_progress_bar = download_bar
         else:
             download_bar = tqdm(total=tasks_count, desc="章节下载 -", position=0, **common_kwargs)
@@ -334,24 +282,6 @@ class ChapterDownloader:
                                 _save_bar_incr()
                             # 批进度条内部已在批下载函数里自增（如有）
                             continue
-                        elif self.config.use_helloplhm_qwq_api:
-                            batch_out: Dict[str, Tuple[str, str]] = fut.result()
-                            for cid, (content, title) in batch_out.items():
-                                if content == "Error":
-                                    book_manager.save_error_chapter(cid, cid)
-                                    if seg_enabled:
-                                        try:
-                                            book_manager._media_progress_mark(cid, "error")
-                                        except Exception:
-                                            pass
-                                    results["failed"] += 1
-                                else:
-                                    book_manager.save_chapter(cid, title, content)
-                                    if seg_enabled and chapter_comment_executor:
-                                        comment_futures.append(chapter_comment_executor.submit(self._maybe_fetch_segment_comments, book_manager, cid))
-                                    results["success"] += 1
-                                _save_bar_incr()
-                            continue
                         else:
                             content, title = fut.result()
                             cid = task["id"]
@@ -375,7 +305,7 @@ class ChapterDownloader:
                         raise
                     except Exception as e:
                         self.logger.error(f"[异常] 处理任务时出错：{e}")
-                        if not (self.config.use_official_api or self.config.use_helloplhm_qwq_api):
+                        if not self.config.use_official_api:
                             try:
                                 download_bar.update(1)
                             except Exception:
@@ -650,61 +580,3 @@ class ChapterDownloader:
             pass
         return out
 
-    # --- 新增 helloplhm_qwq 批量下载方法 ---
-    def _download_helloplhm_batch(
-        self, id_list: List[str]
-    ) -> Dict[str, Tuple[str, str]]:
-        """
-        通过 helloplhm_qwq API 一次性下载最多 300 个章节。
-        输入：id_list → ["id1", "id2", ...]（长度 <= 300）
-        返回：{ id: (content 或 "Error", title 或 id) }
-        """
-        # 生成请求 ID，便于日志追踪
-        joined = "-".join(id_list)[:4]
-        req_id = f"{joined}-{random.randint(1000,9999)}"
-        self.logger.debug(f"[{req_id}] helloplhm_qwq 批量下载 {len(id_list)} 章")
-    # 开始不更新；完成后再 +1
-
-        # 随机延迟以分散压力
-        dt = random.randint(
-            self.config.min_wait_time if self.config.min_wait_time >= 1000 else 1000,
-            self.config.max_wait_time if self.config.min_wait_time >= 1200 else 1200,
-        )
-        time.sleep(dt / 1000)
-
-        try:
-            # 调用外部函数，一次性传入 ID 列表
-            raw_result = fetch_batch_chapter(id_list)
-            # 这里假设 raw_result 是一个形如 { "id1": {...}, "id2": {...} } 的原始返回，需要交由 ContentParser 解析
-            parsed: Dict[str, Tuple[str, str]] = ContentParser.extract_api_content(
-                raw_result
-            )
-            # parsed 中的格式为 { "id": (content, title) }
-            # 如果 content 为空，可以视作下载失败
-            out: Dict[str, Tuple[str, str]] = {}
-            for cid in id_list:
-                if cid not in parsed or not parsed[cid][0]:
-                    out[cid] = ("Error", cid)  # 如果没拿到内容，就用 Error
-                else:
-                    out[cid] = parsed[cid]
-            self.logger.info(
-                f"[{req_id}] helloplhm_qwq 批量下载完成 ({len(id_list)} 章)"
-            )
-            try:
-                if self._batch_progress_bar is not None:
-                    with self._batch_bar_lock:
-                        self._batch_progress_bar.update(1)
-            except Exception:
-                pass
-            return out
-
-        except Exception as e:
-            # 如果整个批次调用出错，则把这一批次的 ID 全部标记为 Error
-            self.logger.error(f"[{req_id}] helloplhm_qwq 批量下载异常：{e}")
-            try:
-                if self._batch_progress_bar is not None:
-                    with self._batch_bar_lock:
-                        self._batch_progress_bar.update(1)
-            except Exception:
-                pass
-            return {cid: ("Error", cid) for cid in id_list}

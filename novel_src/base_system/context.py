@@ -39,9 +39,6 @@ class Config(BaseConfig):
 
     # API配置
     use_official_api: bool = Field(default=True, description="使用官方API")
-    use_helloplhm_qwq_api: bool = Field(
-        default=False, description="使用helloplhm_qwq API"
-    )
     api_endpoints: list = Field(
         default=[],
         description="API列表",
