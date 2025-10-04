@@ -20,3 +20,4 @@ portalocker
 urwid
 pyperclip
 pillow_heif
+edge-tts

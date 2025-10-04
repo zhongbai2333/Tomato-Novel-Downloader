@@ -24,10 +24,6 @@ def show_config_menu(config: Config):
 
     支持类型:
       bool / int / float / str / list(逗号或换行分隔)
-    互斥逻辑:
-      use_official_api 与 use_helloplhm_qwq_api
-    自动调整:
-      启用 helloplhm_qwq API 时: max_workers=1,min_wait_time>=1000,max_wait_time>=1200
     """
 
     # 定义所有可编辑配置项 (顺序即菜单顺序)
@@ -37,6 +33,13 @@ def show_config_menu(config: Config):
         {"name": "是否以散装形式保存小说", "field": "bulk_files", "type": bool},
         {"name": "优雅退出模式", "field": "graceful_exit", "type": bool},
         {"name": "是否自动清理缓存文件", "field": "auto_clear_dump", "type": bool},
+        {"name": "是否生成有声小说", "field": "enable_audiobook", "type": bool},
+        {"name": "有声小说发音人", "field": "audiobook_voice", "type": str},
+        {"name": "有声小说语速(如+0%)", "field": "audiobook_rate", "type": str},
+        {"name": "有声小说音量(如+0%)", "field": "audiobook_volume", "type": str},
+        {"name": "有声小说音调(如+2Hz/-1st, 可留空)", "field": "audiobook_pitch", "type": str},
+        {"name": "有声小说并发数", "field": "audiobook_concurrency", "type": int},
+        {"name": "有声小说格式(mp3/wav)", "field": "audiobook_format", "type": str},
         # 网络
         {"name": "最大线程数", "field": "max_workers", "type": int},
         {"name": "请求超时(秒)", "field": "request_timeout", "type": int},
@@ -47,7 +50,6 @@ def show_config_menu(config: Config):
         {"name": "强制退出等待时间(秒)", "field": "force_exit_timeout", "type": int},
         # API
         {"name": "是否使用官方API", "field": "use_official_api", "type": bool},
-        {"name": "是否使用 helloplhm_qwq API", "field": "use_helloplhm_qwq_api", "type": bool},
         {"name": "自定义API列表(逗号分隔)", "field": "api_endpoints", "type": list},
         # 段评
         {"name": "是否下载段评", "field": "enable_segment_comments", "type": bool},
@@ -134,7 +136,13 @@ def show_config_menu(config: Config):
         if field == "novel_format" and new_val not in ("txt", "epub"):
             print("小说保存格式必须为 txt 或 epub")
             continue
-        if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "media_limit_per_chapter", "media_max_dimension_px", "media_total_limit_mb", "force_exit_timeout"):
+        if field == "audiobook_format":
+            lowered = new_val.lower()
+            if lowered not in ("mp3", "wav"):
+                print("有声小说格式必须为 mp3 或 wav")
+                continue
+            new_val = lowered
+        if field in ("max_workers", "max_retries", "segment_comments_top_n", "segment_comments_workers", "media_download_workers", "media_limit_per_chapter", "media_max_dimension_px", "media_total_limit_mb", "force_exit_timeout", "audiobook_concurrency"):
             if new_val < 0:
                 print("该数值不能为负")
                 continue
@@ -154,25 +162,6 @@ def show_config_menu(config: Config):
             except Exception as e:
                 print(f"创建目录失败: {e}")
                 continue
-
-        # 互斥与自动调整
-        if field == "use_official_api" and new_val:
-            if getattr(config, "use_helloplhm_qwq_api", False):
-                config.use_helloplhm_qwq_api = False
-                print("已自动关闭 helloplhm_qwq API")
-        if field == "use_helloplhm_qwq_api" and new_val:
-            msgs = []
-            if getattr(config, "use_official_api", False):
-                config.use_official_api = False
-                msgs.append("关闭 官方API")
-            if getattr(config, "max_workers", None) != 1:
-                config.max_workers = 1; msgs.append("max_workers=1")
-            if getattr(config, "min_wait_time", 0) < 1000:
-                config.min_wait_time = 1000; msgs.append("min_wait_time>=1000")
-            if getattr(config, "max_wait_time", 0) < 1200:
-                config.max_wait_time = 1200; msgs.append("max_wait_time>=1200")
-            if msgs:
-                print("启用 helloplhm_qwq API 已自动调整: " + "; ".join(msgs))
 
         # novel_format 与 段评互斥：
         # 1) 当用户把 novel_format 设为 txt，则强制关闭段评并提示

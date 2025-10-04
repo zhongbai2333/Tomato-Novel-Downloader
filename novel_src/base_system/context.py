@@ -4,8 +4,10 @@
 # -------------------------------
 import os
 import re
+import shutil
 from logging import Logger
 from pathlib import Path
+from typing import Optional, List, Dict
 
 from .storage_system import BaseConfig, Field, ConfigError
 from .log_system import LogSystem
@@ -33,15 +35,33 @@ class Config(BaseConfig):
     )
     bulk_files: bool = Field(default=False, description="是否以散装形式保存小说")
     auto_clear_dump: bool = Field(default=True, description="是否自动清理缓存文件")
+    enable_audiobook: bool = Field(
+        default=False, description="是否使用 Edge TTS 生成有声小说"
+    )
+    audiobook_voice: str = Field(
+        default="zh-CN-XiaoxiaoNeural", description="Edge TTS 发音人"
+    )
+    audiobook_rate: str = Field(
+        default="+0%", description="Edge TTS 语速调整，例如 +0%、-10%"
+    )
+    audiobook_volume: str = Field(
+        default="+0%", description="Edge TTS 音量调整，例如 +0%、-10%"
+    )
+    audiobook_pitch: str = Field(
+        default="", description="Edge TTS 音调调整，例如 +2Hz 或 -1st (留空表示默认)"
+    )
+    audiobook_format: str = Field(
+        default="mp3", description="有声小说输出格式，可选 mp3 或 wav"
+    )
+    audiobook_concurrency: int = Field(
+        default=24, description="Edge TTS 有声小说并发生成的最大章节数"
+    )
 
     # 路径配置
     save_path: str = Field(default="", description="保存路径")
 
     # API配置
     use_official_api: bool = Field(default=True, description="使用官方API")
-    use_helloplhm_qwq_api: bool = Field(
-        default=False, description="使用helloplhm_qwq API"
-    )
     api_endpoints: list = Field(
         default=[],
         description="API列表",
@@ -121,15 +141,111 @@ class Config(BaseConfig):
         except Exception:
             return None
 
+    _last_status_folder_was_new: bool = False
+    _last_status_folder_claimed: bool = False
+    _last_status_folder_path: Optional[Path] = None
+    _status_folder_registry: Optional[List[Dict[str, object]]] = None
+
+    # ---------------- 状态目录注册表 ----------------
+    def _get_status_registry(self) -> List[Dict[str, object]]:
+        registry = getattr(self, "_status_folder_registry", None)
+        if registry is None:
+            registry = []
+            self._status_folder_registry = registry
+        return registry
+
+    def _register_status_folder(self, path: Path, existed_before: bool):
+        registry = self._get_status_registry()
+        path_obj = Path(path)
+        path_key = str(path_obj)
+        entry = None
+        for item in registry:
+            if Path(item.get("path")) == path_obj:
+                entry = item
+                break
+        prior_new_unclaimed = bool(entry and entry.get("is_new") and not entry.get("claimed"))
+        is_new_this_session = prior_new_unclaimed or (not existed_before)
+        if entry:
+            entry["is_new"] = bool(entry.get("is_new")) or is_new_this_session
+            if is_new_this_session:
+                entry["claimed"] = False
+        else:
+            registry.append({
+                "path": path_key,
+                "is_new": is_new_this_session,
+                "claimed": False,
+            })
+        self._last_status_folder_path = path_obj
+        self._last_status_folder_was_new = is_new_this_session
+        self._last_status_folder_claimed = False
+
+    def mark_status_folder_claimed(self, path: Path):
+        registry = self._get_status_registry()
+        path_obj = Path(path)
+        for entry in registry:
+            if Path(entry.get("path")) == path_obj:
+                entry["claimed"] = True
+        if self._last_status_folder_path and Path(self._last_status_folder_path) == path_obj:
+            self._last_status_folder_claimed = True
+
+    def mark_status_folder_removed(self, path: Path):
+        registry = self._get_status_registry()
+        path_obj = Path(path)
+        self._status_folder_registry = [
+            entry for entry in registry if Path(entry.get("path")) != path_obj
+        ]
+        if self._last_status_folder_path and Path(self._last_status_folder_path) == path_obj:
+            self._last_status_folder_path = None
+            self._last_status_folder_was_new = False
+            self._last_status_folder_claimed = False
+
+    def pending_unclaimed_status_folders(self, exclude: Optional[Path] = None) -> List[Path]:
+        registry = self._get_status_registry()
+        exclude_path = Path(exclude) if exclude else None
+        pending: List[Path] = []
+        for entry in registry:
+            path_val = entry.get("path")
+            if not path_val:
+                continue
+            path_obj = Path(path_val)
+            if exclude_path and path_obj == exclude_path:
+                continue
+            if entry.get("is_new") and not entry.get("claimed"):
+                pending.append(path_obj)
+        return pending
+
+    def status_folder_was_created_this_session(self, path: Path) -> bool:
+        registry = self._get_status_registry()
+        path_obj = Path(path)
+        for entry in registry:
+            if Path(entry.get("path")) == path_obj:
+                return bool(entry.get("is_new"))
+        if self._last_status_folder_path and Path(self._last_status_folder_path) == path_obj:
+            return bool(self._last_status_folder_was_new)
+        return False
+
     def status_folder_path(self, book_name: str, book_id: str, save_dir: str = None) -> Path:
         """生成书籍专属状态文件路径"""
         if not save_dir:
             save_dir = self.default_save_dir
+        previous_path = getattr(self, "_last_status_folder_path", None)
+        previous_new = bool(getattr(self, "_last_status_folder_was_new", False))
+        previous_claimed = bool(getattr(self, "_last_status_folder_claimed", False))
         # 清理非法字符确保文件名安全
         safe_book_id = re.sub(r"[^a-zA-Z0-9_]", "_", book_id)
         safe_book_name = self.safe_fs_name(book_name)
-        self.folder_path = Path(save_dir) / f"{safe_book_id}_{safe_book_name}"
-        self.folder_path.mkdir(parents=True, exist_ok=True)
+        path = Path(save_dir) / f"{safe_book_id}_{safe_book_name}"
+        existed_before = path.exists()
+        path.mkdir(parents=True, exist_ok=True)
+        if previous_path and previous_new and not previous_claimed:
+            try:
+                old_path = Path(previous_path)
+                if old_path != path and old_path.exists():
+                    shutil.rmtree(old_path)
+            except Exception:
+                pass
+        self.folder_path = path
+        self._register_status_folder(path, existed_before)
         return self.folder_path
 
     # ---------------- 文件名安全工具 ----------------
@@ -138,7 +254,7 @@ class Config(BaseConfig):
         """将任意字符串转换为跨平台安全的文件/目录名。
 
         规则:
-          1. 替换 Windows 非法字符 <>:"/\|?* 为 replacement
+          1. 替换 Windows 非法字符 <>:"/\\|?* 为 replacement
           2. 去除控制字符 (0-31)
           3. 去除前后空格与点 (Windows 不允许以点/空格结尾)
           4. 处理保留字 (CON, PRN, AUX, NUL, COM1.., LPT1..)
