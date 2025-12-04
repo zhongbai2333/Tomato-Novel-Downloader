@@ -2,42 +2,62 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches:
-      - main  # 监控 main 分支的推送事件
-  pull_request:
-    branches:
-      - main  # 监控主分支的拉取请求
+    tags:
+      - 'v*'  # 当推送以 v 开头的标签时触发
+  workflow_dispatch:  # 允许在仓库 Actions 页面手动触发
+
+env:
+  REGISTRY: ghcr.io  # 使用 GitHub Container Registry
+  IMAGE_NAME: ${{ github.repository }}  # 镜像名称默认为“用户名/仓库名”
+  BINARY_URL: "https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases/download/v1.8.5/TomatoNovelDownloader-Linux_amd64-v1.8.5"
 
 jobs:
-  build:
+  build-and-push:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # 必须授予写入包的权限
 
     steps:
-    # 检出代码
-    - name: Checkout code
-      uses: actions/checkout@v3
+      # 1. 检出当前仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 设置 Docker 版本
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      # 2. 下载外部二进制文件
+      - name: Download binary
+        run: |
+          wget -O tomato-downloader ${{ env.BINARY_URL }}
+          chmod +x tomato-downloader
 
-    # 登录到 GitHub Container Registry
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v2
-      with:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}  # 使用 GitHub token 自动登录
+      # 3. 设置 Docker Buildx (支持多平台构建等高级功能)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    # 构建 Docker 镜像
-    - name: Build Docker image
-      run: |
-        docker build -t ghcr.io/${{ github.repository_owner }}/tomato-novel-downloader:latest .
+      # 4. 登录到 GitHub Packages 容器注册表
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # 使用自动生成的令牌
 
-    # 推送镜像到 GitHub Container Registry
-    - name: Push Docker image
-      run: |
-        docker push ghcr.io/${{ github.repository_owner }}/tomato-novel-downloader:latest
+      # 5. 提取元数据（为镜像生成标签）
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag  # 使用 Git 标签作为镜像标签
+            type=sha,prefix={{branch}}-,format=short  # 添加提交SHA作为备选标签
 
-    # （可选）清理 Docker 镜像
-    - name: Docker system prune
-      run: docker system prune -af
+      # 6. 构建 Docker 镜像并推送到 GitHub Packages
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .  # 构建上下文为当前目录
+          file: ./Dockerfile  # 指定 Dockerfile 路径
+          platforms: linux/amd64  # 指定平台，与二进制文件匹配
+          push: true  # 构建后直接推送
+          tags: ${{ steps.meta.outputs.tags }}  # 使用上一步生成的标签
+          labels: ${{ steps.meta.outputs.labels }}
