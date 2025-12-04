@@ -17,18 +17,6 @@ jobs:
     container:
       image: alpine:latest
     steps:
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout private repo B
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
       - name: Install Alpine build dependencies
         run: |
           apk update
@@ -48,6 +36,18 @@ jobs:
           # 确保使用正确的 Python 版本
           python3 --version
           pip3 --version
+
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout private repo B
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
 
       - name: Install B's build dependencies (Alpine)
         run: |
