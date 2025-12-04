@@ -1,23 +1,25 @@
-name: Auto Build Python Executable for Alpine Linux
+name: Build for Alpine Linux
 
 on:
   push:
-    branches: [ "main", "dev" ]
+    branches: [ "main" ]
     tags: [ "v*" ]
-    paths:
-      - '**.py'
-      - 'requirements.txt'
-      - 'img/**'
-      - '.github/workflows/build_executable.yml'
-  workflow_dispatch:
+  workflow_dispatch: # 允许手动触发
 
 jobs:
-  build-alpine:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest # 任务在Ubuntu宿主机上启动
     container:
-      image: alpine:latest
+      image: alpine:latest # 但在Alpine容器内执行所有步骤
+
     steps:
-      - name: Install Alpine build dependencies
+      # 关键修复：为容器内的checkout显式传递令牌
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }} # 此行必须存在
+
+      - name: Install Alpine Build Dependencies
         run: |
           apk update
           apk add --no-cache \
@@ -29,155 +31,33 @@ jobs:
             musl-dev \
             libffi-dev \
             openssl-dev \
-            git \
             make \
-            linux-headers \
-            upx
-          # 确保使用正确的 Python 版本
-          python3 --version
-          pip3 --version
+            linux-headers
 
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout private repo B
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: Install B's build dependencies (Alpine)
+      - name: Install Python Dependencies
         run: |
           pip3 install --upgrade pip
-          pip3 install Cython
-          if [ -f B/requirements.txt ]; then
-            pip3 install -r B/requirements.txt
+          if [ -f requirements.txt ]; then
+            pip3 install -r requirements.txt
           fi
-
-      - name: Build Cython extensions from B (Alpine)
-        run: |
-          cd B
-          python3 setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python3 setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
-          fi
-          cd ..
-
-      - name: Copy compiled B extensions into A's root (Alpine)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
-
-      - name: Install project dependencies (Alpine)
-        run: |
-          pip3 install --upgrade pip
-          pip3 install -r requirements.txt
           pip3 install pyinstaller
 
-      - name: Build Executable (Alpine)
+      - name: Build with PyInstaller
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             VERSION="${{ github.ref_name }}"
           else
-            VERSION="sha-${{ github.sha }}"
+            VERSION="sha-${{ github.sha:0:8 }"
           fi
           
-          # 为 Alpine/musl 构建
           python3 -m PyInstaller \
             --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Alpine_linux_amd64-$VERSION \
+            --name "MyApp-Alpine-$VERSION" \
             --clean \
-            main.py
+            main.py # 请确保这是您的入口文件
 
-      - name: Upload Alpine Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: alpine-build
-          path: dist/TomatoNovelDownloader-Alpine_linux_amd64-*
-
-  publish-release:
-    needs: [build-alpine]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
-      - name: List Artifacts
-        run: ls -R release-artifacts
-
-      - name: Generate Release Notes
-        id: generate_notes
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          result-encoding: string
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const tag = context.ref.replace('refs/tags/', '');
-            const releasesResp = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
-            const releases = releasesResp.data;
-            const tags = releases.map(r => r.tag_name);
-            const idx = tags.indexOf(tag);
-            const prev = idx < releases.length - 1 ? releases[idx+1] : null;
-            const since = prev ? prev.published_at : null;
-            const prevTag = prev ? prev.tag_name : null;
-            const compareUrl = prevTag ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}` : '';
-            const params = { owner, repo, state: 'closed', per_page: 100 };
-            if (since) params.since = since;
-            const issuesResp = await github.rest.issues.listForRepo(params);
-            const items = issuesResp.data.filter(item =>
-              !item.labels.some(lbl => ['wontfix', 'duplicate'].includes(lbl.name.toLowerCase()))
-            );
-            const groups = { Fix: [], Update: [], Feature: [] };
-            items.forEach(item => {
-              item.labels.forEach(lbl => {
-                if (lbl.name === 'bug') groups.Fix.push(item);
-                else if (lbl.name === 'update') groups.Update.push(item);
-                else if (lbl.name === 'enhancement') groups.Feature.push(item);
-              });
-            });
-            let body = "# What's Changed\n\n";
-            const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
-            for (const key of ['Fix','Update','Feature']) {
-              if (groups[key].length) {
-                body += `## ${key}\n\n`;
-                for (const i of groups[key]) {
-                  body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
-                }
-                body += "\n";
-              }
-            }
-            if (compareUrl) {
-              body += `**Full Changelog**: ${compareUrl}\n`;
-            }
-            return body;
-
-      - name: Create Unified Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Tomato Novel Downloader ${{ github.ref_name }} (Alpine Linux)
-          body: ${{ steps.generate_notes.outputs.result }}
-          files: |
-            release-artifacts/alpine-build/TomatoNovelDownloader-Alpine_linux_amd64-*
+          name: alpine-executable
+          path: dist/MyApp-Alpine-* # 上传生成的可执行文件
