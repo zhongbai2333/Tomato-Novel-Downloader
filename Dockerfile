@@ -3,9 +3,12 @@ FROM ubuntu:latest
 
 # 设置环境变量，避免一些不必要的交互
 ENV DEBIAN_FRONTEND=noninteractive
+# 建议固定Python包索引源，以加速下载和提高稳定性
+ENV PIP_INDEX_URL=https://pypi.org/simple
 
-# 更新并安装必要的工具和库
+# 1. 更新并安装所有必要的系统工具、库和 Python 环境
 RUN apt-get update && apt-get install -y \
+    python3 \
     python3-pip \
     python3-dev \
     curl \
@@ -14,44 +17,52 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libffi-dev \
     build-essential \
-    && apt-get clean
+    pkg-config \
+    # 以下是一些常见 Python 包（如 Pillow, cryptography）可能需要的系统库
+    libjpeg-dev zlib1g-dev libfreetype6-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# 安装 Python 依赖包
-RUN pip3 install --upgrade pip setuptools wheel
-RUN pip3 install \
-    ascii-magic \
+# 2. 首先仅升级 pip 自身，使用国内镜像源并设置超时和重试
+RUN python3 -m pip install --upgrade pip \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --default-timeout=100 \
+    --retries 5
+
+# 3. 然后安装 setuptools 和 wheel
+RUN pip3 install --no-cache-dir setuptools wheel \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --default-timeout=100
+
+# 4. 分批次安装 Python 依赖包，将基础包和可能耗时的包分开
+RUN pip3 install --no-cache-dir \
+    requests \
     beautifulsoup4 \
-    certifi \
-    charset-normalizer \
-    colorama \
-    EbookLib \
-    fake-useragent \
-    idna \
     lxml \
-    pillow \
+    tqdm \
     pycryptodome \
     PyYAML \
-    requests \
-    six \
-    soupsieve \
-    tqdm \
-    typing_extensions \
-    urllib3 \
+    pillow \
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --default-timeout=100
+
+RUN pip3 install --no-cache-dir \
+    EbookLib \
+    fake-useragent \
+    colorama \
     portalocker \
     urwid \
     pyperclip \
+    edge-tts \
+    ascii-magic \
     pillow_heif \
-    edge-tts
+    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    --default-timeout=100
 
-# 下载并解压指定的二进制文件
-RUN wget -q https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases/download/v1.8.5/TomatoNovelDownloader-Linux_amd64-v1.8.5 -O /usr/local/bin/TomatoNovelDownloader
-RUN chmod +x /usr/local/bin/TomatoNovelDownloader
+# 5. 下载指定的二进制文件
+RUN wget -q https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases/download/v1.8.5/TomatoNovelDownloader-Linux_amd64-v1.8.5 -O /usr/local/bin/TomatoNovelDownloader \
+    && chmod +x /usr/local/bin/TomatoNovelDownloader
 
-# 设置容器的工作目录
-WORKDIR /usr/local/bin
-
-# 设置容器启动时默认执行的命令
+# 6. 设置容器的工作目录和入口
+WORKDIR /workspace
 ENTRYPOINT ["/bin/bash"]
-
-# 设置容器启动时的默认参数（可以根据需要修改）
-CMD ["--help"]
