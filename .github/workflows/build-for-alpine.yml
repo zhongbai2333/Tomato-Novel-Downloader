@@ -17,6 +17,18 @@ jobs:
     container:
       image: alpine:latest
     steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout private repo B
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
+          token: ${{ secrets.PYD_PAT }}
+          path: B
+
       - name: Install Alpine build dependencies
         run: |
           apk update
@@ -36,16 +48,6 @@ jobs:
           # 确保使用正确的 Python 版本
           python3 --version
           pip3 --version
-
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-
-      - name: Checkout private repo B
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
 
       - name: Install B's build dependencies (Alpine)
         run: |
@@ -106,100 +108,8 @@ jobs:
           name: alpine-build
           path: dist/TomatoNovelDownloader-Alpine_linux_amd64-*
 
-  build-alpine-arm64:
-    runs-on: ubuntu-latest
-    container:
-      image: arm64v8/alpine:latest
-    steps:
-      - name: Install Alpine build dependencies (ARM64)
-        run: |
-          apk update
-          apk add --no-cache \
-            python3 \
-            python3-dev \
-            py3-pip \
-            gcc \
-            g++ \
-            musl-dev \
-            libffi-dev \
-            openssl-dev \
-            git \
-            make \
-            linux-headers \
-            upx
-          python3 --version
-          pip3 --version
-
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-
-      - name: Checkout private repo B
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: Install B's build dependencies (Alpine ARM64)
-        run: |
-          pip3 install --upgrade pip
-          pip3 install Cython
-          if [ -f B/requirements.txt ]; then
-            pip3 install -r B/requirements.txt
-          fi
-
-      - name: Build Cython extensions from B (Alpine ARM64)
-        run: |
-          cd B
-          python3 setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python3 setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
-          fi
-          cd ..
-
-      - name: Copy compiled B extensions into A's root (Alpine ARM64)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
-
-      - name: Install project dependencies (Alpine ARM64)
-        run: |
-          pip3 install --upgrade pip
-          pip3 install -r requirements.txt
-          pip3 install pyinstaller
-
-      - name: Build Executable (Alpine ARM64)
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="sha-${{ github.sha }}"
-          fi
-          
-          python3 -m PyInstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Alpine_linux_arm64-$VERSION \
-            --clean \
-            main.py
-
-      - name: Upload Alpine ARM64 Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: alpine-arm64-build
-          path: dist/TomatoNovelDownloader-Alpine_linux_arm64-*
-
   publish-release:
-    needs: [build-alpine, build-alpine-arm64]
+    needs: [build-alpine]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
@@ -271,4 +181,3 @@ jobs:
           body: ${{ steps.generate_notes.outputs.result }}
           files: |
             release-artifacts/alpine-build/TomatoNovelDownloader-Alpine_linux_amd64-*
-            release-artifacts/alpine-arm64-build/TomatoNovelDownloader-Alpine_linux_arm64-*
