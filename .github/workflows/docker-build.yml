@@ -1,0 +1,58 @@
+name: Build and Push Docker Image
+
+# 触发条件：在推送 tag 或手动触发时运行
+on:
+  push:
+    tags:
+      - 'v*'  # 推送任何以 'v' 开头的 tag 时触发，例如 v1.0.0
+  workflow_dispatch:  # 在 GitHub Actions 页面允许手动触发工作流
+
+# 全局环境变量，便于统一管理和修改
+env:
+  REGISTRY: ghcr.io  # 目标容器注册表为 GitHub Container Registry
+  IMAGE_NAME: ${{ github.repository }}  # 镜像名称自动设置为“你的用户名/你的仓库名”
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest  # 在 GitHub 提供的 Ubuntu 最新版虚拟机中运行此任务
+    permissions:
+      contents: read
+      packages: write  # ⚠️ 关键：此权限允许工作流向 GitHub Packages 推送镜像
+
+    steps:
+      # 步骤 1：检出当前仓库的代码，这样工作流才能访问你的 Dockerfile
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 步骤 2：设置 Docker Buildx (功能更强大的构建工具)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 步骤 3：登录到 GitHub 容器注册表 (ghcr.io)
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}  # 你的 GitHub 用户名
+          password: ${{ secrets.GITHUB_TOKEN }}  # GitHub 自动提供的令牌
+
+      # 步骤 4：提取元数据，自动为镜像生成 Docker 标签
+      - name: Extract metadata for Docker (tags, labels)
+        id: meta  # 此步骤的输出会被后续步骤引用
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag  # 使用 Git 标签 (如 v1.8.5) 作为主镜像标签
+            type=sha,format=long  # 同时添加 Git 提交 SHA 作为额外标签用于追踪
+
+      # 步骤 5：构建 Docker 镜像并推送至 GitHub Packages
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .  # 构建上下文为当前仓库根目录
+          file: ./Dockerfile  # 指定你提供的 Dockerfile 路径
+          platforms: linux/amd64  # 目标平台，与你下载的二进制文件架构一致
+          push: true  # 构建后直接推送，而不只是保存在本地
+          tags: ${{ steps.meta.outputs.tags }}  # 使用上一步生成的所有标签
+          labels: ${{ steps.meta.outputs.labels }}  # 自动生成一些描述性标签
