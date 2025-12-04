@@ -1,5 +1,5 @@
 # 使用官方的 Ubuntu 镜像作为基础镜像
-FROM ubuntu:20.04
+FROM ubuntu:latest
 
 # 设置环境变量，避免一些不必要的交互
 ENV DEBIAN_FRONTEND=noninteractive
@@ -51,7 +51,7 @@ RUN chmod +x /usr/local/bin/TomatoNovelDownloader
 WORKDIR /usr/local/bin
 
 # 设置容器启动时默认执行的命令
-ENTRYPOINT ["./TomatoNovelDownloader"]
+ENTRYPOINT ["/bin/bash"]
 
 # 设置容器启动时的默认参数（可以根据需要修改）
 CMD ["--help"]
