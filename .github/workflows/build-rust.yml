@@ -22,6 +22,9 @@ jobs:
           - os: ubuntu-latest
             artifact: linux
             bin: tomato-novel-downloader
+          - os: ubuntu-22.04-arm64
+            artifact: linux-arm64
+            bin: tomato-novel-downloader
           - os: windows-latest
             artifact: windows
             bin: tomato-novel-downloader.exe
@@ -30,20 +33,35 @@ jobs:
             bin: tomato-novel-downloader
 
     steps:
-      - name: Checkout Tomato-Novel-Downloader-New
+      - name: Checkout Tomato-Novel-Downloader
         uses: actions/checkout@v4
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
 
       - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
           repository: zhongbai2333/Tomato-Novel-Official-API
           token: ${{ secrets.OAPI }}
-          path: ../Tomato-Novel-Official-API
+          path: Tomato-Novel-Official-API
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4
@@ -52,8 +70,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            ../Tomato-Novel-Official-API/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '../Tomato-Novel-Official-API/Cargo.lock') }}
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -61,7 +79,9 @@ jobs:
         run: cargo build --release
 
       - name: Bundle artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp target/release/${{ matrix.bin }} dist/
 
