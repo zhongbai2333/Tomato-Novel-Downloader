@@ -57,6 +57,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Build release binary
+        run: cargo build --release
+
       - name: Bundle artifacts
         run: |
           mkdir -p dist
