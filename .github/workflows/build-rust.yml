@@ -1,0 +1,78 @@
+name: Build Rust Downloader
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+    tags: [ "v*" ]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-rust.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux
+            bin: tomato-novel-downloader
+          - os: windows-latest
+            artifact: windows
+            bin: tomato-novel-downloader.exe
+          - os: macos-latest
+            artifact: macos
+            bin: tomato-novel-downloader
+
+    steps:
+      - name: Checkout Tomato-Novel-Downloader-New
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: ../Tomato-Novel-Official-API
+
+      - name: Clone Tomato-Novel-Network-Core (public)
+        run: |
+          git clone https://github.com/zhongbai2333/Tomato-Novel-Network-Core.git ../Tomato-Novel-Network-Core
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            ../Tomato-Novel-Official-API/target
+            ../Tomato-Novel-Network-Core/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '../Tomato-Novel-Official-API/Cargo.lock', '../Tomato-Novel-Network-Core/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build Tomato-Novel-Network-Core (dynamic lib)
+        working-directory: ../Tomato-Novel-Network-Core
+        run: cargo build --release
+
+      - name: Bundle artifacts
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.bin }} dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tomato-novel-downloader-${{ matrix.artifact }}
+          path: dist
