@@ -1621,20 +1621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tomato-novel-network-core"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "http",
- "once_cell",
- "reqwest",
- "serde",
- "serde_json",
- "serde_urlencoded",
-]
-
-[[package]]
 name = "tomato-novel-official-api"
 version = "0.1.0"
 dependencies = [
@@ -1646,20 +1632,19 @@ dependencies = [
  "hex",
  "hex-literal",
  "hmac",
- "http",
  "indexmap",
  "md-5",
  "once_cell",
  "rand 0.8.5",
  "rayon",
  "regex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
  "thiserror 1.0.69",
  "time",
- "tomato-novel-network-core",
  "url",
  "uuid",
 ]
