@@ -19,11 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: linux-amd64
             artifact: linux
             bin: tomato-novel-downloader
-          - os: ubuntu-22.04-arm64
-            artifact: linux-arm64
+          - os: linux-arm64
+            artifact: ubuntu-24.04-arm
             bin: tomato-novel-downloader
           - os: windows-latest
             artifact: windows
