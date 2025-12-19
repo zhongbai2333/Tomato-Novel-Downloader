@@ -43,7 +43,7 @@ jobs:
         with:
           repository: zhongbai2333/Tomato-Novel-Official-API
           token: ${{ secrets.OAPI }}
-          path: Tomato-Novel-Official-API
+          path: ../Tomato-Novel-Official-API
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4
@@ -52,8 +52,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            Tomato-Novel-Official-API/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'Tomato-Novel-Official-API/Cargo.lock') }}
+            ../Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '../Tomato-Novel-Official-API/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
