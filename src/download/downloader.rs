@@ -3,19 +3,41 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::{Map, Value};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::base_system::context::Config;
 use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
-use tomato_novel_official_api::{ChapterRef, DirectoryClient, FanqieClient};
+use tomato_novel_official_api::{ChapterRef, DirectoryClient, FanqieClient, SearchClient};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DownloadResult {
     pub success: u32,
     pub failed: u32,
     pub canceled: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BookMeta {
+    pub book_name: Option<String>,
+    pub author: Option<String>,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DownloadPlan {
+    pub book_id: String,
+    pub meta: BookMeta,
+    pub chapters: Vec<ChapterRef>,
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ChapterRange {
+    pub start: usize,
+    pub end: usize,
 }
 
 pub struct ChapterDownloader {
@@ -132,8 +154,15 @@ impl ChapterDownloader {
     }
 }
 
-/// 下载整本书（用于 UI 调用）。
+/// 下载整本书（用于 UI 调用，默认下载全部章节）。
 pub fn download_book(config: &Config, book_id: &str) -> Result<()> {
+    let plan = prepare_download_plan(config, book_id, BookMeta::default())?;
+    download_with_plan(config, plan, None)
+}
+
+/// 预先拉取目录与元数据，便于 UI 展示预览/范围选择。
+pub fn prepare_download_plan(_config: &Config, book_id: &str, meta_hint: BookMeta) -> Result<DownloadPlan> {
+    info!(target: "download", book_id, "准备下载计划");
     let directory = DirectoryClient::new().context("init DirectoryClient")?;
     let dir = directory
         .fetch_directory(book_id)
@@ -143,22 +172,55 @@ pub fn download_book(config: &Config, book_id: &str) -> Result<()> {
         return Err(anyhow!("目录为空"));
     }
 
-    let mut manager = BookManager::new(config.clone());
-    manager.book_id = dir.book_id.clone();
-    let (book_name, author, description, tags) = extract_book_metadata(&dir.raw);
-    manager.book_name = book_name.unwrap_or_else(|| book_id.to_string());
-    manager.author = author.unwrap_or_default();
-    manager.description = description.unwrap_or_default();
-    manager.tags = tags;
+    let meta_from_dir = extract_book_metadata(&dir.raw);
+    let merged = merge_meta(meta_hint, meta_from_dir);
+    let completed_meta = if merged.book_name.is_some() && merged.author.is_some() && merged.description.is_some() {
+        merged
+    } else {
+        merge_meta(merged, search_metadata(book_id).unwrap_or_default())
+    };
 
-    let existing_book_name = manager.book_name.clone();
-    let resumed = manager.load_existing_status(book_id, &existing_book_name);
+    Ok(DownloadPlan {
+        book_id: dir.book_id.clone(),
+        meta: completed_meta,
+        chapters: dir.chapters,
+        raw: dir.raw,
+    })
+}
+
+/// 使用已准备好的计划执行下载，并支持区间选择。
+pub fn download_with_plan(
+    config: &Config,
+    plan: DownloadPlan,
+    range: Option<ChapterRange>,
+) -> Result<()> {
+    info!(target: "download", book_id = %plan.book_id, "启动下载");
+
+    let chosen_chapters = apply_range(&plan.chapters, range);
+    if chosen_chapters.is_empty() {
+        return Err(anyhow!("范围无效或章节为空"));
+    }
+
+    let meta = &plan.meta;
+    let book_name = meta
+        .book_name
+        .clone()
+        .unwrap_or_else(|| plan.book_id.clone());
+    let mut manager = BookManager::new(config.clone(), &plan.book_id, &book_name)?;
+    manager.book_id = plan.book_id.clone();
+    manager.book_name = book_name;
+    manager.author = meta.author.clone().unwrap_or_default();
+    manager.description = meta.description.clone().unwrap_or_default();
+    manager.tags = meta.tags.join("|");
+
+    let resume_book_id = manager.book_id.clone();
+    let resume_book_name = manager.book_name.clone();
+    let resumed = manager.load_existing_status(&resume_book_id, &resume_book_name);
     if resumed {
         info!("检测到已存在的下载状态，尝试断点续传");
     }
 
-    let pending: Vec<ChapterRef> = dir
-        .chapters
+    let pending: Vec<ChapterRef> = chosen_chapters
         .iter()
         .cloned()
         .filter(|ch| match manager.downloaded.get(&ch.id) {
@@ -170,23 +232,25 @@ pub fn download_book(config: &Config, book_id: &str) -> Result<()> {
     if pending.is_empty() {
         info!("已全部下载，跳过下载阶段");
     } else {
+        debug!(target: "download", pending = pending.len(), total = chosen_chapters.len(), "待下载章节统计");
         let client = FanqieClient::new().context("init FanqieClient")?;
-        let downloader = ChapterDownloader::new(book_id, config.clone(), client);
+        let downloader = ChapterDownloader::new(&plan.book_id, config.clone(), client);
         let book_name = manager.book_name.clone();
         let result = downloader.download_book(&mut manager, &book_name, &pending)?;
         info!(
             "下载结束: 成功 {} 章，失败 {} 章，跳过 {} 章",
             result.success,
             result.failed,
-            dir.chapters.len() as u32 - pending.len() as u32
+            chosen_chapters.len() as u32 - pending.len() as u32
         );
     }
 
+    debug!(target: "download", "保存下载状态");
     manager.save_download_status();
 
     // 将下载内容组装为章节列表，用于生成最终输出文件
     let mut chapter_values = Vec::with_capacity(manager.downloaded.len());
-    for ch in &dir.chapters {
+    for ch in &chosen_chapters {
         if let Some((title, Some(content))) = manager.downloaded.get(&ch.id) {
             let mut obj = Map::new();
             obj.insert("id".to_string(), Value::String(ch.id.clone()));
@@ -233,7 +297,7 @@ fn fetch_with_cooldown_retry(client: &FanqieClient, ids: &str, epub_mode: bool) 
     Err(anyhow!("Cooldown exceeded retries"))
 }
 
-fn extract_book_metadata(raw: &Value) -> (Option<String>, Option<String>, Option<String>, String) {
+fn extract_book_metadata(raw: &Value) -> BookMeta {
     let mut name = None;
     let mut author = None;
     let mut description = None;
@@ -301,7 +365,69 @@ fn extract_book_metadata(raw: &Value) -> (Option<String>, Option<String>, Option
         }
     }
 
-    (name, author, description, tags.join("|"))
+    BookMeta {
+        book_name: name,
+        author,
+        description,
+        tags,
+    }
+}
+
+fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
+    BookMeta {
+        book_name: primary.book_name.or(fallback.book_name),
+        author: primary.author.or(fallback.author),
+        description: primary.description.or(fallback.description),
+        tags: if primary.tags.is_empty() {
+            fallback.tags
+        } else {
+            primary.tags
+        },
+    }
+}
+
+fn search_metadata(book_id: &str) -> Option<BookMeta> {
+    let client = SearchClient::new().ok()?;
+    let resp = client.search_books(book_id).ok()?;
+    let book = resp.books.into_iter().find(|b| b.book_id == book_id)?;
+    let maps = collect_maps(&book.raw);
+
+    let description = maps.iter().find_map(|m| {
+        pick_string(
+            m,
+            &[
+                "description",
+                "desc",
+                "abstract",
+                "intro",
+                "summary",
+                "book_abstract",
+                "recommendation_reason",
+            ],
+        )
+    });
+    let tags = maps.iter().find_map(|m| Some(pick_tags(m))).unwrap_or_default();
+
+    Some(BookMeta {
+        book_name: book.title,
+        author: book.author,
+        description,
+        tags,
+    })
+}
+
+fn collect_maps<'a>(raw: &'a Value) -> Vec<&'a serde_json::Map<String, Value>> {
+    let mut maps = Vec::new();
+    if let Some(map) = raw.as_object() {
+        maps.push(map);
+        if let Some(info) = map.get("book_info").and_then(|v| v.as_object()) {
+            maps.push(info);
+        }
+        if let Some(info) = map.get("bookInfo").and_then(|v| v.as_object()) {
+            maps.push(info);
+        }
+    }
+    maps
 }
 
 fn pick_string(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
@@ -331,7 +457,7 @@ fn pick_tags(map: &serde_json::Map<String, Value>) -> Vec<String> {
     ];
     for key in candidates {
         if let Some(val) = map.get(key) {
-            let mut out = tags_from_value(val);
+            let out = tags_from_value(val);
             if !out.is_empty() {
                 return out;
             }
@@ -354,6 +480,29 @@ fn tags_from_value(value: &Value) -> Vec<String> {
             .map(|p| p.to_string())
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<ChapterRef> {
+    let total = chapters.len();
+    match range {
+        None => chapters.to_vec(),
+        Some(r) => {
+            if r.start == 0 || r.start > r.end {
+                return Vec::new();
+            }
+            let start_idx = r.start.saturating_sub(1);
+            let end_idx = r.end.min(total).saturating_sub(1);
+            if start_idx >= chapters.len() {
+                return Vec::new();
+            }
+            chapters
+                .iter()
+                .skip(start_idx)
+                .take(end_idx.saturating_sub(start_idx) + 1)
+                .cloned()
+                .collect()
+        }
     }
 }
 

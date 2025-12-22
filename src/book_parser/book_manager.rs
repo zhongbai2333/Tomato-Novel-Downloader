@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::{debug, info};
 
-use crate::base_system::context::Config;
+use crate::base_system::context::{Config, safe_fs_name};
 
 pub type DownloadedMap = HashMap<String, (String, Option<String>)>;
 
@@ -25,22 +25,23 @@ pub struct BookManager {
 }
 
 impl BookManager {
-    pub fn new(mut config: Config) -> Self {
-        // 选择状态目录
-        let existing_folder = config
-            .get_status_folder_path()
-            .or_else(|| Some(config.default_save_dir().join("_session")));
+    pub fn new(mut config: Config, book_id: &str, book_name: &str) -> std::io::Result<Self> {
+        let target = match config.status_folder_path(book_name, book_id, None) {
+            Ok(p) => p,
+            Err(_) => {
+                let fallback = config
+                    .default_save_dir()
+                    .join(format!("{}_{}", book_id, safe_fs_name(book_name, "_", 120)));
+                fs::create_dir_all(&fallback)?;
+                fallback
+            }
+        };
 
-        let status_folder = existing_folder.unwrap_or_else(|| PathBuf::from("._session"));
-        let _ = fs::create_dir_all(&status_folder);
-        let status_file = status_folder.join("status.json");
+        config.mark_status_folder_claimed(&target);
+        let status_folder_preexisting = !config.status_folder_was_created_this_session(&target);
+        let status_file = target.join("status.json");
 
-        // 注册状态目录
-        config.mark_status_folder_claimed(&status_folder);
-        let status_folder_preexisting =
-            !config.status_folder_was_created_this_session(&status_folder);
-
-        Self {
+        Ok(Self {
             config,
             book_name: String::new(),
             book_id: String::new(),
@@ -50,10 +51,10 @@ impl BookManager {
             end: false,
             downloaded: HashMap::new(),
             has_download_activity: false,
-            status_folder,
+            status_folder: target,
             status_file,
             status_folder_preexisting,
-        }
+        })
     }
 
     /// 尝试加载已存在的下载状态。
@@ -134,6 +135,7 @@ impl BookManager {
     }
 
     pub fn save_chapter(&mut self, chapter_id: &str, title: &str, content: &str) {
+        debug!(target: "book_manager", chapter_id, title, bytes = content.len(), "保存章节内容");
         self.downloaded.insert(
             chapter_id.to_string(),
             (title.to_string(), Some(content.to_string())),
@@ -142,6 +144,7 @@ impl BookManager {
     }
 
     pub fn save_error_chapter(&mut self, chapter_id: &str, title: &str) {
+        debug!(target: "book_manager", chapter_id, title, "记录异常章节");
         self.downloaded
             .insert(chapter_id.to_string(), (title.to_string(), None));
         self.has_download_activity = true;
@@ -169,6 +172,10 @@ impl BookManager {
             Ok(_) => {}
             Err(e) => debug!(target: "book_manager", error = ?e, "write status.json failed"),
         }
+    }
+
+    pub fn book_folder(&self) -> &Path {
+        &self.status_folder
     }
 
     pub fn cleanup_status_folder(&mut self) -> std::io::Result<()> {

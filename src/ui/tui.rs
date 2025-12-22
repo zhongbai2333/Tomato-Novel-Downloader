@@ -24,11 +24,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
+use tracing::{debug, info};
 use tomato_novel_official_api::{DirectoryClient, SearchClient};
 
 use crate::base_system::config::{ConfigSpec, write_with_comments};
 use crate::base_system::context::{Config, safe_fs_name};
-use crate::download::downloader;
+use crate::download::downloader::{self, BookMeta, ChapterRange, DownloadPlan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
@@ -86,6 +87,7 @@ struct UpdateEntry {
 enum WorkerMsg {
     SearchDone(Result<Vec<SearchItem>>),
     DownloadDone { book_id: String, result: Result<()> },
+    PreviewReady(Result<PendingDownload>),
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +142,13 @@ struct App {
     spinner_last: Instant,
     cover_lines: Vec<String>,
     cover_title: String,
+    pending_download: Option<PendingDownload>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingDownload {
+    plan: DownloadPlan,
+    downloaded_count: usize,
 }
 
 impl App {
@@ -215,6 +224,7 @@ impl App {
             spinner_last: Instant::now(),
             cover_lines: Vec::new(),
             cover_title: String::new(),
+            pending_download: None,
         }
     }
 
@@ -350,6 +360,10 @@ fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                 app.focus = Focus::Input;
                 app.results.clear();
                 app.list_state.select(None);
+                if app.pending_download.is_some() {
+                    app.pending_download = None;
+                    app.status = "已取消待下载的预览".to_string();
+                }
             }
             KeyCode::Tab => cycle_focus(app),
             KeyCode::Backspace => {
@@ -540,7 +554,11 @@ fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
             KeyCode::Enter => {
                 if let Some(entry) = current_update_entry(app) {
                     app.status = format!("更新: {}", entry.label);
-                    start_download_task(app, entry.book_id.clone())?;
+                    let hint = BookMeta {
+                        book_name: Some(entry.book_name.clone()),
+                        ..BookMeta::default()
+                    };
+                    start_preview_task(app, entry.book_id.clone(), hint)?;
                 }
             }
             _ => {}
@@ -592,6 +610,19 @@ fn handle_event_cover(app: &mut App, event: Event) -> Result<()> {
 
 fn process_input(app: &mut App) -> Result<()> {
     let text = app.input.trim();
+    if let Some(pending) = app.pending_download.clone() {
+        match parse_range_input(text, pending.plan.chapters.len()) {
+            Ok(range) => {
+                start_download_task(app, pending, range)?;
+                app.input.clear();
+            }
+            Err(err) => {
+                app.status = format!("范围无效: {}", err);
+            }
+        }
+        return Ok(());
+    }
+
     if text.is_empty() {
         app.status = String::from("请输入书名、链接或 book_id，按 Enter 开始。");
         return Ok(());
@@ -600,7 +631,7 @@ fn process_input(app: &mut App) -> Result<()> {
     if let Some(book_id) = parse_book_id(text) {
         app.focus = Focus::Input;
         app.status = format!("准备下载书籍 {book_id} …");
-        start_download_task(app, book_id)?;
+        start_preview_task(app, book_id, BookMeta::default())?;
         app.input.clear();
         app.results.clear();
         app.list_state.select(None);
@@ -620,7 +651,27 @@ fn download_selected(app: &mut App) -> Result<()> {
     }
     let book = app.results[idx].clone();
     app.focus = Focus::Input;
-    start_download_task(app, book.book_id.clone())
+    let hint = book_meta_from_item(&book);
+    start_preview_task(app, book.book_id.clone(), hint)
+}
+
+fn book_meta_from_item(item: &SearchItem) -> BookMeta {
+    let mut meta = BookMeta::default();
+    if !item.title.is_empty() {
+        meta.book_name = Some(item.title.clone());
+    }
+    if !item.author.is_empty() {
+        meta.author = Some(item.author.clone());
+    }
+    if let Some(detail) = item.detail.as_ref() {
+        if let Some(desc) = detail.description.clone() {
+            meta.description = Some(desc);
+        }
+        if !detail.tags.is_empty() {
+            meta.tags = detail.tags.clone();
+        }
+    }
+    meta
 }
 
 fn search_books(query: &str) -> Result<Vec<SearchItem>> {
@@ -816,6 +867,51 @@ fn parse_book_id(input: &str) -> Option<String> {
     }
 
     None
+}
+
+fn parse_range_input(input: &str, total: usize) -> Result<Option<ChapterRange>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    if parts.len() > 2 {
+        return Err(anyhow!("格式应为 start-end，例如 1-10"));
+    }
+
+    let start_part = parts.get(0).copied().unwrap_or("").trim();
+    let end_part = parts.get(1).copied().unwrap_or("").trim();
+
+    let start = if start_part.is_empty() {
+        1
+    } else {
+        start_part
+            .parse::<usize>()
+            .map_err(|_| anyhow!("起始章节需为数字"))?
+    };
+    let end = if end_part.is_empty() {
+        total
+    } else {
+        end_part
+            .parse::<usize>()
+            .map_err(|_| anyhow!("结束章节需为数字"))?
+    };
+
+    if start == 0 || end == 0 {
+        return Err(anyhow!("章节编号需大于 0"));
+    }
+    if start > end {
+        return Err(anyhow!("起始章节不能大于结束章节"));
+    }
+    if start > total {
+        return Err(anyhow!("起始章节超过目录长度"));
+    }
+
+    Ok(Some(ChapterRange {
+        start,
+        end: end.min(total),
+    }))
 }
 
 fn ensure_book_detail(app: &mut App, idx: usize) -> Result<()> {
@@ -1111,12 +1207,57 @@ fn start_search_task(app: &mut App, query: String) -> Result<()> {
     Ok(())
 }
 
-fn start_download_task(app: &mut App, book_id: String) -> Result<()> {
+fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta) -> Result<()> {
+    app.pending_download = None;
+    app.messages.clear();
+    app.cover_lines.clear();
+    app.cover_title.clear();
+    start_spinner(app, format!("加载目录: {book_id}"));
+    let tx = app.worker_tx.clone();
+    let cfg = app.config.clone();
+    thread::spawn(move || {
+        let result = downloader::prepare_download_plan(&cfg, &book_id, hint).and_then(|plan| {
+            let folder = expected_book_folder(&cfg, &plan);
+            let downloaded = read_downloaded_count(&folder, &plan.book_id).unwrap_or(0);
+            Ok(PendingDownload { plan, downloaded_count: downloaded })
+        });
+        let _ = tx.send(WorkerMsg::PreviewReady(result));
+    });
+    Ok(())
+}
+
+fn start_download_task(app: &mut App, pending: PendingDownload, range: Option<ChapterRange>) -> Result<()> {
+    app.pending_download = None;
+    app.messages.clear();
+    app.results.clear();
+    app.list_state.select(None);
+    app.cover_lines.clear();
+    app.cover_title.clear();
+
+    let book_id = pending.plan.book_id.clone();
+    let title = pending
+        .plan
+        .meta
+        .book_name
+        .clone()
+        .unwrap_or_else(|| book_id.clone());
+
+    app.status = format!("开始下载: 《{}》 ({})", title, book_id);
+    info!(target: "ui", book_id = %book_id, "启动下载任务");
+    debug!(
+        target: "ui",
+        book_id = %book_id,
+        save_path = %app.config.save_path,
+        format = %app.config.novel_format,
+        workers = app.config.max_workers,
+        "下载参数"
+    );
+
     start_spinner(app, format!("下载中: {book_id}"));
     let tx = app.worker_tx.clone();
     let cfg = app.config.clone();
     thread::spawn(move || {
-        let result = downloader::download_book(&cfg, &book_id);
+        let result = downloader::download_with_plan(&cfg, pending.plan, range);
         let msg = WorkerMsg::DownloadDone { book_id, result };
         let _ = tx.send(msg);
     });
@@ -1136,7 +1277,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                         app.focus = Focus::Input;
                     } else {
                         app.status =
-                            format!("找到 {} 本书，使用上下键选择，Enter 下载。", results.len());
+                            format!("找到 {} 本书，使用上下键选择，Enter 预览/下载。", results.len());
                         app.results = results;
                         app.list_state.select(Some(0));
                         app.focus = Focus::Results;
@@ -1145,6 +1286,38 @@ fn poll_worker(app: &mut App) -> Result<()> {
                 Err(err) => {
                     app.status = format!("搜索失败: {err}");
                     app.push_message(format!("搜索失败: {err}"));
+                }
+            },
+            WorkerMsg::PreviewReady(res) => match res {
+                Ok(pending) => {
+                    let title = pending
+                        .plan
+                        .meta
+                        .book_name
+                        .clone()
+                        .unwrap_or_else(|| pending.plan.book_id.clone());
+                    let total = pending.plan.chapters.len();
+                    let downloaded = pending.downloaded_count;
+                    let desc = pending
+                        .plan
+                        .meta
+                        .description
+                        .clone()
+                        .unwrap_or_default();
+                    app.pending_download = Some(pending);
+                    app.focus = Focus::Input;
+                    app.input.clear();
+                    app.status = format!(
+                        "预览: 《{}》 共 {} 章，已下载 {}。输入范围如 1-10 后回车确认，空白回车下载全部，Esc 取消。",
+                        title, total, downloaded
+                    );
+                    if !desc.is_empty() {
+                        app.push_message(truncate(&desc, 160));
+                    }
+                }
+                Err(err) => {
+                    app.status = format!("加载目录失败: {err}");
+                    app.push_message(format!("加载目录失败: {err}"));
                 }
             },
             WorkerMsg::DownloadDone { book_id, result } => match result {
@@ -1195,7 +1368,8 @@ fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<()> {
                     if idx < app.results.len() {
                         app.list_state.select(Some(idx));
                         app.focus = Focus::Results;
-                        start_download_task(app, app.results[idx].book_id.clone())?;
+                        let hint = book_meta_from_item(&app.results[idx]);
+                        start_preview_task(app, app.results[idx].book_id.clone(), hint)?;
                     }
                 }
                 return Ok(());
@@ -1274,7 +1448,11 @@ fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Result<()> {
                 if idx < list.len() {
                     app.update_state.select(Some(idx));
                     if let Some(entry) = current_update_entry(app) {
-                        start_download_task(app, entry.book_id.clone())?;
+                        let hint = BookMeta {
+                            book_name: Some(entry.book_name.clone()),
+                            ..BookMeta::default()
+                        };
+                        start_preview_task(app, entry.book_id.clone(), hint)?;
                     }
                 }
             }
@@ -1465,6 +1643,21 @@ fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>
     Ok((updates, no_updates))
 }
 
+fn expected_book_folder(config: &Config, plan: &DownloadPlan) -> PathBuf {
+    let safe_title = safe_fs_name(
+        plan
+            .meta
+            .book_name
+            .as_deref()
+            .unwrap_or(&plan.book_id),
+        "_",
+        120,
+    );
+    config
+        .default_save_dir()
+        .join(format!("{}_{}", plan.book_id, safe_title))
+}
+
 fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usize> {
     let status_new = folder.join("status.json");
     let status_old = folder.join(format!("chapter_status_{}.json", book_id));
@@ -1539,8 +1732,8 @@ fn draw_home(frame: &mut ratatui::Frame, app: &mut App) {
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(8),
-            Constraint::Min(6),
-            Constraint::Length(7),
+            Constraint::Length(10),
+            Constraint::Min(10),
         ])
         .split(size);
     if layout.len() == 5 {
