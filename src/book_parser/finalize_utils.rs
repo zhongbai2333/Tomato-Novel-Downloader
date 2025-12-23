@@ -51,10 +51,11 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
     } else {
         manager.book_name.as_str()
     };
-    let safe = safe_fs_name(raw_name, "_", 120);
-    let dir = manager.book_folder();
-    std::fs::create_dir_all(dir)?;
-    Ok(dir.join(format!("{}.{}", safe, suffix)))
+    let safe_book = safe_fs_name(raw_name, "_", 120);
+    let safe_id = safe_fs_name(&manager.book_id, "_", 120);
+    let dir = manager.default_save_dir();
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{}_{}.{}", safe_id, safe_book, suffix)))
 }
 
 fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyhow::Result<()> {

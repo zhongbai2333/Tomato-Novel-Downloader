@@ -1,14 +1,18 @@
 use anyhow::{Result, anyhow};
 use clap::Parser;
+use std::thread;
 
 mod base_system;
 mod book_parser;
 mod download;
+mod prewarm_state;
 mod ui;
 
 use base_system::config::load_or_create;
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
+use tomato_novel_official_api::prewarm_iid;
+use tracing::{info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -39,6 +43,15 @@ fn main() -> Result<()> {
 
     let _log = init_logging(cli.debug)?;
 
+    prewarm_state::mark_prewarm_start();
+    thread::spawn(|| {
+        match prewarm_iid() {
+            Ok(_) => info!(target: "startup", "IID 预热完成"),
+            Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+        }
+        prewarm_state::mark_prewarm_done();
+    });
+
     let mut config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
 
     if cli.server {
@@ -58,6 +71,8 @@ fn init_logging(debug: bool) -> Result<LogSystem> {
         debug,
         use_color: true,
         archive_on_exit: true,
+        console: false,
+        broadcast_to_ui: true,
     };
     LogSystem::init(opts).map_err(|e| anyhow!(e))
 }

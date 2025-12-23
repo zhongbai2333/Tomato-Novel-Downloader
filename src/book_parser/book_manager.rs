@@ -29,9 +29,11 @@ impl BookManager {
         let target = match config.status_folder_path(book_name, book_id, None) {
             Ok(p) => p,
             Err(_) => {
-                let fallback = config
-                    .default_save_dir()
-                    .join(format!("{}_{}", book_id, safe_fs_name(book_name, "_", 120)));
+                let fallback = config.default_save_dir().join(format!(
+                    "{}_{}",
+                    book_id,
+                    safe_fs_name(book_name, "_", 120)
+                ));
                 fs::create_dir_all(&fallback)?;
                 fallback
             }
@@ -178,6 +180,10 @@ impl BookManager {
         &self.status_folder
     }
 
+    pub fn default_save_dir(&self) -> PathBuf {
+        self.config.default_save_dir()
+    }
+
     pub fn cleanup_status_folder(&mut self) -> std::io::Result<()> {
         if self.status_folder_preexisting {
             return Ok(());
@@ -186,6 +192,14 @@ impl BookManager {
             return Ok(());
         }
         fs::remove_dir_all(&self.status_folder)
+    }
+
+    pub fn delete_status_folder(&mut self) -> std::io::Result<()> {
+        if self.status_folder.exists() {
+            fs::remove_dir_all(&self.status_folder)?;
+            self.config.mark_status_folder_removed(&self.status_folder);
+        }
+        Ok(())
     }
 
     fn downloaded_as_json(&self) -> serde_json::Map<String, Value> {

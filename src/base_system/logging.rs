@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{io, panic, thread, time::Duration};
 
 use ctrlc;
@@ -13,6 +13,8 @@ use tracing_appender::rolling;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
+use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use zip::CompressionMethod;
@@ -40,6 +42,8 @@ pub struct LogOptions {
     pub debug: bool,
     pub use_color: bool,
     pub archive_on_exit: bool,
+    pub console: bool,
+    pub broadcast_to_ui: bool,
 }
 
 impl Default for LogOptions {
@@ -48,6 +52,49 @@ impl Default for LogOptions {
             debug: false,
             use_color: true,
             archive_on_exit: true,
+            console: true,
+            broadcast_to_ui: true,
+        }
+    }
+}
+
+static LOG_CHANNEL: OnceLock<(
+    crossbeam_channel::Sender<String>,
+    crossbeam_channel::Receiver<String>,
+)> = OnceLock::new();
+
+#[derive(Clone)]
+struct ChannelWriter {
+    tx: crossbeam_channel::Sender<String>,
+}
+
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let text = String::from_utf8_lossy(buf).to_string();
+        let _ = self.tx.send(text);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub fn take_broadcast_rx() -> Option<crossbeam_channel::Receiver<String>> {
+    LOG_CHANNEL.get().map(|(_, rx)| rx.clone())
+}
+
+#[derive(Clone)]
+struct ChannelWriterMake {
+    tx: crossbeam_channel::Sender<String>,
+}
+
+impl<'a> MakeWriter<'a> for ChannelWriterMake {
+    type Writer = ChannelWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        ChannelWriter {
+            tx: self.tx.clone(),
         }
     }
 }
@@ -75,13 +122,37 @@ impl LogSystem {
             LevelFilter::INFO
         };
 
+        let console_writer: BoxMakeWriter = if options.console {
+            BoxMakeWriter::new(io::stdout)
+        } else {
+            BoxMakeWriter::new(io::sink)
+        };
+
         let console_layer = fmt::layer()
             .with_target(false)
             .with_level(true)
             .with_thread_names(true)
             .with_ansi(options.use_color)
-            .with_writer(io::stdout)
+            .with_writer(console_writer)
             .with_filter(console_level);
+
+        let broadcast_layer = if options.broadcast_to_ui {
+            let (tx, _rx) = LOG_CHANNEL
+                .get_or_init(|| crossbeam_channel::unbounded())
+                .clone();
+            let writer = BoxMakeWriter::new(ChannelWriterMake { tx });
+            Some(
+                fmt::layer()
+                    .with_target(false)
+                    .with_level(true)
+                    .with_thread_names(false)
+                    .with_ansi(false)
+                    .with_writer(writer)
+                    .with_filter(console_level),
+            )
+        } else {
+            None
+        };
 
         let file_layer = fmt::layer()
             .with_target(false)
@@ -94,6 +165,7 @@ impl LogSystem {
         tracing_subscriber::registry()
             .with(console_layer)
             .with(file_layer)
+            .with(broadcast_layer)
             .try_init()
             .map_err(|e| {
                 let msg = e.to_string();

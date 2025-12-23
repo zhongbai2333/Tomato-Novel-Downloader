@@ -23,7 +23,7 @@ impl EpubGenerator {
         let safe_id = safe_fs_name(identifier, "_", 120);
         book.metadata("identifier", safe_id).ok();
         book.metadata("title", title).ok();
-        book.metadata("language", "en").ok();
+        book.metadata("language", "zh").ok();
         book.metadata("author", "unknown").ok();
 
         let indent_em = cfg.first_line_indent_em.max(0.0);
@@ -69,8 +69,7 @@ impl EpubGenerator {
         self.file_counter += 1;
         let cleaned = if content.trim().is_empty() {
             format!(
-                "<h3>{}</h3><p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>",
-                html_escape(title)
+                "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
             )
         } else {
             content.to_string()
@@ -99,9 +98,16 @@ impl EpubGenerator {
     pub fn generate(&mut self, output_path: &Path, cfg: &Config) -> Result<()> {
         if let Some(base) = cfg.get_status_folder_path() {
             let safe_title = safe_fs_name(&self.title, "_", 120);
-            let cover_path_safe = base.join(format!("{safe_title}.jpg"));
-            let cover_path_legacy = base.join(format!("{}.jpg", self.title));
-            if let Some(bytes) = read_first_existing(&[&cover_path_safe, &cover_path_legacy]) {
+            let cover_path_safe_jpg = base.join(format!("{safe_title}.jpg"));
+            let cover_path_safe_png = base.join(format!("{safe_title}.png"));
+            let cover_path_legacy_jpg = base.join(format!("{}.jpg", self.title));
+            let cover_path_legacy_png = base.join(format!("{}.png", self.title));
+            if let Some(bytes) = read_first_existing(&[
+                &cover_path_safe_jpg,
+                &cover_path_safe_png,
+                &cover_path_legacy_jpg,
+                &cover_path_legacy_png,
+            ]) {
                 let cursor = Cursor::new(bytes);
                 self.book
                     .add_content(
@@ -123,7 +129,7 @@ impl EpubGenerator {
             self.book
                 .add_content(
                     EpubContent::new(file_name.clone(), Cursor::new(html.clone()))
-                        .title(file_name)
+                        .title(title_from_file_or_html(file_name, html))
                         .reftype(ReferenceType::Text),
                 )
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -158,10 +164,22 @@ fn html_escape(input: &str) -> String {
 }
 
 fn wrap_chapter_html(title: &str, body: &str) -> String {
+    let escaped_title = html_escape(title);
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{}</title></head><body><h3>{}</h3><div>{}</div></body></html>",
-        html_escape(title),
-        html_escape(title),
-        body
+        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" lang=\"zh\" xml:lang=\"zh\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
+        escaped_title, escaped_title, body
     )
+}
+
+fn title_from_file_or_html(file_name: &str, html: &str) -> String {
+    if let Some(start) = html.find("<title>") {
+        if let Some(end) = html[start + 7..].find("</title>") {
+            let raw = &html[start + 7..start + 7 + end];
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    file_name.to_string()
 }

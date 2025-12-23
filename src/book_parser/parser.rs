@@ -65,17 +65,33 @@ impl ContentParser {
     }
 
     /// 简化的 XHTML 清洗：去掉 <header> 与脚本，保留主体文本。
-    pub fn clean_xhtml(raw: &str, title: &str) -> String {
-        let body = Self::strip_header(raw);
-        if body.trim().is_empty() {
-            return String::new();
+    pub fn clean_xhtml(raw: &str, _title: &str) -> String {
+        let stripped = Self::strip_header(raw);
+        let body = Self::extract_body(&stripped).unwrap_or(stripped);
+        let body = Self::strip_comments(&body);
+        let mut paragraphs = Vec::new();
+
+        // 尝试提取已有段落，清理标签，保留基本文本。
+        let re_para = Regex::new(r"(?is)<p[^>]*>(.*?)</p>").unwrap();
+        for cap in re_para.captures_iter(&body) {
+            let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let cleaned = Self::sanitize_paragraph(inner);
+            if !cleaned.is_empty() {
+                paragraphs.push(format!("<p>{}</p>", cleaned));
+            }
         }
-        format!(
-            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{}</title></head><body><h1>{}</h1><div>{}</div></body></html>",
-            Self::escape_html(title),
-            Self::escape_html(title),
-            body
-        )
+
+        if paragraphs.is_empty() {
+            let plain = Self::strip_tags(&body);
+            for line in plain.split('\n') {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    paragraphs.push(format!("<p>{}</p>", Self::escape_html(trimmed)));
+                }
+            }
+        }
+
+        paragraphs.join("\n")
     }
 
     /// 解析书籍信息（从 HTML 文本），回退实现：尝试抓取标题/作者/简介/标签/章节数。
@@ -119,8 +135,34 @@ impl ContentParser {
         // 移除 <header>...</header> 以及 <script>...</script>
         let re_header = Regex::new(r"<header[^>]*>.*?</header>").unwrap();
         let re_script = Regex::new(r"<script[^>]*>.*?</script>").unwrap();
+        let re_style = Regex::new(r"<style[^>]*>.*?</style>").unwrap();
         let tmp = re_header.replace_all(raw, "");
-        re_script.replace_all(&tmp, "").to_string()
+        let tmp = re_script.replace_all(&tmp, "");
+        re_style.replace_all(&tmp, "").to_string()
+    }
+
+    fn strip_comments(raw: &str) -> String {
+        let re = Regex::new(r"(?s)<!--.*?-->").unwrap();
+        re.replace_all(raw, "").to_string()
+    }
+
+    fn extract_body(raw: &str) -> Option<String> {
+        let re = Regex::new(r"(?is)<body[^>]*>(.*?)</body>").ok()?;
+        re.captures(raw)
+            .and_then(|cap| cap.get(1))
+            .map(|m| m.as_str().to_string())
+    }
+
+    fn sanitize_paragraph(inner: &str) -> String {
+        // 保留换行，将 <br> 视为换行，去掉其他标签。
+        let br_normalized = Regex::new(r"(?i)<br\s*/?>").unwrap();
+        let with_newlines = br_normalized.replace_all(inner, "\n");
+        let text = Self::strip_tags(&with_newlines);
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+        Self::escape_html(trimmed)
     }
 
     fn escape_html(s: &str) -> String {
