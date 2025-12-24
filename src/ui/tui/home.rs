@@ -294,6 +294,20 @@ fn book_meta_from_item(item: &SearchItem) -> BookMeta {
         if !detail.tags.is_empty() {
             meta.tags = detail.tags.clone();
         }
+        meta.chapter_count = detail.chapter_count;
+        meta.finished = detail.finished;
+        meta.cover_url = detail.cover_url.clone();
+        meta.detail_cover_url = detail.detail_cover_url.clone();
+        meta.word_count = detail.word_count;
+        meta.score = detail.score;
+        meta.read_count = detail.read_count.clone();
+        meta.read_count_text = detail.read_count_text.clone();
+        meta.book_short_name = detail.book_short_name.clone();
+        meta.original_book_name = detail.original_book_name.clone();
+        meta.first_chapter_title = detail.first_chapter_title.clone();
+        meta.last_chapter_title = detail.last_chapter_title.clone();
+        meta.category = detail.category.clone();
+        meta.cover_primary_color = detail.cover_primary_color.clone();
     }
     meta
 }
@@ -308,13 +322,63 @@ fn current_selection_detail_lines(app: &App) -> Option<Vec<Line<'static>>> {
     )));
 
     if let Some(detail) = item.detail.as_ref() {
+        let mut status_parts: Vec<String> = Vec::new();
         if let Some(done) = detail.finished {
             let label = if done { "已完结" } else { "连载中" };
-            lines.push(Line::from(format!("完结状态: {}", label)));
+            status_parts.push(format!("状态: {}", label));
         }
         if let Some(count) = detail.chapter_count {
-            lines.push(Line::from(format!("章节数: {}", count)));
+            status_parts.push(format!("章节: {}", count));
         }
+        if let Some(words) = detail.word_count {
+            status_parts.push(format!("字数: {}", super::format_word_count(words)));
+        }
+        if !status_parts.is_empty() {
+            lines.push(Line::from(status_parts.join(" | ")));
+        }
+
+        let mut meta_parts: Vec<String> = Vec::new();
+        if let Some(score) = detail.score {
+            meta_parts.push(format!("评分: {:.1}", score));
+        }
+        if let Some(reads) = detail
+            .read_count_text
+            .as_ref()
+            .or(detail.read_count.as_ref())
+        {
+            meta_parts.push(format!("阅读: {}", reads));
+        }
+        if let Some(cat) = detail.category.as_ref() {
+            meta_parts.push(format!("分类: {}", cat));
+        }
+        if !meta_parts.is_empty() {
+            lines.push(Line::from(meta_parts.join(" | ")));
+        }
+
+        if detail.book_short_name.is_some() || detail.original_book_name.is_some() {
+            let mut alias = Vec::new();
+            if let Some(short) = detail.book_short_name.as_ref() {
+                alias.push(format!("别名: {}", short));
+            }
+            if let Some(orig) = detail.original_book_name.as_ref() {
+                alias.push(format!("原名: {}", orig));
+            }
+            lines.push(Line::from(alias.join(" | ")));
+        }
+
+        if detail.first_chapter_title.is_some() || detail.last_chapter_title.is_some() {
+            let mut bounds = Vec::new();
+            if let Some(first) = detail.first_chapter_title.as_ref() {
+                bounds.push(format!("首章: {}", truncate(first, 48)));
+            }
+            if let Some(last) = detail.last_chapter_title.as_ref() {
+                bounds.push(format!("末章: {}", truncate(last, 48)));
+            }
+            if !bounds.is_empty() {
+                lines.push(Line::from(bounds.join(" | ")));
+            }
+        }
+
         if !detail.tags.is_empty() {
             lines.push(Line::from(format!("标签: {}", detail.tags.join(" | "))));
         }

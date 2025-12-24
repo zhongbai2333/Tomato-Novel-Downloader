@@ -34,11 +34,18 @@ pub fn run_finalize(manager: &mut BookManager, chapters: &[Value], _result: i32)
     }
 
     info!(target: "book_manager", "written: {}", output_path.display());
-    false
+    manager.config.auto_clear_dump
 }
 
 /// 执行延迟清理（当前直接调用）。
 pub fn perform_deferred_cleanup(manager: &mut BookManager) {
+    if manager.config.auto_clear_dump {
+        if let Err(e) = manager.delete_status_folder() {
+            error!(target: "book_manager", error = ?e, "deferred cleanup failed");
+        }
+        return;
+    }
+
     if let Err(e) = manager.cleanup_status_folder() {
         error!(target: "book_manager", error = ?e, "deferred cleanup failed");
     }
@@ -52,10 +59,9 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
         manager.book_name.as_str()
     };
     let safe_book = safe_fs_name(raw_name, "_", 120);
-    let safe_id = safe_fs_name(&manager.book_id, "_", 120);
     let dir = manager.default_save_dir();
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join(format!("{}_{}.{}", safe_id, safe_book, suffix)))
+    Ok(dir.join(format!("{}.{}", safe_book, suffix)))
 }
 
 fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyhow::Result<()> {

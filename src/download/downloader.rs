@@ -1,5 +1,3 @@
-use std::fs;
-use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -7,17 +5,17 @@ use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::{Map, Value};
 use tracing::{debug, error, info};
 
-use crate::base_system::context::Config;
-use crate::base_system::context::safe_fs_name;
+use crate::base_system::context::{Config, safe_fs_name};
 use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
-use reqwest::blocking::Client;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tomato_novel_official_api::{ChapterRef, DirectoryClient, FanqieClient, SearchClient};
+use tomato_novel_official_api::{
+    ChapterRef, DirectoryClient, DirectoryMeta, FanqieClient, SearchClient,
+};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DownloadResult {
@@ -33,8 +31,48 @@ pub struct BookMeta {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub cover_url: Option<String>,
+    pub detail_cover_url: Option<String>,
     pub finished: Option<bool>,
     pub chapter_count: Option<usize>,
+    pub word_count: Option<usize>,
+    pub score: Option<f32>,
+    pub read_count: Option<String>,
+    pub read_count_text: Option<String>,
+    pub book_short_name: Option<String>,
+    pub original_book_name: Option<String>,
+    pub first_chapter_title: Option<String>,
+    pub last_chapter_title: Option<String>,
+    pub category: Option<String>,
+    pub cover_primary_color: Option<String>,
+}
+
+impl From<DirectoryMeta> for BookMeta {
+    fn from(value: DirectoryMeta) -> Self {
+        Self {
+            book_name: value.book_name,
+            author: value.author,
+            description: value.description,
+            tags: value.tags,
+            cover_url: value
+                .cover_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or(value.cover_url),
+            detail_cover_url: value.detail_cover_url,
+            finished: value.finished,
+            chapter_count: value.chapter_count,
+            word_count: value.word_count,
+            score: value.score,
+            read_count: value.read_count,
+            read_count_text: value.read_count_text,
+            book_short_name: value.book_short_name,
+            original_book_name: value.original_book_name,
+            first_chapter_title: value.first_chapter_title,
+            last_chapter_title: value.last_chapter_title,
+            category: value.category,
+            cover_primary_color: value.cover_primary_color,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +102,7 @@ pub struct ProgressSnapshot {
 
 pub(crate) struct ProgressReporter {
     snapshot: ProgressSnapshot,
-    cb: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>,
+    cb: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>, // optional UI callback
 }
 
 impl ProgressReporter {
@@ -163,7 +201,7 @@ impl ChapterDownloader {
             }
 
             if self.config.graceful_exit {
-                // 可选的优雅退出开关：这里仅预留，未来可接收外部信号。
+                // 可选的优雅退出开关：预留外部信号处理
             }
 
             let ids = group
@@ -256,24 +294,38 @@ pub fn download_book(config: &Config, book_id: &str) -> Result<()> {
 
 /// 预先拉取目录与元数据，便于 UI 展示预览/范围选择。
 pub fn prepare_download_plan(
-    _config: &Config,
+    config: &Config,
     book_id: &str,
     meta_hint: BookMeta,
 ) -> Result<DownloadPlan> {
     info!(target: "download", book_id, "准备下载计划");
     let directory = DirectoryClient::new().context("init DirectoryClient")?;
-    let dir = directory
-        .fetch_directory(book_id)
+    let api_url = config.api_endpoints.first().map(|s| s.as_str());
+
+    // 首次获取目录和元数据。
+    let mut dir = directory
+        .fetch_directory_with_cover(book_id, api_url, None)
         .with_context(|| format!("fetch directory for book_id={book_id}"))?;
+
+    // 如果需要封面，按实际书名构建目标路径后重新获取并下载封面。
+    if dir.meta.cover_url.is_some() {
+        if let Some(cover_dir) = cover_dir_for(config, book_id, dir.meta.book_name.as_deref()) {
+            if let Ok(with_cover) =
+                directory.fetch_directory_with_cover(book_id, api_url, Some(&cover_dir))
+            {
+                dir = with_cover;
+            }
+        }
+    }
 
     if dir.chapters.is_empty() {
         return Err(anyhow!("目录为空"));
     }
 
-    let meta_from_dir = extract_book_metadata(&dir.raw);
-    let page_meta = fetch_page_meta(_config, book_id).unwrap_or_default();
-    let merged = merge_meta(meta_hint, meta_from_dir);
-    let merged = merge_meta(merged, page_meta);
+    let meta_from_dir: BookMeta = dir.meta.into();
+    // Prefer authoritative directory metadata, but keep any hints we already have
+    // (e.g., search title/author) as fallback.
+    let merged = merge_meta(meta_from_dir, meta_hint);
     let completed_meta =
         if merged.book_name.is_some() && merged.author.is_some() && merged.description.is_some() {
             merged
@@ -316,12 +368,6 @@ pub fn download_with_plan(
     manager.description = meta.description.clone().unwrap_or_default();
     manager.tags = meta.tags.join("|");
     manager.end = meta.finished.unwrap_or(false);
-
-    download_cover_if_needed(
-        meta.cover_url.clone(),
-        manager.book_folder(),
-        &manager.book_name,
-    );
 
     let resume_book_id = manager.book_id.clone();
     let resume_book_name = manager.book_name.clone();
@@ -452,8 +498,19 @@ fn extract_book_metadata(raw: &Value) -> BookMeta {
     let mut description = None;
     let mut tags: Vec<String> = Vec::new();
     let mut cover = None;
+    let mut detail_cover = None;
     let mut finished = None;
     let mut chapter_count = None;
+    let mut word_count = None;
+    let mut score = None;
+    let mut read_count = None;
+    let mut read_count_text = None;
+    let mut book_short_name = None;
+    let mut original_book_name = None;
+    let mut first_chapter_title = None;
+    let mut last_chapter_title = None;
+    let mut category = None;
+    let mut cover_primary_color = None;
 
     let sources: Vec<&serde_json::Map<String, Value>> = raw
         .as_object()
@@ -520,12 +577,56 @@ fn extract_book_metadata(raw: &Value) -> BookMeta {
             cover = pick_cover(map);
         }
 
+        if detail_cover.is_none() {
+            detail_cover = pick_detail_cover(map);
+        }
+
         if finished.is_none() {
             finished = pick_finished(map);
         }
 
         if chapter_count.is_none() {
             chapter_count = pick_chapter_count(map);
+        }
+
+        if word_count.is_none() {
+            word_count = pick_word_count(map);
+        }
+
+        if score.is_none() {
+            score = pick_score(map);
+        }
+
+        if read_count.is_none() {
+            read_count = pick_read_count(map);
+        }
+
+        if read_count_text.is_none() {
+            read_count_text = pick_read_count_text(map);
+        }
+
+        if book_short_name.is_none() {
+            book_short_name = pick_book_short_name(map);
+        }
+
+        if original_book_name.is_none() {
+            original_book_name = pick_original_book_name(map);
+        }
+
+        if first_chapter_title.is_none() {
+            first_chapter_title = pick_first_chapter_title(map);
+        }
+
+        if last_chapter_title.is_none() {
+            last_chapter_title = pick_last_chapter_title(map);
+        }
+
+        if category.is_none() {
+            category = pick_category(map);
+        }
+
+        if cover_primary_color.is_none() {
+            cover_primary_color = pick_cover_primary_color(map);
         }
     }
 
@@ -535,8 +636,19 @@ fn extract_book_metadata(raw: &Value) -> BookMeta {
         description,
         tags,
         cover_url: cover,
+        detail_cover_url: detail_cover,
         finished,
         chapter_count,
+        word_count,
+        score,
+        read_count,
+        read_count_text,
+        book_short_name,
+        original_book_name,
+        first_chapter_title,
+        last_chapter_title,
+        category,
+        cover_primary_color,
     }
 }
 
@@ -551,8 +663,19 @@ fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
             primary.tags
         },
         cover_url: primary.cover_url.or(fallback.cover_url),
+        detail_cover_url: primary.detail_cover_url.or(fallback.detail_cover_url),
         finished: primary.finished.or(fallback.finished),
         chapter_count: primary.chapter_count.or(fallback.chapter_count),
+        word_count: primary.word_count.or(fallback.word_count),
+        score: primary.score.or(fallback.score),
+        read_count: primary.read_count.or(fallback.read_count),
+        read_count_text: primary.read_count_text.or(fallback.read_count_text),
+        book_short_name: primary.book_short_name.or(fallback.book_short_name),
+        original_book_name: primary.original_book_name.or(fallback.original_book_name),
+        first_chapter_title: primary.first_chapter_title.or(fallback.first_chapter_title),
+        last_chapter_title: primary.last_chapter_title.or(fallback.last_chapter_title),
+        category: primary.category.or(fallback.category),
+        cover_primary_color: primary.cover_primary_color.or(fallback.cover_primary_color),
     }
 }
 
@@ -580,43 +703,52 @@ fn search_metadata(book_id: &str) -> Option<BookMeta> {
         .iter()
         .find_map(|m| Some(pick_tags(m)))
         .unwrap_or_default();
+    let cover_url = maps.iter().find_map(|m| pick_cover(m));
+    let detail_cover_url = maps.iter().find_map(|m| pick_detail_cover(m));
+    let finished = maps.iter().find_map(|m| pick_finished(m));
+    let chapter_count = maps.iter().find_map(|m| pick_chapter_count(m));
+    let word_count = maps.iter().find_map(|m| pick_word_count(m));
+    let score = maps.iter().find_map(|m| pick_score(m));
+    let read_count = maps.iter().find_map(|m| pick_read_count(m));
+    let read_count_text = maps.iter().find_map(|m| pick_read_count_text(m));
+    let book_short_name = maps.iter().find_map(|m| pick_book_short_name(m));
+    let original_book_name = maps.iter().find_map(|m| pick_original_book_name(m));
+    let first_chapter_title = maps.iter().find_map(|m| pick_first_chapter_title(m));
+    let last_chapter_title = maps.iter().find_map(|m| pick_last_chapter_title(m));
+    let category = maps.iter().find_map(|m| pick_category(m));
+    let cover_primary_color = maps.iter().find_map(|m| pick_cover_primary_color(m));
 
     Some(BookMeta {
         book_name: book.title,
         author: book.author,
         description,
         tags,
-        cover_url: None,
-        finished: None,
-        chapter_count: None,
+        cover_url,
+        detail_cover_url,
+        finished,
+        chapter_count,
+        word_count,
+        score,
+        read_count,
+        read_count_text,
+        book_short_name,
+        original_book_name,
+        first_chapter_title,
+        last_chapter_title,
+        category,
+        cover_primary_color,
     })
 }
 
-fn fetch_page_meta(config: &Config, book_id: &str) -> Option<BookMeta> {
-    let client = Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(config.request_timeout))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
-        .build()
-        .ok()?;
-
-    let url = format!("https://fanqienovel.com/page/{book_id}");
-    let resp = client.get(url).send().ok()?;
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return None;
-    }
-    let text = resp.text().ok()?;
-    let (book_name, author, description, tags, chapter_count) =
-        ContentParser::parse_book_info(&text, book_id);
-    Some(BookMeta {
-        book_name: Some(book_name),
-        author: Some(author),
-        description: Some(description),
-        tags,
-        cover_url: None,
-        finished: None,
-        chapter_count: Some(chapter_count),
-    })
+fn cover_dir_for(
+    config: &Config,
+    book_id: &str,
+    book_name: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let save_dir = config.default_save_dir();
+    let safe_book_id = safe_fs_name(book_id, "_", 120);
+    let safe_book_name = safe_fs_name(book_name.unwrap_or(book_id), "_", 120);
+    Some(save_dir.join(format!("{}_{}", safe_book_id, safe_book_name)))
 }
 
 fn collect_maps<'a>(raw: &'a Value) -> Vec<&'a serde_json::Map<String, Value>> {
@@ -627,6 +759,15 @@ fn collect_maps<'a>(raw: &'a Value) -> Vec<&'a serde_json::Map<String, Value>> {
             maps.push(info);
         }
         if let Some(info) = map.get("bookInfo").and_then(|v| v.as_object()) {
+            maps.push(info);
+        }
+        if let Some(info) = map.get("book_data").and_then(|v| v.as_object()) {
+            maps.push(info);
+        }
+        if let Some(info) = map.get("data").and_then(|v| v.as_object()) {
+            maps.push(info);
+        }
+        if let Some(info) = map.get("meta").and_then(|v| v.as_object()) {
             maps.push(info);
         }
     }
@@ -714,7 +855,7 @@ fn pick_finished(map: &serde_json::Map<String, Value>) -> Option<bool> {
                 return Some(b);
             }
             if let Some(n) = val.as_i64() {
-                if n == 1 {
+                if n == 1 || n == 2 {
                     return Some(true);
                 } else if n == 0 {
                     return Some(false);
@@ -722,11 +863,29 @@ fn pick_finished(map: &serde_json::Map<String, Value>) -> Option<bool> {
             }
             if let Some(s) = val.as_str() {
                 if let Ok(n) = s.parse::<i64>() {
-                    if n == 1 {
+                    if n == 1 || n == 2 {
                         return Some(true);
                     } else if n == 0 {
                         return Some(false);
                     }
+                }
+                let lower = s.to_ascii_lowercase();
+                if ["true", "yes", "finished", "end", "completed", "serial_end"]
+                    .contains(&lower.as_str())
+                {
+                    return Some(true);
+                }
+                if [
+                    "false",
+                    "no",
+                    "ongoing",
+                    "serialize",
+                    "serializing",
+                    "serial",
+                ]
+                .contains(&lower.as_str())
+                {
+                    return Some(false);
                 }
             }
         }
@@ -741,6 +900,10 @@ fn pick_chapter_count(map: &serde_json::Map<String, Value>) -> Option<usize> {
         "chapter_num",
         "chapter_count",
         "chapter_total_cnt",
+        "serial_count",
+        "content_chapter_number",
+        "content_count",
+        "total_chapter_count",
     ];
     for key in candidates {
         if let Some(val) = map.get(key) {
@@ -750,6 +913,190 @@ fn pick_chapter_count(map: &serde_json::Map<String, Value>) -> Option<usize> {
             if let Some(s) = val.as_str() {
                 if let Ok(n) = s.parse::<usize>() {
                     return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_word_count(map: &serde_json::Map<String, Value>) -> Option<usize> {
+    let candidates = ["word_number", "word_count", "word_cnt", "words"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(n) = val.as_u64() {
+                return Some(n as usize);
+            }
+            if let Some(s) = val.as_str() {
+                if let Ok(n) = s.parse::<usize>() {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_score(map: &serde_json::Map<String, Value>) -> Option<f32> {
+    let candidates = ["score", "book_score", "rating"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(n) = val.as_f64() {
+                return Some(n as f32);
+            }
+            if let Some(s) = val.as_str() {
+                if let Ok(n) = s.parse::<f32>() {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_read_count(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["read_count", "read_count_all", "readcnt", "pv"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            } else if let Some(n) = val.as_u64() {
+                return Some(n.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn pick_read_count_text(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["read_cnt_text", "read_count_text"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_book_short_name(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["book_short_name", "short_name", "short_title"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_original_book_name(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["original_book_name", "origin_title", "original_title"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_first_chapter_title(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = [
+        "first_chapter_title",
+        "first_catalog_title",
+        "firstItemTitle",
+    ];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_last_chapter_title(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = [
+        "last_chapter_title",
+        "latest_catalog_title",
+        "lastItemTitle",
+    ];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_category(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["category", "category_name", "book_category", "classify"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_cover_primary_color(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = ["cover_primary_color", "primary_color", "cover_color"];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn pick_detail_cover(map: &serde_json::Map<String, Value>) -> Option<String> {
+    let candidates = [
+        "detail_page_thumb_url",
+        "detail_thumb",
+        "detail_cover",
+        "detail_cover_url",
+    ];
+    for key in candidates {
+        if let Some(val) = map.get(key) {
+            if let Some(s) = val.as_str() {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
                 }
             }
         }
@@ -808,76 +1155,4 @@ fn extract_body_fragment(input: &str) -> String {
         }
     }
     input.to_string()
-}
-
-fn download_cover_if_needed(url: Option<String>, folder: &Path, book_title: &str) {
-    let Some(url) = url else {
-        return;
-    };
-    if url.trim().is_empty() {
-        return;
-    }
-
-    let _ = fs::create_dir_all(folder);
-    let safe_title = safe_fs_name(book_title, "_", 120);
-    let mut target = folder.join(format!("{safe_title}.jpg"));
-    if target.exists() {
-        return;
-    }
-
-    match reqwest::blocking::get(url.clone()) {
-        Ok(resp) => {
-            let content_type = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok());
-            if let Some(ext) = guess_image_ext(content_type, &url) {
-                target = folder.join(format!("{safe_title}.{ext}"));
-                if target.exists() {
-                    return;
-                }
-            }
-
-            match resp.error_for_status().and_then(|r| r.bytes()) {
-                Ok(bytes) => {
-                    if let Err(e) = fs::write(&target, &bytes) {
-                        error!(target: "book_manager", error = ?e, "写入封面失败");
-                    } else {
-                        info!(target: "book_manager", path = %target.display(), "已下载封面");
-                    }
-                }
-                Err(e) => {
-                    error!(target: "book_manager", error = ?e, url, "封面下载失败");
-                }
-            }
-        }
-        Err(e) => {
-            error!(target: "book_manager", error = ?e, url, "封面下载失败");
-        }
-    }
-}
-
-fn guess_image_ext(content_type: Option<&str>, url: &str) -> Option<&'static str> {
-    if let Some(ct) = content_type {
-        let lower = ct.to_ascii_lowercase();
-        if lower.contains("png") {
-            return Some("png");
-        }
-        if lower.contains("jpeg") || lower.contains("jpg") {
-            return Some("jpg");
-        }
-        if lower.contains("webp") {
-            return Some("webp");
-        }
-    }
-    let lower_url = url.to_ascii_lowercase();
-    for cand in ["png", "jpg", "jpeg", "webp"] {
-        if lower_url.contains(cand) {
-            return Some(match cand {
-                "jpeg" => "jpg",
-                other => other,
-            });
-        }
-    }
-    None
 }
