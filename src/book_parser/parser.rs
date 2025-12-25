@@ -32,10 +32,14 @@ impl ContentParser {
                     obj.and_then(|o| o.get("origin_chapter_title"))
                         .and_then(Value::as_str)
                 })
-                .unwrap_or_else(|| cid.as_str());
+                .unwrap_or(cid.as_str());
 
             let processed = if cfg.novel_format.eq_ignore_ascii_case("txt") {
                 Self::clean_plain(raw_content)
+            } else if cfg.novel_format.eq_ignore_ascii_case("epub") {
+                // EPUB 模式：尽量保留原始 XHTML（包括 <img> 等标签），后续在 finalize 阶段
+                // 负责下载并替换图片资源。
+                Self::prepare_epub_xhtml(raw_content)
             } else {
                 Self::clean_xhtml(raw_content, title)
             };
@@ -46,21 +50,58 @@ impl ContentParser {
         out
     }
 
+    /// EPUB 专用：保留正文 XHTML，移除 header/script/style 并抽取 body 内容。
+    fn prepare_epub_xhtml(raw: &str) -> String {
+        let stripped = Self::strip_header(raw);
+        let body = Self::extract_body(&stripped).unwrap_or(stripped);
+        Self::strip_comments(&body)
+    }
+
     /// 纯文本清洗：移除标签、统一换行并添加简单缩进。
     pub fn clean_plain(raw: &str) -> String {
-        let without_tags = Self::strip_tags(raw);
-        let mut lines = Vec::new();
+        // Many chapters come as XHTML fragments (<p>, <br>, etc.).
+        // If we strip tags directly, paragraphs collapse into a single line.
+        let re_breaks =
+            Regex::new(r"(?is)<br\s*/?>|</p\s*>|</div\s*>|</section\s*>|</h[1-6]\s*>").unwrap();
+        let re_open_p = Regex::new(r"(?is)<p\b[^>]*>").unwrap();
+
+        let normalized = re_breaks.replace_all(raw, "\n");
+        let normalized = re_open_p.replace_all(&normalized, "\n");
+        let normalized = normalized
+            .replace("&nbsp;", " ")
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
+
+        let without_tags = Self::strip_tags(&normalized);
+        let without_tags = without_tags
+            .replace("&nbsp;", " ")
+            .replace("\r\n", "\n")
+            .replace('\r', "\n");
+
+        // Keep paragraph breaks: output blank lines between paragraphs.
+        let mut out = Vec::new();
+        let mut last_blank = true;
         for line in without_tags.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
+                if !last_blank {
+                    out.push(String::new());
+                    last_blank = true;
+                }
                 continue;
             }
-            lines.push(format!("　　{}", trimmed));
+            last_blank = false;
+            out.push(format!("　　{}", trimmed));
         }
-        if lines.is_empty() {
+
+        while out.last().is_some_and(|l| l.trim().is_empty()) {
+            out.pop();
+        }
+
+        if out.is_empty() {
             without_tags.trim().to_string()
         } else {
-            lines.join("\n")
+            out.join("\n")
         }
     }
 
@@ -92,36 +133,6 @@ impl ContentParser {
         }
 
         paragraphs.join("\n")
-    }
-
-    /// 解析书籍信息（从 HTML 文本），回退实现：尝试抓取标题/作者/简介/标签/章节数。
-    pub fn parse_book_info(
-        html: &str,
-        _book_id: &str,
-    ) -> (String, String, String, Vec<String>, usize) {
-        let title = Self::capture_text(html, r"<h1[^>]*>(.*?)</h1>")
-            .unwrap_or_else(|| "未知书名".to_string());
-        let author = Self::capture_text(html, r"author-name[^>]*>\s*<span[^>]*>(.*?)</span>")
-            .unwrap_or_else(|| "未知作者".to_string());
-        let description =
-            Self::capture_text(html, r"page-abstract-content[^>]*>\s*<p[^>]*>(.*?)</p>")
-                .unwrap_or_else(|| "无简介".to_string());
-
-        let tag_re = Regex::new(r"info-label[^>]*>\s*([^<]+)\s*<").ok();
-        let mut tags = Vec::new();
-        if let Some(re) = tag_re {
-            for cap in re.captures_iter(html) {
-                if let Some(m) = cap.get(1) {
-                    tags.push(m.as_str().trim().to_string());
-                }
-            }
-        }
-
-        let count = Self::capture_text(html, r"共\s*(\d+)\s*章")
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
-
-        (title, author, description, tags, count)
     }
 
     fn strip_tags(raw: &str) -> String {
@@ -171,13 +182,5 @@ impl ContentParser {
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&#39;")
-    }
-
-    fn capture_text(html: &str, pattern: &str) -> Option<String> {
-        let re = Regex::new(pattern).ok()?;
-        re.captures(html)
-            .and_then(|cap| cap.get(1))
-            .map(|m| Self::strip_tags(m.as_str()).trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 }

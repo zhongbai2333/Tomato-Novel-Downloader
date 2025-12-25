@@ -138,7 +138,7 @@ impl LogSystem {
 
         let broadcast_layer = if options.broadcast_to_ui {
             let (tx, _rx) = LOG_CHANNEL
-                .get_or_init(|| crossbeam_channel::unbounded())
+                .get_or_init(crossbeam_channel::unbounded)
                 .clone();
             let writer = BoxMakeWriter::new(ChannelWriterMake { tx });
             Some(

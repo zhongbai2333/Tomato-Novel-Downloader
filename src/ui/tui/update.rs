@@ -227,8 +227,8 @@ fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>
             book_name: book_name.clone(),
             folder: path.clone(),
             label,
-            new_count,
-            has_update: new_count > 0,
+            _new_count: new_count,
+            _has_update: new_count > 0,
         };
         if new_count > 0 {
             updates.push(entry);
@@ -240,14 +240,11 @@ fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>
 }
 
 pub(super) fn expected_book_folder(config: &Config, plan: &DownloadPlan) -> PathBuf {
-    let safe_title = safe_fs_name(
-        plan.meta.book_name.as_deref().unwrap_or(&plan.book_id),
-        "_",
-        120,
-    );
-    config
-        .default_save_dir()
-        .join(format!("{}_{}", plan.book_id, safe_title))
+    crate::base_system::book_paths::book_folder_path(
+        config,
+        &plan.book_id,
+        plan.meta.book_name.as_deref(),
+    )
 }
 
 pub(super) fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usize> {
@@ -263,7 +260,26 @@ pub(super) fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usiz
     let data = fs::read_to_string(&path).ok()?;
     let value: Value = serde_json::from_str(&data).ok()?;
     let downloaded = value.get("downloaded")?.as_object()?;
-    Some(downloaded.len())
+
+    // 仅统计“成功下载”的章节：downloaded[chapter_id] = [title, content]
+    // 其中 content=null 表示下载失败（或未完成），不应该计入“已下载”。
+    let mut ok = 0usize;
+    for (_cid, pair) in downloaded {
+        match pair {
+            Value::Array(arr) => {
+                if arr.get(1).and_then(|v| v.as_str()).is_some() {
+                    ok += 1;
+                }
+            }
+            Value::Object(obj) => {
+                if obj.get("content").and_then(|v| v.as_str()).is_some() {
+                    ok += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(ok)
 }
 
 pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {

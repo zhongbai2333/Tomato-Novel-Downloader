@@ -36,6 +36,7 @@ impl EpubGenerator {
             "body {{ color:#000 !important; line-height:1.5; }}
              p {{ color:#000 !important; {} margin:0 0 .8em 0; line-height:1.5; }}
              p.no-indent {{ text-indent:0; }}
+             p.img-desc {{ color:#999 !important; font-size:0.75em; text-indent:0; text-align:center; margin:-.4em 0 .9em 0; }}
              a.seg-link {{ color: inherit; text-decoration: none; }}
              a.seg-link:hover {{ text-decoration: underline; }}
              .seg-count {{ color:#999; font-size:0.75em; margin-left:.3em; text-decoration: none; }}
@@ -68,9 +69,8 @@ impl EpubGenerator {
         let file_name = format!("chapter_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
         let cleaned = if content.trim().is_empty() {
-            format!(
-                "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
-            )
+            "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
+                .to_string()
         } else {
             content.to_string()
         };
@@ -95,6 +95,13 @@ impl EpubGenerator {
         }
     }
 
+    pub fn add_resource_bytes(&mut self, path: &str, bytes: Vec<u8>, mime: &str) -> Result<()> {
+        self.book
+            .add_resource(path, Cursor::new(bytes), mime)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        Ok(())
+    }
+
     pub fn generate(&mut self, output_path: &Path, cfg: &Config) -> Result<()> {
         if let Some(base) = cfg.get_status_folder_path() {
             let safe_title = safe_fs_name(&self.title, "_", 120);
@@ -110,18 +117,16 @@ impl EpubGenerator {
             ]) {
                 let cursor = Cursor::new(bytes);
                 self.book
-                    .add_content(
-                        EpubContent::new("images/cover.jpg", cursor)
-                            .title("cover")
-                            .reftype(ReferenceType::Cover),
-                    )
+                    .add_cover_image("images/cover.jpg", cursor, "image/jpeg")
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             }
         }
 
         self.book
-            .add_content(
-                EpubContent::new("styles/main.css", Cursor::new(self.style.clone())).title("style"),
+            .add_resource(
+                "styles/main.css",
+                Cursor::new(self.style.clone()),
+                "text/css",
             )
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -166,7 +171,7 @@ fn html_escape(input: &str) -> String {
 fn wrap_chapter_html(title: &str, body: &str) -> String {
     let escaped_title = html_escape(title);
     format!(
-        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" lang=\"zh\" xml:lang=\"zh\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
+        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/#\" lang=\"zh\" xml:lang=\"zh\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
         escaped_title, escaped_title, body
     )
 }

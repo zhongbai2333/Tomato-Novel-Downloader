@@ -69,18 +69,6 @@ pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                     }
                 }
             }
-            KeyCode::Char('i') => {
-                if app.focus == Focus::Input {
-                    app.input.push('i');
-                } else if app.focus == Focus::Results {
-                    if let Some(idx) = app.list_state.selected() {
-                        super::ensure_book_detail(app, idx)?;
-                        if let Some(item) = app.results.get(idx) {
-                            app.status = format!("已加载详情: 《{}》", item.title);
-                        }
-                    }
-                }
-            }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
@@ -323,13 +311,6 @@ fn current_selection_detail_lines(app: &App) -> Option<Vec<Line<'static>>> {
 
     if let Some(detail) = item.detail.as_ref() {
         let mut status_parts: Vec<String> = Vec::new();
-        if let Some(done) = detail.finished {
-            let label = if done { "已完结" } else { "连载中" };
-            status_parts.push(format!("状态: {}", label));
-        }
-        if let Some(count) = detail.chapter_count {
-            status_parts.push(format!("章节: {}", count));
-        }
         if let Some(words) = detail.word_count {
             status_parts.push(format!("字数: {}", super::format_word_count(words)));
         }
@@ -379,16 +360,29 @@ fn current_selection_detail_lines(app: &App) -> Option<Vec<Line<'static>>> {
             }
         }
 
+        {
+            let mut row = Vec::new();
+            if let Some(cnt) = detail.chapter_count {
+                row.push(format!("章节: {}", cnt));
+            }
+            if let Some(done) = detail.finished {
+                row.push(format!("状态: {}", if done { "完结" } else { "连载" }));
+            }
+            if !row.is_empty() {
+                lines.push(Line::from(row.join(" | ")));
+            }
+        }
+
         if !detail.tags.is_empty() {
             lines.push(Line::from(format!("标签: {}", detail.tags.join(" | "))));
         }
         if let Some(desc) = detail.description.as_ref() {
             lines.push(Line::from(format!("简介: {}", truncate(desc, 220))));
         } else {
-            lines.push(Line::from("简介: 暂无，按 i 获取详情"));
+            lines.push(Line::from("简介: 暂无"));
         }
     } else {
-        lines.push(Line::from("简介: 未加载，按 i 获取详情"));
+        lines.push(Line::from("简介: 未加载"));
     }
 
     Some(lines)

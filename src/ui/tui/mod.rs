@@ -25,7 +25,10 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::prelude::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Scrollbar,
+    ScrollbarOrientation, ScrollbarState, Wrap,
+};
 use serde_json::Value;
 use tomato_novel_official_api::{DirectoryClient, SearchClient};
 use tracing::{debug, info, warn};
@@ -40,6 +43,7 @@ use update::{expected_book_folder, read_downloaded_count, show_update_menu};
 
 use crate::base_system::config::{ConfigSpec, write_with_comments};
 use crate::base_system::context::{Config, safe_fs_name};
+use crate::base_system::json_extract;
 use crate::base_system::logging::take_broadcast_rx;
 use crate::download::downloader::{self, BookMeta, ChapterRange, DownloadPlan, ProgressSnapshot};
 use crate::prewarm_state;
@@ -62,7 +66,7 @@ enum View {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MenuAction {
+pub(super) enum MenuAction {
     Confirm,
     Config,
     Update,
@@ -71,7 +75,7 @@ enum MenuAction {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ConfigField {
+pub(super) enum ConfigField {
     SavePath,
     NovelFormat,
     BulkFiles,
@@ -113,7 +117,7 @@ enum ConfigField {
 }
 
 #[derive(Debug, Clone)]
-struct ConfigEntry {
+pub(super) struct ConfigEntry {
     title: &'static str,
     field: ConfigField,
 }
@@ -329,8 +333,8 @@ struct UpdateEntry {
     book_name: String,
     folder: PathBuf,
     label: String,
-    new_count: usize,
-    has_update: bool,
+    _new_count: usize,
+    _has_update: bool,
 }
 
 #[derive(Debug)]
@@ -392,12 +396,12 @@ impl BookDetail {
 }
 
 #[derive(Clone, Debug)]
-struct PendingDownload {
+pub(super) struct PendingDownload {
     plan: DownloadPlan,
     downloaded_count: usize,
 }
 
-struct App {
+pub(super) struct App {
     input: String,
     focus: Focus,
     status: String,
@@ -437,7 +441,7 @@ struct App {
     // cover state
     cover_lines: Vec<String>,
     cover_title: String,
-    previous_view_cover: View,
+    _previous_view_cover: View,
 
     // home layout
     last_home_layout: Option<[Rect; 5]>,
@@ -473,6 +477,13 @@ struct App {
     last_preview_layout: Option<[Rect; 2]>,
     last_preview_modal: Option<PreviewModalLayout>,
 
+    // preview scroll (description/info)
+    preview_desc_scroll: u16,
+    preview_desc_scroll_max: u16,
+    preview_modal_scroll: u16,
+    preview_modal_scroll_max: u16,
+    last_preview_desc_area: Option<Rect>,
+
     // download progress
     download_progress: Option<ProgressSnapshot>,
 
@@ -482,7 +493,8 @@ struct App {
 }
 #[derive(Clone, Debug, Default)]
 struct PreviewModalLayout {
-    modal: Rect,
+    _modal: Rect,
+    info: Rect,
     range: Rect,
     buttons: Rect,
 }
@@ -540,7 +552,7 @@ impl App {
             last_about_buttons: None,
             cover_lines: Vec::new(),
             cover_title: String::new(),
-            previous_view_cover: View::Home,
+            _previous_view_cover: View::Home,
             last_home_layout: None,
             worker_tx,
             worker_rx,
@@ -559,6 +571,11 @@ impl App {
             preview_modal_open: false,
             last_preview_layout: None,
             last_preview_modal: None,
+            preview_desc_scroll: 0,
+            preview_desc_scroll_max: 0,
+            preview_modal_scroll: 0,
+            preview_modal_scroll_max: 0,
+            last_preview_desc_area: None,
             download_progress: None,
             download_cancel_flag: None,
             stop_button_area: None,
@@ -720,14 +737,36 @@ fn handle_event_preview(app: &mut App, event: Event) -> Result<()> {
                     }
                 }
             }
-            KeyCode::Up | KeyCode::Left => {
+            KeyCode::Up => {
+                if app.preview_focus == PreviewFocus::Buttons {
+                    let sel = app.preview_buttons.selected().unwrap_or(0);
+                    let next = if sel == 0 { 1 } else { sel - 1 };
+                    app.preview_buttons.select(Some(next.min(1)));
+                } else {
+                    preview_scroll_up(app, 1);
+                }
+            }
+            KeyCode::Down => {
+                if app.preview_focus == PreviewFocus::Buttons {
+                    let sel = app.preview_buttons.selected().unwrap_or(0);
+                    let next = if sel >= 1 { 0 } else { sel + 1 };
+                    app.preview_buttons.select(Some(next.min(1)));
+                } else {
+                    preview_scroll_down(app, 1);
+                }
+            }
+            KeyCode::PageUp => preview_scroll_up(app, 5),
+            KeyCode::PageDown => preview_scroll_down(app, 5),
+            KeyCode::Home => preview_scroll_to_top(app),
+            KeyCode::End => preview_scroll_to_bottom(app),
+            KeyCode::Left => {
                 if app.preview_focus == PreviewFocus::Buttons {
                     let sel = app.preview_buttons.selected().unwrap_or(0);
                     let next = if sel == 0 { 1 } else { sel - 1 };
                     app.preview_buttons.select(Some(next.min(1)));
                 }
             }
-            KeyCode::Down | KeyCode::Right => {
+            KeyCode::Right => {
                 if app.preview_focus == PreviewFocus::Buttons {
                     let sel = app.preview_buttons.selected().unwrap_or(0);
                     let next = if sel >= 1 { 0 } else { sel + 1 };
@@ -764,6 +803,33 @@ fn handle_mouse_preview(app: &mut App, me: event::MouseEvent) -> Result<()> {
         {
             request_cancel_download(app);
             return Ok(());
+        }
+    }
+
+    if matches!(
+        me.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) {
+        let up = matches!(me.kind, MouseEventKind::ScrollUp);
+        if let Some(layout) = app.last_preview_modal.clone() {
+            if pos_in(layout.info, me.column, me.row) {
+                if up {
+                    preview_scroll_up(app, 1);
+                } else {
+                    preview_scroll_down(app, 1);
+                }
+                return Ok(());
+            }
+        }
+        if let Some(area) = app.last_preview_desc_area {
+            if pos_in(area, me.column, me.row) {
+                if up {
+                    preview_scroll_up(app, 1);
+                } else {
+                    preview_scroll_down(app, 1);
+                }
+                return Ok(());
+            }
         }
     }
 
@@ -838,10 +904,10 @@ fn search_books(query: &str) -> Result<Vec<SearchItem>> {
 }
 
 fn detail_from_search(raw: &Value) -> BookDetail {
-    let maps = collect_maps(raw);
+    let maps = json_extract::collect_maps(raw);
 
     let description = maps.iter().find_map(|m| {
-        pick_string_field(
+        json_extract::pick_string(
             m,
             &[
                 "abstract",
@@ -857,28 +923,38 @@ fn detail_from_search(raw: &Value) -> BookDetail {
     });
     let tags = maps
         .iter()
-        .find_map(|m| pick_tags_field(m))
+        .find_map(|m| json_extract::pick_tags_opt(m))
         .unwrap_or_default();
-    let chapter_count = maps.iter().find_map(|m| pick_chapter_count(m));
-    let finished = maps.iter().find_map(|m| pick_finished(m));
-    let cover_url = maps.iter().find_map(|m| pick_cover(m));
-    let detail_cover_url = maps.iter().find_map(|m| pick_detail_cover(m));
-    let word_count = maps.iter().find_map(|m| pick_word_count(m));
-    let score = maps.iter().find_map(|m| pick_score(m));
-    let read_count = maps.iter().find_map(|m| pick_read_count(m));
-    let read_count_text = maps.iter().find_map(|m| pick_read_count_text(m));
-    let book_short_name = maps.iter().find_map(|m| pick_book_short_name(m));
-    let original_book_name = maps.iter().find_map(|m| pick_original_book_name(m));
-    let first_chapter_title = maps.iter().find_map(|m| pick_first_chapter_title(m));
-    let last_chapter_title = maps.iter().find_map(|m| pick_last_chapter_title(m));
-    let category = maps.iter().find_map(|m| pick_category(m));
-    let cover_primary_color = maps.iter().find_map(|m| pick_cover_primary_color(m));
+    let cover_url = maps.iter().find_map(|m| json_extract::pick_cover(m));
+    let detail_cover_url = maps.iter().find_map(|m| json_extract::pick_detail_cover(m));
+    let word_count = maps.iter().find_map(|m| json_extract::pick_word_count(m));
+    let score = maps.iter().find_map(|m| json_extract::pick_score(m));
+    let read_count = maps.iter().find_map(|m| json_extract::pick_read_count(m));
+    let read_count_text = maps
+        .iter()
+        .find_map(|m| json_extract::pick_read_count_text(m));
+    let book_short_name = maps
+        .iter()
+        .find_map(|m| json_extract::pick_book_short_name(m));
+    let original_book_name = maps
+        .iter()
+        .find_map(|m| json_extract::pick_original_book_name(m));
+    let first_chapter_title = maps
+        .iter()
+        .find_map(|m| json_extract::pick_first_chapter_title(m));
+    let last_chapter_title = maps
+        .iter()
+        .find_map(|m| json_extract::pick_last_chapter_title(m));
+    let category = maps.iter().find_map(|m| json_extract::pick_category(m));
+    let cover_primary_color = maps
+        .iter()
+        .find_map(|m| json_extract::pick_cover_primary_color(m));
 
     BookDetail {
         description,
         tags,
-        chapter_count,
-        finished,
+        chapter_count: None,
+        finished: None,
         cover_url,
         detail_cover_url,
         word_count,
@@ -894,426 +970,68 @@ fn detail_from_search(raw: &Value) -> BookDetail {
     }
 }
 
-fn collect_maps<'a>(raw: &'a Value) -> Vec<&'a serde_json::Map<String, Value>> {
-    let mut maps = Vec::new();
-    if let Some(map) = raw.as_object() {
-        maps.push(map);
-        if let Some(info) = map.get("book_info").and_then(|v| v.as_object()) {
-            maps.push(info);
-        }
-        if let Some(info) = map.get("bookInfo").and_then(|v| v.as_object()) {
-            maps.push(info);
-        }
-        if let Some(info) = map.get("book_data").and_then(|v| v.as_object()) {
-            maps.push(info);
-        }
-        if let Some(info) = map.get("data").and_then(|v| v.as_object()) {
-            maps.push(info);
-        }
-        if let Some(info) = map.get("meta").and_then(|v| v.as_object()) {
-            maps.push(info);
-        }
-    }
-    maps
-}
-
-fn pick_string_field(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(val) = map.get(*key) {
-            if let Some(s) = val.as_str() {
-                if !s.is_empty() {
-                    return Some(s.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_tags_field(map: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
-    let candidates = [
-        "tags",
-        "book_tags",
-        "tag",
-        "category",
-        "categories",
-        "classify_tags",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            let tags = tags_from_value(val);
-            if !tags.is_empty() {
-                return Some(tags);
-            }
-        }
-    }
-    None
-}
-
-fn tags_from_value(value: &Value) -> Vec<String> {
-    match value {
-        Value::Array(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect(),
-        Value::String(s) => s
-            .split(|c| c == ',' || c == ';' || c == '|')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect(),
-        _ => Vec::new(),
+fn detail_from_meta(meta: &BookMeta) -> BookDetail {
+    BookDetail {
+        description: meta.description.clone(),
+        tags: meta.tags.clone(),
+        chapter_count: meta.chapter_count,
+        finished: meta.finished,
+        cover_url: meta.cover_url.clone(),
+        detail_cover_url: meta.detail_cover_url.clone(),
+        word_count: meta.word_count,
+        score: meta.score,
+        read_count: meta.read_count.clone(),
+        read_count_text: meta.read_count_text.clone(),
+        book_short_name: meta.book_short_name.clone(),
+        original_book_name: meta.original_book_name.clone(),
+        first_chapter_title: meta.first_chapter_title.clone(),
+        last_chapter_title: meta.last_chapter_title.clone(),
+        category: meta.category.clone(),
+        cover_primary_color: meta.cover_primary_color.clone(),
     }
 }
 
-fn pick_chapter_count(map: &serde_json::Map<String, Value>) -> Option<usize> {
-    let candidates = [
-        "item_cnt",
-        "book_item_cnt",
-        "chapter_num",
-        "chapter_count",
-        "chapter_total_cnt",
-        "serial_count",
-        "content_chapter_number",
-        "content_count",
-        "total_chapter_count",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(n) = val.as_u64() {
-                return Some(n as usize);
-            }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<usize>() {
-                    return Some(n);
-                }
-            }
-        }
+fn merge_detail(primary: BookDetail, fallback: BookDetail) -> BookDetail {
+    BookDetail {
+        description: primary.description.or(fallback.description),
+        tags: if primary.tags.is_empty() {
+            fallback.tags
+        } else {
+            primary.tags
+        },
+        chapter_count: primary.chapter_count.or(fallback.chapter_count),
+        finished: primary.finished.or(fallback.finished),
+        cover_url: primary.cover_url.or(fallback.cover_url),
+        detail_cover_url: primary.detail_cover_url.or(fallback.detail_cover_url),
+        word_count: primary.word_count.or(fallback.word_count),
+        score: primary.score.or(fallback.score),
+        read_count: primary.read_count.or(fallback.read_count),
+        read_count_text: primary.read_count_text.or(fallback.read_count_text),
+        book_short_name: primary.book_short_name.or(fallback.book_short_name),
+        original_book_name: primary.original_book_name.or(fallback.original_book_name),
+        first_chapter_title: primary.first_chapter_title.or(fallback.first_chapter_title),
+        last_chapter_title: primary.last_chapter_title.or(fallback.last_chapter_title),
+        category: primary.category.or(fallback.category),
+        cover_primary_color: primary.cover_primary_color.or(fallback.cover_primary_color),
     }
-    None
 }
 
-fn pick_word_count(map: &serde_json::Map<String, Value>) -> Option<usize> {
-    let candidates = ["word_number", "word_count", "word_cnt", "words"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(n) = val.as_u64() {
-                return Some(n as usize);
-            }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<usize>() {
-                    return Some(n);
-                }
-            }
-        }
+fn upsert_result_detail_from_plan(app: &mut App, book_id: &str, meta: &BookMeta) {
+    let Some(idx) = app.results.iter().position(|b| b.book_id == book_id) else {
+        return;
+    };
+    let incoming = detail_from_meta(meta);
+    if let Some(old) = app.results[idx].detail.take() {
+        app.results[idx].detail = Some(merge_detail(incoming, old));
+    } else {
+        app.results[idx].detail = Some(incoming);
     }
-    None
 }
 
-fn pick_score(map: &serde_json::Map<String, Value>) -> Option<f32> {
-    let candidates = ["score", "book_score", "rating"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(n) = val.as_f64() {
-                return Some(n as f32);
-            }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<f32>() {
-                    return Some(n);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_read_count(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["read_count", "read_count_all", "readcnt", "pv"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            } else if let Some(n) = val.as_u64() {
-                return Some(n.to_string());
-            }
-        }
-    }
-    None
-}
-
-fn pick_read_count_text(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["read_cnt_text", "read_count_text"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_book_short_name(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["book_short_name", "short_name", "short_title"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_original_book_name(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["original_book_name", "origin_title", "original_title"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_first_chapter_title(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = [
-        "first_chapter_title",
-        "first_catalog_title",
-        "firstItemTitle",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_last_chapter_title(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = [
-        "last_chapter_title",
-        "latest_catalog_title",
-        "lastItemTitle",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_category(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["category", "category_name", "book_category", "classify"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_cover_primary_color(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = ["cover_primary_color", "primary_color", "cover_color"];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_cover(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = [
-        "cover",
-        "cover_url",
-        "pic_url",
-        "thumb_url",
-        "thumb",
-        "coverUrl",
-        "picUrl",
-        "book_cover",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(url) = val.as_str() {
-                let trimmed = url.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_detail_cover(map: &serde_json::Map<String, Value>) -> Option<String> {
-    let candidates = [
-        "detail_page_thumb_url",
-        "detail_thumb",
-        "detail_cover",
-        "detail_cover_url",
-    ];
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn pick_finished(map: &serde_json::Map<String, Value>) -> Option<bool> {
-    let candidates = [
-        "is_finish",
-        "is_finished",
-        "finish_status",
-        "finishstate",
-        "finish_state",
-        "is_end",
-        "isEnd",
-        "finish",
-        "finished",
-        "book_status",
-        "status",
-        "serial_status",
-        "serialStatus",
-        "finishStatus",
-    ];
-
-    for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(b) = val.as_bool() {
-                return Some(b);
-            }
-            if let Some(n) = val.as_i64() {
-                if n == 1 || n == 2 {
-                    return Some(true);
-                } else if n == 0 {
-                    return Some(false);
-                }
-            }
-            if let Some(s) = val.as_str() {
-                let lower = s.to_ascii_lowercase();
-                if ["1", "2", "true", "yes", "finished", "end", "completed"]
-                    .contains(&lower.as_str())
-                {
-                    return Some(true);
-                }
-                if [
-                    "0",
-                    "false",
-                    "no",
-                    "ongoing",
-                    "serialize",
-                    "serializing",
-                    "serial",
-                ]
-                .contains(&lower.as_str())
-                {
-                    return Some(false);
-                }
-            }
-        }
-    }
-
-    None
-}
+// JSON 字段提取 helper 已抽取到 base_system::json_extract
 
 pub(super) fn parse_book_id(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    let re_url = regex::Regex::new(r"https?://\S+").ok();
-    if let Some(re) = re_url.as_ref() {
-        if let Some(url_match) = re.find(trimmed) {
-            let url = url_match.as_str();
-            let re_qs = regex::Regex::new(r"(?i)(book_id|bookId)=([0-9]+)").ok();
-            if let Some(re_qs) = re_qs {
-                if let Some(caps) = re_qs.captures(url) {
-                    return Some(
-                        caps.get(2)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    );
-                }
-            }
-            let re_path = regex::Regex::new(r"/page/(\d+)").ok();
-            if let Some(re_path) = re_path {
-                if let Some(caps) = re_path.captures(url) {
-                    return Some(
-                        caps.get(1)
-                            .map(|m| m.as_str().to_string())
-                            .unwrap_or_default(),
-                    );
-                }
-            }
-        }
-    }
-
-    if trimmed.chars().all(|c| c.is_ascii_digit()) {
-        return Some(trimmed.to_string());
-    }
-
-    let re_path = regex::Regex::new(r"/page/(\d+)").ok();
-    if let Some(re) = re_path {
-        if let Some(caps) = re.captures(trimmed) {
-            return Some(
-                caps.get(1)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default(),
-            );
-        }
-    }
-
-    let re_qs = regex::Regex::new(r"(?i)(book_id|bookId)=([0-9]+)").ok();
-    if let Some(re) = re_qs {
-        if let Some(caps) = re.captures(trimmed) {
-            return Some(
-                caps.get(2)
-                    .map(|m| m.as_str().to_string())
-                    .unwrap_or_default(),
-            );
-        }
-    }
-
-    None
+    crate::base_system::book_id::parse_book_id(input)
 }
 
 pub(super) fn parse_range_input(input: &str, total: usize) -> Result<Option<ChapterRange>> {
@@ -1359,114 +1077,6 @@ pub(super) fn parse_range_input(input: &str, total: usize) -> Result<Option<Chap
         start,
         end: end.min(total),
     }))
-}
-
-pub(super) fn ensure_book_detail(app: &mut App, idx: usize) -> Result<()> {
-    if idx >= app.results.len() {
-        return Ok(());
-    }
-
-    let has_data = app
-        .results
-        .get(idx)
-        .and_then(|item| item.detail.as_ref())
-        .map(|d| d.has_data())
-        .unwrap_or(false);
-    if has_data {
-        return Ok(());
-    }
-
-    let fetched = detail_from_directory(&app.results[idx].book_id)?;
-    let merged = if let Some(old) = app.results[idx].detail.take() {
-        BookDetail {
-            description: fetched.description.or(old.description),
-            tags: if fetched.tags.is_empty() {
-                old.tags
-            } else {
-                fetched.tags
-            },
-            chapter_count: fetched.chapter_count.or(old.chapter_count),
-            finished: fetched.finished.or(old.finished),
-            cover_url: fetched.cover_url.or(old.cover_url),
-            detail_cover_url: fetched.detail_cover_url.or(old.detail_cover_url),
-            word_count: fetched.word_count.or(old.word_count),
-            score: fetched.score.or(old.score),
-            read_count: fetched.read_count.or(old.read_count),
-            read_count_text: fetched.read_count_text.or(old.read_count_text),
-            book_short_name: fetched.book_short_name.or(old.book_short_name),
-            original_book_name: fetched.original_book_name.or(old.original_book_name),
-            first_chapter_title: fetched.first_chapter_title.or(old.first_chapter_title),
-            last_chapter_title: fetched.last_chapter_title.or(old.last_chapter_title),
-            category: fetched.category.or(old.category),
-            cover_primary_color: fetched.cover_primary_color.or(old.cover_primary_color),
-        }
-    } else {
-        fetched
-    };
-
-    app.results[idx].detail = Some(merged);
-    Ok(())
-}
-
-fn detail_from_directory(book_id: &str) -> Result<BookDetail> {
-    let client = DirectoryClient::new().context("init DirectoryClient")?;
-    let dir = client
-        .fetch_directory(book_id)
-        .with_context(|| format!("fetch_directory for {book_id}"))?;
-    let tomato_novel_official_api::DirectoryResponse {
-        raw,
-        meta,
-        chapters,
-        ..
-    } = dir;
-
-    let maps = collect_maps(&raw);
-    let description = meta.description.clone().or_else(|| {
-        maps.iter().find_map(|m| {
-            pick_string_field(
-                m,
-                &[
-                    "description",
-                    "desc",
-                    "abstract",
-                    "intro",
-                    "summary",
-                    "book_abstract",
-                    "recommendation_reason",
-                ],
-            )
-        })
-    });
-    let mut tags = meta.tags;
-    if tags.is_empty() {
-        tags = maps
-            .iter()
-            .find_map(|m| pick_tags_field(m))
-            .unwrap_or_default();
-    }
-    let chapter_count = Some(chapters.len());
-    let finished = meta
-        .finished
-        .or_else(|| maps.iter().find_map(|m| pick_finished(m)));
-
-    Ok(BookDetail {
-        description,
-        tags,
-        chapter_count,
-        finished,
-        cover_url: meta.cover_url,
-        detail_cover_url: meta.detail_cover_url,
-        word_count: meta.word_count,
-        score: meta.score,
-        read_count: meta.read_count,
-        read_count_text: meta.read_count_text,
-        book_short_name: meta.book_short_name,
-        original_book_name: meta.original_book_name,
-        first_chapter_title: meta.first_chapter_title,
-        last_chapter_title: meta.last_chapter_title,
-        category: meta.category,
-        cover_primary_color: meta.cover_primary_color,
-    })
 }
 
 const MENU_ITEMS: &[(&str, MenuAction)] = &[
@@ -1706,6 +1316,50 @@ fn render_prewarm_overlay(frame: &mut ratatui::Frame, app: &App) {
     );
 }
 
+fn wrapped_line_count(text: &str, width: u16) -> usize {
+    let w = width.max(1) as usize;
+    let mut total = 0usize;
+    for line in text.lines() {
+        let wrapped = textwrap::wrap(line, w);
+        total = total.saturating_add(wrapped.len().max(1));
+    }
+    total.max(1)
+}
+
+fn preview_scroll_up(app: &mut App, lines: u16) {
+    if app.preview_modal_open {
+        app.preview_modal_scroll = app.preview_modal_scroll.saturating_sub(lines);
+    } else {
+        app.preview_desc_scroll = app.preview_desc_scroll.saturating_sub(lines);
+    }
+}
+
+fn preview_scroll_down(app: &mut App, lines: u16) {
+    if app.preview_modal_open {
+        let max = app.preview_modal_scroll_max;
+        app.preview_modal_scroll = (app.preview_modal_scroll.saturating_add(lines)).min(max);
+    } else {
+        let max = app.preview_desc_scroll_max;
+        app.preview_desc_scroll = (app.preview_desc_scroll.saturating_add(lines)).min(max);
+    }
+}
+
+fn preview_scroll_to_top(app: &mut App) {
+    if app.preview_modal_open {
+        app.preview_modal_scroll = 0;
+    } else {
+        app.preview_desc_scroll = 0;
+    }
+}
+
+fn preview_scroll_to_bottom(app: &mut App) {
+    if app.preview_modal_open {
+        app.preview_modal_scroll = app.preview_modal_scroll_max;
+    } else {
+        app.preview_desc_scroll = app.preview_desc_scroll_max;
+    }
+}
+
 fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
     let area = frame.size();
     let progress_height: u16 = 7;
@@ -1717,7 +1371,92 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         width: area.width,
         height: log_height.max(1),
     };
-    render_log_box(frame, log_area, app);
+    // When downloading, show a small description pane above logs.
+    // Keep it minimal: only render if we have enough vertical space.
+    let desc_h: u16 = 5;
+    let min_log_h: u16 = 3;
+    let can_show_desc = !app.preview_modal_open
+        && app.pending_download.is_some()
+        && log_area.height > desc_h.saturating_add(min_log_h);
+
+    if can_show_desc {
+        let desc_area = Rect {
+            x: log_area.x,
+            y: log_area.y,
+            width: log_area.width,
+            height: desc_h.min(log_area.height),
+        };
+        app.last_preview_desc_area = Some(desc_area);
+        let log_rest = Rect {
+            x: log_area.x,
+            y: log_area.y.saturating_add(desc_area.height),
+            width: log_area.width,
+            height: log_area.height.saturating_sub(desc_area.height).max(1),
+        };
+
+        let desc_text = app
+            .pending_download
+            .as_ref()
+            .and_then(|p| p.plan.meta.description.as_deref())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("暂无简介");
+
+        let desc_block = Block::default()
+            .borders(Borders::ALL)
+            .title("简介 (↑↓/滚轮)");
+        frame.render_widget(desc_block.clone(), desc_area);
+        let inner = desc_block.inner(desc_area);
+
+        let full_lines = wrapped_line_count(desc_text, inner.width);
+        let visible_h = inner.height as usize;
+        let scrollable = full_lines > visible_h && inner.width > 1;
+        let (text_area, scroll_area, total_lines) = if scrollable {
+            let text_w = inner.width.saturating_sub(1).max(1);
+            let total = wrapped_line_count(desc_text, text_w);
+            (
+                Rect {
+                    x: inner.x,
+                    y: inner.y,
+                    width: text_w,
+                    height: inner.height,
+                },
+                Some(Rect {
+                    x: inner.x.saturating_add(text_w),
+                    y: inner.y,
+                    width: 1,
+                    height: inner.height,
+                }),
+                total,
+            )
+        } else {
+            (inner, None, full_lines)
+        };
+
+        let max_scroll = total_lines
+            .saturating_sub(text_area.height as usize)
+            .min(u16::MAX as usize) as u16;
+        app.preview_desc_scroll_max = max_scroll;
+        app.preview_desc_scroll = app.preview_desc_scroll.min(app.preview_desc_scroll_max);
+
+        let para = Paragraph::new(desc_text.to_string())
+            .wrap(Wrap { trim: true })
+            .scroll((app.preview_desc_scroll, 0));
+        frame.render_widget(para, text_area);
+        if let Some(sb_area) = scroll_area {
+            let mut state =
+                ScrollbarState::new(total_lines).position(app.preview_desc_scroll as usize);
+            let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+            frame.render_stateful_widget(sb, sb_area, &mut state);
+        }
+
+        render_log_box(frame, log_rest, app);
+    } else {
+        app.last_preview_desc_area = None;
+        app.preview_desc_scroll = 0;
+        app.preview_desc_scroll_max = 0;
+        render_log_box(frame, log_area, app);
+    }
     app.last_preview_layout = Some([log_area, Rect::default()]);
 
     let progress_area = Rect {
@@ -1819,7 +1558,7 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
     app.last_preview_modal = None;
     if app.preview_modal_open {
         let modal_w = area.width.min(80).max(40.min(area.width));
-        let modal_h = 14.min(area.height);
+        let modal_h = 18.min(area.height);
         let modal_x = area
             .x
             .saturating_add(area.width.saturating_sub(modal_w) / 2);
@@ -1867,6 +1606,7 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         }
 
         let mut meta_lines: Vec<Line> = Vec::new();
+        let mut info_plain_lines: Vec<String> = Vec::new();
         let mut row1: Vec<String> = Vec::new();
         row1.push(format!("章节: {} (已下载 {})", total, downloaded));
         if let Some(done) = meta.finished {
@@ -1878,7 +1618,23 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
                 row1.push(format!("作者: {}", author));
             }
         }
-        meta_lines.push(Line::from(row1.join(" | ")));
+        let row1_s = row1.join(" | ");
+        meta_lines.push(Line::from(row1_s.clone()));
+        info_plain_lines.push(row1_s);
+
+        if let Some(desc) = meta.description.as_ref() {
+            if !desc.is_empty() {
+                let desc = desc.trim();
+                meta_lines.push(Line::from(format!("简介: {}", desc)));
+                info_plain_lines.push(format!("简介: {}", desc));
+            } else {
+                meta_lines.push(Line::from("简介: 暂无"));
+                info_plain_lines.push("简介: 暂无".to_string());
+            }
+        } else {
+            meta_lines.push(Line::from("简介: 暂无"));
+            info_plain_lines.push("简介: 暂无".to_string());
+        }
 
         let mut row2: Vec<String> = Vec::new();
         if let Some(score) = meta.score {
@@ -1891,7 +1647,9 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
             row2.push(format!("阅读: {}", reads));
         }
         if !row2.is_empty() {
-            meta_lines.push(Line::from(row2.join(" | ")));
+            let row2_s = row2.join(" | ");
+            meta_lines.push(Line::from(row2_s.clone()));
+            info_plain_lines.push(row2_s);
         }
 
         let mut row3: Vec<String> = Vec::new();
@@ -1904,7 +1662,9 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
             row3.push(format!("标签: {}", meta.tags.join(" | ")));
         }
         if !row3.is_empty() {
-            meta_lines.push(Line::from(row3.join(" | ")));
+            let row3_s = row3.join(" | ");
+            meta_lines.push(Line::from(row3_s.clone()));
+            info_plain_lines.push(row3_s);
         }
 
         let mut row4: Vec<String> = Vec::new();
@@ -1919,29 +1679,27 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
             }
         }
         if !row4.is_empty() {
-            meta_lines.push(Line::from(row4.join(" | ")));
-        }
-
-        if let Some(desc) = meta.description.as_ref() {
-            if !desc.is_empty() {
-                meta_lines.push(Line::from(format!("简介: {}", truncate(desc, 160))));
-            }
-        }
-
-        if meta_lines.is_empty() {
-            meta_lines.push(Line::from("输入范围(空=全部):"));
-        } else {
-            meta_lines.push(Line::from("输入范围(空=全部):"));
+            let row4_s = row4.join(" | ");
+            meta_lines.push(Line::from(row4_s.clone()));
+            info_plain_lines.push(row4_s);
         }
 
         let mut info_lines = Vec::new();
         info_lines.push(Line::from(Span::styled(
-            title_line,
+            title_line.clone(),
             Style::default()
                 .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         )));
         info_lines.extend(meta_lines);
+
+        // Plain text copy for scroll range calculation
+        let mut info_plain = String::new();
+        info_plain.push_str(&title_line);
+        for s in &info_plain_lines {
+            info_plain.push('\n');
+            info_plain.push_str(s);
+        }
 
         let range_focus = app.preview_focus == PreviewFocus::Range;
         let range_style = if range_focus {
@@ -1953,7 +1711,11 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         };
         let range_line = Paragraph::new(format!("> {}", app.preview_range))
             .style(range_style)
-            .block(Block::default().borders(Borders::ALL).title("下载范围"));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("下载范围 (空=全部)"),
+            );
 
         let buttons = ["确定", "取消"];
         let button_items: Vec<ListItem> = buttons.iter().map(|b| ListItem::new(*b)).collect();
@@ -1970,27 +1732,67 @@ fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),
+                Constraint::Min(6),
                 Constraint::Length(3),
-                Constraint::Min(3),
+                Constraint::Length(4),
             ])
             .split(inner);
+
+        // Scroll range for modal info area (based on chunks[0])
+        let full_lines = wrapped_line_count(&info_plain, chunks[0].width);
+        let visible_h = chunks[0].height as usize;
+        let scrollable = full_lines > visible_h && chunks[0].width > 1;
+        let (info_text_area, info_scroll_area, total_lines) = if scrollable {
+            let text_w = chunks[0].width.saturating_sub(1).max(1);
+            let total = wrapped_line_count(&info_plain, text_w);
+            (
+                Rect {
+                    x: chunks[0].x,
+                    y: chunks[0].y,
+                    width: text_w,
+                    height: chunks[0].height,
+                },
+                Some(Rect {
+                    x: chunks[0].x.saturating_add(text_w),
+                    y: chunks[0].y,
+                    width: 1,
+                    height: chunks[0].height,
+                }),
+                total,
+            )
+        } else {
+            (chunks[0], None, full_lines)
+        };
+        let max_scroll = total_lines
+            .saturating_sub(info_text_area.height as usize)
+            .min(u16::MAX as usize) as u16;
+        app.preview_modal_scroll_max = max_scroll;
+        app.preview_modal_scroll = app.preview_modal_scroll.min(app.preview_modal_scroll_max);
 
         frame.render_widget(Clear, modal);
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
-                .title("预览与下载")
+                .title("预览与下载 (↑↓/滚轮)")
                 .title_alignment(Alignment::Center),
             modal,
         );
 
-        let info_para = Paragraph::new(info_lines).wrap(Wrap { trim: true });
-        frame.render_widget(info_para, chunks[0]);
+        let info_para = Paragraph::new(info_lines)
+            .wrap(Wrap { trim: true })
+            .scroll((app.preview_modal_scroll, 0));
+        frame.render_widget(info_para, info_text_area);
+        if let Some(sb_area) = info_scroll_area {
+            let mut state =
+                ScrollbarState::new(total_lines).position(app.preview_modal_scroll as usize);
+            let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+            frame.render_stateful_widget(sb, sb_area, &mut state);
+        }
         frame.render_widget(range_line, chunks[1]);
         frame.render_stateful_widget(button_list, chunks[2], &mut app.preview_buttons);
         app.last_preview_modal = Some(PreviewModalLayout {
-            modal,
+            _modal: modal,
+            info: chunks[0],
             range: chunks[1],
             buttons: chunks[2],
         });
@@ -2129,18 +1931,23 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
     app.download_progress = None;
     app.download_cancel_flag = None;
     app.stop_button_area = None;
+    app.preview_desc_scroll = 0;
+    app.preview_desc_scroll_max = 0;
+    app.preview_modal_scroll = 0;
+    app.preview_modal_scroll_max = 0;
+    app.last_preview_desc_area = None;
     info!(target: "ui", book_id = %book_id, "开始加载目录/预览");
     start_spinner(app, format!("加载目录: {book_id}"));
     let tx = app.worker_tx.clone();
     let cfg = app.config.clone();
     thread::spawn(move || {
-        let result = downloader::prepare_download_plan(&cfg, &book_id, hint).and_then(|plan| {
+        let result = downloader::prepare_download_plan(&cfg, &book_id, hint).map(|plan| {
             let folder = expected_book_folder(&cfg, &plan);
             let downloaded = read_downloaded_count(&folder, &plan.book_id).unwrap_or(0);
-            Ok(PendingDownload {
+            PendingDownload {
                 plan,
                 downloaded_count: downloaded,
-            })
+            }
         });
         let _ = tx.send(WorkerMsg::PreviewReady(result));
     });
@@ -2155,9 +1962,14 @@ pub(super) fn start_download_task(
     // keep pending info for preview overlay while download runs
     app.pending_download = Some(pending.clone());
     app.preview_modal_open = false;
+    app.preview_desc_scroll = 0;
+    app.preview_desc_scroll_max = 0;
+    app.preview_modal_scroll = 0;
+    app.preview_modal_scroll_max = 0;
+    app.last_preview_desc_area = None;
     app.download_progress = Some(ProgressSnapshot {
         group_done: 0,
-        group_total: (pending.plan.chapters.len() + 24) / 25,
+        group_total: pending.plan.chapters.len().div_ceil(25),
         saved_chapters: pending.downloaded_count,
         chapter_total: pending.plan.chapters.len(),
         comment_fetch: 0,
@@ -2247,14 +2059,94 @@ fn confirm_preview(app: &mut App) -> Result<()> {
 }
 
 fn cancel_preview(app: &mut App) {
+    // If preview downloaded cover into a fresh folder, clean it up on cancel.
+    cleanup_preview_cover_artifacts(app);
+
     app.pending_download = None;
     app.preview_range.clear();
     app.preview_buttons.select(Some(0));
     app.preview_modal_open = false;
     app.download_progress = None;
+    app.preview_desc_scroll = 0;
+    app.preview_desc_scroll_max = 0;
+    app.preview_modal_scroll = 0;
+    app.preview_modal_scroll_max = 0;
+    app.last_preview_desc_area = None;
     app.view = View::Home;
     app.focus = Focus::Input;
     app.status = "已取消预览".to_string();
+}
+
+fn cleanup_preview_cover_artifacts(app: &mut App) {
+    if !app.config.auto_clear_dump {
+        return;
+    }
+    let Some(pending) = app.pending_download.as_ref() else {
+        return;
+    };
+    let Some(book_name) = pending.plan.meta.book_name.as_deref() else {
+        return;
+    };
+
+    // NOTE: preview currently downloads cover into the same book folder name as status folder.
+    // Only delete when the folder contains *only* cover-like files and no status.json.
+    let dir = crate::base_system::book_paths::book_folder_path(
+        &app.config,
+        &pending.plan.book_id,
+        Some(book_name),
+    );
+    if !dir.exists() {
+        return;
+    }
+    if dir.join("status.json").exists() {
+        return;
+    }
+
+    let Ok(read_dir) = std::fs::read_dir(&dir) else {
+        return;
+    };
+
+    let safe_name = safe_fs_name(book_name, "_", 120);
+    let mut entries: Vec<std::path::PathBuf> = Vec::new();
+    for ent in read_dir.flatten() {
+        entries.push(ent.path());
+    }
+    if entries.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+
+    let is_cover_like = |p: &std::path::Path| {
+        if p.is_dir() {
+            return false;
+        }
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let Some(ext) = p.extension().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let ext = ext.to_ascii_lowercase();
+        let is_img = matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif");
+        if !is_img {
+            return false;
+        }
+        stem == safe_name || stem.eq_ignore_ascii_case("cover")
+    };
+
+    // Abort if there are non-cover files.
+    if entries.iter().any(|p| !is_cover_like(p)) {
+        return;
+    }
+
+    for p in &entries {
+        let _ = std::fs::remove_file(p);
+    }
+
+    // Remove dir if empty.
+    if crate::base_system::file_cleaner::is_empty_dir(&dir).unwrap_or(false) {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 fn poll_worker(app: &mut App) -> Result<()> {
@@ -2294,7 +2186,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                         .unwrap_or_else(|| pending.plan.book_id.clone());
                     let total = pending.plan.chapters.len();
                     let downloaded = pending.downloaded_count;
-                    let desc = pending.plan.meta.description.clone().unwrap_or_default();
+                    let _desc = pending.plan.meta.description.clone().unwrap_or_default();
                     let meta = &pending.plan.meta;
                     let mut meta_parts: Vec<String> = Vec::new();
                     if let Some(score) = meta.score {
@@ -2313,6 +2205,11 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     if let Some(short) = meta.book_short_name.as_ref() {
                         meta_parts.push(format!("别名 {}", truncate(short, 80)));
                     }
+
+                    // Reuse directory-derived metadata to enrich the selected search result.
+                    // This keeps home preview info complete without extra API calls.
+                    upsert_result_detail_from_plan(app, &pending.plan.book_id, &pending.plan.meta);
+
                     app.pending_download = Some(pending);
                     app.view = View::Preview;
                     app.preview_focus = PreviewFocus::Range;
@@ -2322,7 +2219,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     app.input.clear();
                     app.download_progress = Some(ProgressSnapshot {
                         group_done: 0,
-                        group_total: (total + 24) / 25,
+                        group_total: total.div_ceil(25),
                         saved_chapters: downloaded,
                         chapter_total: total,
                         comment_fetch: 0,
@@ -2520,7 +2417,7 @@ pub(super) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: usize) ->
         }
         ConfigField::EnableSegmentComments => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
-            if val && app.config.novel_format.to_ascii_lowercase() != "epub" {
+            if val && !app.config.novel_format.eq_ignore_ascii_case("epub") {
                 app.status = "段评仅支持 epub，请先将格式改为 epub".to_string();
                 return Ok(());
             }
@@ -2712,7 +2609,7 @@ fn parse_bool(input: &str) -> Option<bool> {
 
 fn parse_string_list(input: &str) -> Vec<String> {
     input
-        .split(|c| c == ',' || c == ';' || c == '\n')
+        .split([',', ';', '\n'])
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
