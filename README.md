@@ -2,7 +2,7 @@
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
-目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了~~（虽说原本的Python版本也没几行是原项目的了）~~，Fork网络也是由于我懒得更换仓库
+目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了（~~虽说原本的Python版本也没几行是原项目的了~~），Fork网络也是由于我懒得更换仓库
 
 我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
 
