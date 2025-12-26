@@ -33,6 +33,13 @@ jobs:
           token: ${{ secrets.OAPI }}
           path: Tomato-Novel-Official-API
 
+      - name: Link Official-API for path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
+
       - name: Compute Cargo.lock hash
         id: cargo-lock-hash
         shell: bash
@@ -100,6 +107,13 @@ jobs:
           repository: zhongbai2333/Tomato-Novel-Official-API
           token: ${{ secrets.OAPI }}
           path: Tomato-Novel-Official-API
+
+      - name: Link Official-API for path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
 
       - name: Compute Cargo.lock hash
         id: cargo-lock-hash
@@ -169,6 +183,13 @@ jobs:
           token: ${{ secrets.OAPI }}
           path: Tomato-Novel-Official-API
 
+      - name: Link Official-API for path dependency
+        shell: powershell
+        run: |
+          $link = Join-Path $env:GITHUB_WORKSPACE '..\Tomato-Novel-Official-API'
+          if (Test-Path $link) { Remove-Item -Recurse -Force $link }
+          New-Item -ItemType Junction -Path $link -Target (Join-Path $env:GITHUB_WORKSPACE 'Tomato-Novel-Official-API') | Out-Null
+
       - name: Compute Cargo.lock hash
         id: cargo-lock-hash
         shell: bash
@@ -235,6 +256,13 @@ jobs:
           repository: zhongbai2333/Tomato-Novel-Official-API
           token: ${{ secrets.OAPI }}
           path: Tomato-Novel-Official-API
+
+      - name: Link Official-API for path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
 
       - name: Compute Cargo.lock hash
         id: cargo-lock-hash
