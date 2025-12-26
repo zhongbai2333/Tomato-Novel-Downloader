@@ -42,6 +42,6 @@ opt-level = "z"
 lto = "fat"
 codegen-units = 1
 debug = false
-panic = "abort"
+panic = "unwind"
 strip = "symbols"
 incremental = false
