@@ -911,8 +911,6 @@ impl ChapterDownloader {
             'group_loop: for (group_idx, group) in groups.iter().enumerate() {
                 if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
                     info!(target: "download", "收到停止信号，结束任务");
-                    let mut result = result;
-                    result.canceled = 1;
                     return Err(anyhow!("用户停止下载"));
                 }
 
