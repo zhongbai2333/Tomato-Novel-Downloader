@@ -1,3 +1,7 @@
+//! TUI（ratatui + crossterm）主循环与页面路由。
+//!
+//! 负责终端初始化（raw mode / mouse capture）、事件循环、页面切换与全局状态管理。
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -105,7 +109,7 @@ enum WorkerMsg {
     SearchDone(Result<Vec<SearchItem>>),
     DownloadDone { book_id: String, result: Result<()> },
     DownloadProgress(ProgressSnapshot),
-    PreviewReady(Result<PendingDownload>),
+    PreviewReady(Box<Result<PendingDownload>>),
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
 }
 
@@ -182,6 +186,7 @@ pub(super) struct App {
     // config state
     cfg_categories: Vec<ConfigCategory>,
     cfg_cat_state: ListState,
+    cfg_cat_hover: Option<usize>,
     cfg_entry_state: ListState,
     cfg_button_state: ListState,
     cfg_focus: ConfigFocus,
@@ -191,6 +196,12 @@ pub(super) struct App {
     last_config_layout: Option<[Rect; 3]>,
     last_config_button: Option<Rect>,
     last_config_bool_area: Option<Rect>,
+
+    // segment comments confirmation modal (to avoid accidental enable)
+    segment_comments_confirm_open: bool,
+    segment_comments_confirm_ctx: Option<(usize, usize)>,
+    segment_comments_confirm_state: ListState,
+    last_segment_comments_confirm_options: Option<Rect>,
 
     // update state
     update_entries: Vec<UpdateEntry>,
@@ -288,6 +299,10 @@ impl App {
         let mut preview_buttons = ListState::default();
         preview_buttons.select(Some(0));
 
+        let mut segment_comments_confirm_state = ListState::default();
+        // Default to "Cancel" to reduce accidental enable.
+        segment_comments_confirm_state.select(Some(1));
+
         Self {
             input: String::new(),
             focus: Focus::Input,
@@ -304,6 +319,7 @@ impl App {
             menu_state,
             cfg_categories,
             cfg_cat_state,
+            cfg_cat_hover: None,
             cfg_entry_state,
             cfg_button_state,
             cfg_focus: ConfigFocus::Entry,
@@ -313,6 +329,10 @@ impl App {
             last_config_layout: None,
             last_config_button: None,
             last_config_bool_area: None,
+            segment_comments_confirm_open: false,
+            segment_comments_confirm_ctx: None,
+            segment_comments_confirm_state,
+            last_segment_comments_confirm_options: None,
             update_entries: Vec::new(),
             update_no_updates: Vec::new(),
             update_state,
@@ -678,15 +698,15 @@ pub(super) fn current_cfg_entries(app: &App) -> Option<&[ConfigEntry]> {
 
 pub(super) fn ensure_entry_selection(app: &mut App) {
     let mut entry_state = ListState::default();
-    if let Some(entries) = current_cfg_entries(app) {
-        if !entries.is_empty() {
-            let idx = app
-                .cfg_entry_state
-                .selected()
-                .unwrap_or(0)
-                .min(entries.len().saturating_sub(1));
-            entry_state.select(Some(idx));
-        }
+    if let Some(entries) = current_cfg_entries(app)
+        && !entries.is_empty()
+    {
+        let idx = app
+            .cfg_entry_state
+            .selected()
+            .unwrap_or(0)
+            .min(entries.len().saturating_sub(1));
+        entry_state.select(Some(idx));
     }
     if entry_state.selected().is_some() {
         app.cfg_entry_state = entry_state;
@@ -802,7 +822,7 @@ fn split_with_log(area: Rect) -> (Rect, Rect) {
             Constraint::Length(LOG_HEIGHT),
         ])
         .split(area);
-    let main = layout.get(0).copied().unwrap_or(area);
+    let main = layout.first().copied().unwrap_or(area);
     let log = layout.get(1).copied().unwrap_or(Rect {
         x: area.x,
         y: area
@@ -923,16 +943,16 @@ fn style_log_line(line: &str) -> Line<'static> {
         ));
     }
 
-    if let Some(target) = rest.first() {
-        if !target.is_empty() {
-            if !spans.is_empty() {
-                spans.push(Span::raw(" "));
-            }
-            spans.push(Span::styled(
-                (*target).to_string(),
-                Style::default().fg(Color::LightBlue),
-            ));
+    if let Some(target) = rest.first()
+        && !target.is_empty()
+    {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" "));
         }
+        spans.push(Span::styled(
+            (*target).to_string(),
+            Style::default().fg(Color::LightBlue),
+        ));
     }
 
     let message = rest.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
@@ -1053,7 +1073,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     warn!(target: "ui", "搜索失败: {err}");
                 }
             },
-            WorkerMsg::PreviewReady(res) => match res {
+            WorkerMsg::PreviewReady(res) => match *res {
                 Ok(pending) => preview::apply_preview_ready(app, pending),
                 Err(err) => preview::apply_preview_error(app, err),
             },

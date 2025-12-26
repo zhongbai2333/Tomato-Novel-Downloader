@@ -1,3 +1,5 @@
+//! 书籍 ID/链接解析与规范化。
+
 use regex::Regex;
 use std::sync::OnceLock;
 

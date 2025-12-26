@@ -1,54 +1,122 @@
-# Tomato-Novel-Downloader-New（Rust）
+# 番茄小说下载器~~精简版~~
 
-这是番茄小说下载器的 Rust 重构版（MVP）。它不再复用旧的 Python 逻辑
+番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
-目前正在测试
+目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了~~（虽说原本的Python版本也没几行是原项目的了）~~，Fork网络也是由于我懒得更换仓库
 
-当前支持：搜索、按 book_id 拉取目录与正文、导出 txt/epub。
+我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
 
-## 运行前置条件（重要）
+本项目~~完全~~基于第三方API，~~未~~使用官方API
 
-已改为编译期静态链接：`Tomato-Novel-Official-API` 通过 Cargo 依赖直接复用 `Tomato-Novel-Network-Core`，不再需要运行时放置/配置动态库。
+为了保证第三方API安全，部分第三方接口相关代码并不开源，包括地址和token，敬请谅解，谢谢！
 
-## 构建
+为方便视障人士使用，我保留了老的CLI界面，接下来是启用方法：
 
-```bash
-cargo build --release
-```
+在第一次打开程序时 按三下 `o` 并回车 或者 按一下下方向键并按三下 `o` 都可以启用老版本CLI界面
 
-## 用法
+注意：切换成功应该会发出 `灯` 的一声
 
-查看帮助：
+---
 
-```bash
-cargo run -- --help
-```
+## 我该如何使用？
 
-搜索：
+根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases)列表下载可执行文件，并运行
+你可以通过输入书籍id以及需要保存的路径来进行下载
 
-```bash
-cargo run -- search "三体"
-```
+---
 
-下载（txt）：
+## Edge TTS 有声小说生成
 
-```bash
-cargo run -- download --book-id 7143038691944959011 --out-dir ./out --format txt
-```
+从当前版本开始，程序内置了 [edge-tts](https://github.com/rany2/edge-tts) 语音合成功能，可在下载文本后自动生成对应的有声小说：
 
-下载（epub）：
+- 在配置菜单（新 UI 或老 CLI 均可）中启用 `是否生成有声小说`，即可在每次下载完成后生成音频文件。
+- 默认发音人是 `zh-CN-XiaoxiaoNeural`，可以通过配置项自定义语速、音量、音调以及输出格式（`mp3` 或 `wav`）。音调值请使用 `+2Hz`、`-1st` 这类带单位的写法，若留空或填写 0 将忽略音调调整。
+- 可在“有声小说并发数”中调整 Edge TTS 并发任务数量（默认 2），生成时会显示进度条；请根据网络状况和机器性能选择适当的并发度。
+- 音频会存放在输出目录下的 `{书名}_audio` 文件夹中，并按章节顺序命名，例如 `0001-第一章.mp3`。
+- edge-tts 需要联网调用微软的在线服务，请确保运行环境可正常访问外网。
+- 如果你在本地运行源码，需要先安装依赖：`pip install -r requirements.txt`（已包含 edge-tts）。
 
-```bash
-cargo run -- download --book-id 7143038691944959011 --out-dir ./out --format epub
-```
+如遇到生成失败，可在日志中查看详细错误信息。
 
-调试：按 chapter_ids 拉取正文（输出 JSON）：
+---
 
-```bash
-cargo run -- fetch-contents --chapter-ids 123 456 789
-```
+## 常见问题
 
-## 说明
+1. 之前就已经有了一个下载器，为什么还要再做一个？
 
-- 目录接口来自 `fanqienovel.com/api/reader/directory/detail`（在 core 侧实现为 `book_directory_detail` operation）。
-- 正文拉取每次最多 25 个章节，会自动分块请求，并在遇到 cooldown 时进行简单退避重试。
+    ~~本程序的初衷就是极致简化番茄小说下载器的代码，使程序更加易于操作与运行，并且更加稳定和快速！~~
+    本程序由于重构导致文件体积较大，无法做到原项目的简易，但是此项目胜在傻瓜式操作，无需多余配置，立即使用
+
+2. 手机端可以正常运行吗？
+
+    **仅限安卓设备**可以正常运行，为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
+
+    下载termux(链接:(<https://github.com/termux/termux-app/releases>) 并安装，然后运行部署脚本：
+
+    ```sh
+    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
+    国内用户可使用：
+
+    ```sh
+    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
+3. 电脑端该如何运行？
+
+    `Windows` 双击运行`TomatoNovelDownloader-Win64-[当前版本号].exe`
+
+    `Linux` 和 `MacOS` 使用终端运行，可以使用一键部署脚本：
+
+    ```sh
+    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
+    国内用户可使用：
+
+    ```sh
+    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    ```
+
+4. 小说id是什么？在哪里获取？
+
+    首先你需要找到自己想下载的小说的详情页(例如<https://fanqienovel.com/page/7143038691944959011> )，链接中“7143038691944959011”就是小说id
+
+5. 我是纯小白，程序在哪里下载啊
+
+    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
+
+## 注意事项（必看）
+
+由于使用的是api，所以未来不知道有哪一天突然失效，如果真的出现了，请立即在“Issues”页面中回复！
+
+如果您在使用本程序的时候出现了下载章节失败的情况，也许并不是api失效了，可能是因为调用api人数过多，导致api暂时关闭，如果遇到了这种情况，请稍后再试，另外，您需要下载的小说api可能会因没有更新所以下载失败。
+
+千万不要想着耍小聪明：“欸，我改一下线程数不就能快速下载了吗？”请打消这种念头！因为这样会加大服务器压力！！！
+
+另外，在使用本程序时，请不要使用任何vpn或网络代理等一切影响网络正常使用的程序！
+
+如果您也没有遇到以上的这种情况，请检查要下载的小说章节数量有多少，不建议大于1500章！(保守估计)
+
+>划重点：切记！不能将此程序用于违法用途，例如将下载到的小说进行转载、给不良人员分享此程序使用等。本开发者严禁不支持这样做！！！并且请不要将api进行转载使用，除非您已经与开发者协商过，否则后果自负！下载到的小说仅供自行阅读，看完之后请立即删除文件，以免造成侵权，如果您还是偷尝禁果，需自行承担由此引发的任何法律责任和风险。程序的作者及项目贡献者不对因使用本程序所造成的任何损失、损害或法律后果负责！
+
+## 免责声明
+
+  本程序仅供 Python 网络爬虫技术、网页数据处理及相关研究的学习用途。请勿将其用于任何违反法律法规或侵犯他人权益的活动。
+  
+  使用本程序的用户需自行承担由此引发的任何法律责任和风险。程序的作者及项目贡献者不对因使用本程序所造成的任何损失、损害或法律后果负责。
+  
+  在使用本程序之前，请确保您遵守适用的法律法规以及目标网站的使用政策。如有任何疑问或顾虑，请咨询专业法律顾问。
+
+## 感谢
+
+感谢用户选择此程序，如果喜欢可以加star，如果有什么对本程序的建议，请在“Issues”页面提出。您的喜欢就是我更新的最大动力❤️
+
+感谢原作者Dimily的基础项目
+
+项目前期 · 感谢来自Github用户@helloplhm-qwq的api！
+
+项目前期 · 感谢来自QQ用户@终忆的api！
+
+项目前期 · 感谢来自Github用户@jingluopro的api！！

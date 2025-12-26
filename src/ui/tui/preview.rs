@@ -1,3 +1,5 @@
+//! TUI 预览页（内容/片段展示）。
+
 use std::thread;
 
 use anyhow::{Result, anyhow};
@@ -15,7 +17,7 @@ use ratatui::widgets::{
 use tracing::{info, warn};
 
 use crate::base_system::context::safe_fs_name;
-use crate::download::downloader::{self, BookMeta, ChapterRange, ProgressSnapshot};
+use crate::download::downloader::{self, BookMeta, ChapterRange, ProgressSnapshot, SavePhase};
 
 use super::download::{request_cancel_download, start_download_task};
 use super::update::{expected_book_folder, read_downloaded_count};
@@ -119,13 +121,12 @@ pub(super) fn handle_mouse_preview(app: &mut App, me: event::MouseEvent) -> Resu
             && row < area.y.saturating_add(area.height)
     };
 
-    if let Some(stop_area) = app.stop_button_area {
-        if matches!(me.kind, MouseEventKind::Down(MouseButton::Left))
-            && pos_in(stop_area, me.column, me.row)
-        {
-            request_cancel_download(app);
-            return Ok(());
-        }
+    if let Some(stop_area) = app.stop_button_area
+        && matches!(me.kind, MouseEventKind::Down(MouseButton::Left))
+        && pos_in(stop_area, me.column, me.row)
+    {
+        request_cancel_download(app);
+        return Ok(());
     }
 
     if matches!(
@@ -133,25 +134,25 @@ pub(super) fn handle_mouse_preview(app: &mut App, me: event::MouseEvent) -> Resu
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
     ) {
         let up = matches!(me.kind, MouseEventKind::ScrollUp);
-        if let Some(layout) = app.last_preview_modal.clone() {
-            if pos_in(layout.info, me.column, me.row) {
-                if up {
-                    preview_scroll_up(app, 1);
-                } else {
-                    preview_scroll_down(app, 1);
-                }
-                return Ok(());
+        if let Some(layout) = app.last_preview_modal.clone()
+            && pos_in(layout.info, me.column, me.row)
+        {
+            if up {
+                preview_scroll_up(app, 1);
+            } else {
+                preview_scroll_down(app, 1);
             }
+            return Ok(());
         }
-        if let Some(area) = app.last_preview_desc_area {
-            if pos_in(area, me.column, me.row) {
-                if up {
-                    preview_scroll_up(app, 1);
-                } else {
-                    preview_scroll_down(app, 1);
-                }
-                return Ok(());
+        if let Some(area) = app.last_preview_desc_area
+            && pos_in(area, me.column, me.row)
+        {
+            if up {
+                preview_scroll_up(app, 1);
+            } else {
+                preview_scroll_down(app, 1);
             }
+            return Ok(());
         }
     }
 
@@ -201,7 +202,7 @@ pub(super) fn parse_range_input(input: &str, total: usize) -> Result<Option<Chap
         return Err(anyhow!("格式应为 start-end，例如 1-10"));
     }
 
-    let start_part = parts.get(0).copied().unwrap_or("").trim();
+    let start_part = parts.first().copied().unwrap_or("").trim();
     let end_part = parts.get(1).copied().unwrap_or("").trim();
 
     let start = if start_part.is_empty() {
@@ -261,7 +262,7 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
                 downloaded_count: downloaded,
             }
         });
-        let _ = tx.send(WorkerMsg::PreviewReady(result));
+        let _ = tx.send(WorkerMsg::PreviewReady(Box::new(result)));
     });
     Ok(())
 }
@@ -552,7 +553,10 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         Color::LightCyan,
     ));
     items.push((
-        "正文保存",
+        match snap.save_phase {
+            SavePhase::Audiobook => "有声书",
+            SavePhase::TextSave => "正文保存",
+        },
         snap.saved_chapters,
         snap.chapter_total.max(1),
         Color::Green,
@@ -671,10 +675,10 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
             .unwrap_or(("预览".to_string(), None, None, 0, 0, &fallback_meta));
 
         let mut title_line = format!("《{}》", title);
-        if let Some(orig) = original_title.as_ref() {
-            if !orig.is_empty() {
-                title_line.push_str(&format!(" ({})", orig));
-            }
+        if let Some(orig) = original_title.as_ref()
+            && !orig.is_empty()
+        {
+            title_line.push_str(&format!(" ({})", orig));
         }
 
         let mut meta_lines: Vec<Line> = Vec::new();
@@ -685,10 +689,10 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
             let label = if done { "完结" } else { "连载" };
             row1.push(format!("状态: {}", label));
         }
-        if let Some(author) = author.as_ref() {
-            if !author.is_empty() {
-                row1.push(format!("作者: {}", author));
-            }
+        if let Some(author) = author.as_ref()
+            && !author.is_empty()
+        {
+            row1.push(format!("作者: {}", author));
         }
         let row1_s = row1.join(" | ");
         meta_lines.push(Line::from(row1_s.clone()));
@@ -725,10 +729,10 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         }
 
         let mut row3: Vec<String> = Vec::new();
-        if let Some(cat) = meta.category.as_ref() {
-            if !cat.is_empty() {
-                row3.push(format!("类别: {}", cat));
-            }
+        if let Some(cat) = meta.category.as_ref()
+            && !cat.is_empty()
+        {
+            row3.push(format!("类别: {}", cat));
         }
         if !meta.tags.is_empty() {
             row3.push(format!("标签: {}", meta.tags.join(" | ")));
@@ -740,15 +744,15 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
         }
 
         let mut row4: Vec<String> = Vec::new();
-        if let Some(first) = meta.first_chapter_title.as_ref() {
-            if !first.is_empty() {
-                row4.push(format!("首章: {}", truncate(first, 50)));
-            }
+        if let Some(first) = meta.first_chapter_title.as_ref()
+            && !first.is_empty()
+        {
+            row4.push(format!("首章: {}", truncate(first, 50)));
         }
-        if let Some(last) = meta.last_chapter_title.as_ref() {
-            if !last.is_empty() {
-                row4.push(format!("末章: {}", truncate(last, 50)));
-            }
+        if let Some(last) = meta.last_chapter_title.as_ref()
+            && !last.is_empty()
+        {
+            row4.push(format!("末章: {}", truncate(last, 50)));
         }
         if !row4.is_empty() {
             let row4_s = row4.join(" | ");
@@ -897,6 +901,7 @@ pub(super) fn apply_preview_ready(app: &mut App, pending: PendingDownload) {
         group_total: total.div_ceil(25),
         saved_chapters: downloaded,
         chapter_total: total,
+        save_phase: SavePhase::TextSave,
         comment_fetch: 0,
         comment_total: if app.config.enable_segment_comments {
             total

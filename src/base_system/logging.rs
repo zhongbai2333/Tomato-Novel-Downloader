@@ -1,3 +1,5 @@
+//! 日志系统初始化与控制台恢复。
+
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -157,13 +159,19 @@ impl LogSystem {
             None
         };
 
+        let file_level = if options.debug {
+            LevelFilter::DEBUG
+        } else {
+            LevelFilter::INFO
+        };
+
         let file_layer = fmt::layer()
             .with_target(false)
             .with_level(true)
             .with_thread_names(true)
             .with_ansi(false)
             .with_writer(file_writer)
-            .with_filter(LevelFilter::DEBUG);
+            .with_filter(file_level);
 
         tracing_subscriber::registry()
             .with(console_layer)
@@ -269,19 +277,19 @@ impl LogRuntime {
 
         thread::sleep(Duration::from_millis(ARCHIVE_WAIT_MS));
 
-        if self.archive_on_exit {
-            if let Err(err) = archive_log_file(&self.latest_log, &self.logs_dir) {
-                eprintln!("failed to archive log: {err}");
-            }
+        if self.archive_on_exit
+            && let Err(err) = archive_log_file(&self.latest_log, &self.logs_dir)
+        {
+            eprintln!("failed to archive log: {err}");
         }
     }
 }
 
 fn archive_if_large(latest_log: &Path, logs_dir: &Path) -> Result<(), LogError> {
-    if let Ok(meta) = fs::metadata(latest_log) {
-        if meta.len() >= MAX_LOG_BYTES {
-            archive_log_file(latest_log, logs_dir)?;
-        }
+    if let Ok(meta) = fs::metadata(latest_log)
+        && meta.len() >= MAX_LOG_BYTES
+    {
+        archive_log_file(latest_log, logs_dir)?;
     }
     Ok(())
 }

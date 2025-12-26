@@ -12,28 +12,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: linux-amd64
-            bin: tomato-novel-downloader
-          - os: ubuntu-24.04-arm
-            artifact: linux-arm64
-            bin: tomato-novel-downloader
-          - os: windows-latest
-            artifact: windows
-            bin: tomato-novel-downloader.exe
-          - os: macos-latest
-            artifact: macos
-            bin: tomato-novel-downloader
-
+  build-linux:
+    name: Build (linux-amd64)
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Tomato-Novel-Downloader
+      - name: Checkout A Repository
         uses: actions/checkout@v4
 
       - name: Checkout Tomato-Novel-Official-API (private)
@@ -83,10 +66,279 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/release/${{ matrix.bin }} dist/
+          out="TomatoNovelDownloader-Linux_amd64-${GITHUB_REF_NAME}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tomato-novel-downloader-${{ matrix.artifact }}
+          name: linux-build
           path: dist
+
+  build-linux-arm64:
+    name: Build (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Linux_arm64-${GITHUB_REF_NAME}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-build
+          path: dist
+
+  build-windows:
+    name: Build (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Win64-${GITHUB_REF_NAME}.exe"
+          cp target/release/tomato-novel-downloader.exe "dist/${out}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist
+
+  build-macos:
+    name: Build (macos-arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-macOS_arm64-${GITHUB_REF_NAME}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: dist
+
+  publish-release:
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: List Artifacts
+        run: ls -R release-artifacts
+
+      - name: Generate Release Notes
+        id: generate_notes
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+            const releasesResp = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
+            const releases = releasesResp.data;
+            const tags = releases.map(r => r.tag_name);
+            const idx = tags.indexOf(tag);
+            const prev = idx < releases.length - 1 ? releases[idx+1] : null;
+            const since = prev ? prev.published_at : null;
+            const prevTag = prev ? prev.tag_name : null;
+            const compareUrl = prevTag ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}` : '';
+            const params = { owner, repo, state: 'closed', per_page: 100 };
+            if (since) params.since = since;
+            const issuesResp = await github.rest.issues.listForRepo(params);
+            const items = issuesResp.data.filter(item =>
+              !item.labels.some(lbl => ['wontfix', 'duplicate'].includes(lbl.name.toLowerCase()))
+            );
+            const groups = { Fix: [], Update: [], Feature: [] };
+            items.forEach(item => {
+              item.labels.forEach(lbl => {
+                if (lbl.name === 'bug') groups.Fix.push(item);
+                else if (lbl.name === 'update') groups.Update.push(item);
+                else if (lbl.name === 'enhancement') groups.Feature.push(item);
+              });
+            });
+            let body = "# What's Changed\n\n";
+            const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
+            for (const key of ['Fix','Update','Feature']) {
+              if (groups[key].length) {
+                body += `## ${key}\n\n`;
+                for (const i of groups[key]) {
+                  body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
+                }
+                body += "\n";
+              }
+            }
+            if (compareUrl) {
+              body += `**Full Changelog**: ${compareUrl}\n`;
+            }
+            return body;
+
+      - name: Create Unified Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Tomato Novel Downloader ${{ github.ref_name }}
+          body: ${{ steps.generate_notes.outputs.result }}
+          files: |
+            release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
+            release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
+            release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
+            release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*

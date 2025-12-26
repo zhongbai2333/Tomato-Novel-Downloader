@@ -1,8 +1,10 @@
+//! JSON 提取与容错解析工具。
+
 use serde_json::Value;
 
 pub type JsonMap = serde_json::Map<String, Value>;
 
-pub fn collect_maps<'a>(raw: &'a Value) -> Vec<&'a JsonMap> {
+pub fn collect_maps(raw: &Value) -> Vec<&JsonMap> {
     let mut maps = Vec::new();
     if let Some(map) = raw.as_object() {
         maps.push(map);
@@ -37,10 +39,10 @@ pub fn pick_string(map: &JsonMap, keys: &[&str]) -> Option<String> {
                 return Some(n.to_string());
             } else if let Some(n) = val.as_u64() {
                 return Some(n.to_string());
-            } else if let Some(n) = val.as_f64() {
-                if n.is_finite() {
-                    return Some(n.to_string());
-                }
+            } else if let Some(n) = val.as_f64()
+                && n.is_finite()
+            {
+                return Some(n.to_string());
             }
         }
     }
@@ -84,12 +86,12 @@ pub fn pick_cover(map: &JsonMap) -> Option<String> {
         "book_cover",
     ];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(url) = val.as_str() {
-                let trimmed = url.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(url) = val.as_str()
+        {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -104,12 +106,12 @@ pub fn pick_detail_cover(map: &JsonMap) -> Option<String> {
         "detail_cover_url",
     ];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -118,21 +120,19 @@ pub fn pick_detail_cover(map: &JsonMap) -> Option<String> {
 
 pub fn pick_finished(map: &JsonMap) -> Option<bool> {
     // Stronger signals first.
-    if let Some(ts) = pick_string(map, &["creation_latest_finish_time", "finish_time"]) {
-        if let Ok(n) = ts.trim().parse::<i64>()
-            && n > 0
-        {
-            return Some(true);
-        }
+    if let Some(ts) = pick_string(map, &["creation_latest_finish_time", "finish_time"])
+        && let Ok(n) = ts.trim().parse::<i64>()
+        && n > 0
+    {
+        return Some(true);
     }
 
     // update_status: 1=still updating; 0 often means not updating (finished or stopped) so treat as unknown.
-    if let Some(s) = pick_string(map, &["update_status", "updateStatus"]) {
-        if let Ok(n) = s.trim().parse::<i64>() {
-            if n == 1 {
-                return Some(false);
-            }
-        }
+    if let Some(s) = pick_string(map, &["update_status", "updateStatus"])
+        && let Ok(n) = s.trim().parse::<i64>()
+        && n == 1
+    {
+        return Some(false);
     }
 
     let candidates = [
@@ -176,17 +176,17 @@ pub fn pick_finished(map: &JsonMap) -> Option<bool> {
             if let Some(b) = val.as_bool() {
                 return Some(b);
             }
-            if let Some(n) = val.as_i64() {
-                if let Some(b) = parse_num(key, n) {
-                    return Some(b);
-                }
+            if let Some(n) = val.as_i64()
+                && let Some(b) = parse_num(key, n)
+            {
+                return Some(b);
             }
             if let Some(s) = val.as_str() {
                 let trimmed = s.trim();
-                if let Ok(n) = trimmed.parse::<i64>() {
-                    if let Some(b) = parse_num(key, n) {
-                        return Some(b);
-                    }
+                if let Ok(n) = trimmed.parse::<i64>()
+                    && let Some(b) = parse_num(key, n)
+                {
+                    return Some(b);
                 }
                 let lower = trimmed.to_ascii_lowercase();
                 if ["true", "yes", "finished", "end", "completed", "serial_end"]
@@ -216,10 +216,9 @@ pub fn pick_finished(map: &JsonMap) -> Option<bool> {
                         | "serialStatus"
                         | "finish_status"
                         | "finishStatus"
-                ) {
-                    if lower == "2" {
-                        return Some(true);
-                    }
+                ) && lower == "2"
+                {
+                    return Some(true);
                     // Treat 0/1 as unknown for these keys.
                 }
             }
@@ -246,10 +245,10 @@ pub fn pick_chapter_count(map: &JsonMap) -> Option<usize> {
             if let Some(n) = val.as_u64() {
                 return Some(n as usize);
             }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<usize>() {
-                    return Some(n);
-                }
+            if let Some(s) = val.as_str()
+                && let Ok(n) = s.parse::<usize>()
+            {
+                return Some(n);
             }
         }
     }
@@ -263,10 +262,10 @@ pub fn pick_word_count(map: &JsonMap) -> Option<usize> {
             if let Some(n) = val.as_u64() {
                 return Some(n as usize);
             }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<usize>() {
-                    return Some(n);
-                }
+            if let Some(s) = val.as_str()
+                && let Ok(n) = s.parse::<usize>()
+            {
+                return Some(n);
             }
         }
     }
@@ -280,10 +279,10 @@ pub fn pick_score(map: &JsonMap) -> Option<f32> {
             if let Some(n) = val.as_f64() {
                 return Some(n as f32);
             }
-            if let Some(s) = val.as_str() {
-                if let Ok(n) = s.parse::<f32>() {
-                    return Some(n);
-                }
+            if let Some(s) = val.as_str()
+                && let Ok(n) = s.parse::<f32>()
+            {
+                return Some(n);
             }
         }
     }
@@ -310,12 +309,12 @@ pub fn pick_read_count(map: &JsonMap) -> Option<String> {
 pub fn pick_read_count_text(map: &JsonMap) -> Option<String> {
     let candidates = ["read_cnt_text", "read_count_text"];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -325,12 +324,12 @@ pub fn pick_read_count_text(map: &JsonMap) -> Option<String> {
 pub fn pick_book_short_name(map: &JsonMap) -> Option<String> {
     let candidates = ["book_short_name", "short_name", "short_title"];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -340,12 +339,12 @@ pub fn pick_book_short_name(map: &JsonMap) -> Option<String> {
 pub fn pick_original_book_name(map: &JsonMap) -> Option<String> {
     let candidates = ["original_book_name", "origin_title", "original_title"];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -359,12 +358,12 @@ pub fn pick_first_chapter_title(map: &JsonMap) -> Option<String> {
         "firstItemTitle",
     ];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -378,12 +377,12 @@ pub fn pick_last_chapter_title(map: &JsonMap) -> Option<String> {
         "lastItemTitle",
     ];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -393,12 +392,12 @@ pub fn pick_last_chapter_title(map: &JsonMap) -> Option<String> {
 pub fn pick_category(map: &JsonMap) -> Option<String> {
     let candidates = ["category", "category_name", "book_category", "classify"];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }
@@ -408,12 +407,12 @@ pub fn pick_category(map: &JsonMap) -> Option<String> {
 pub fn pick_cover_primary_color(map: &JsonMap) -> Option<String> {
     let candidates = ["cover_primary_color", "primary_color", "cover_color"];
     for key in candidates {
-        if let Some(val) = map.get(key) {
-            if let Some(s) = val.as_str() {
-                let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
+        if let Some(val) = map.get(key)
+            && let Some(s) = val.as_str()
+        {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
             }
         }
     }

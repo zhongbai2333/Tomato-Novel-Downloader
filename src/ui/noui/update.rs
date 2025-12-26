@@ -1,3 +1,5 @@
+//! 无 UI 的更新检查与提示。
+
 use std::fs;
 use std::path::Path;
 
@@ -59,13 +61,16 @@ pub(super) fn update_menu(config: &Config) -> Result<Option<String>> {
             return Ok(Some(updates[n - 1].book_id.clone()));
         }
 
-        if let Some(no_idx) = opt_no_update {
-            if n == no_idx {
-                if let Some(book_id) = select_from_list(&no_updates, "无更新的书籍")? {
-                    return Ok(Some(book_id));
-                }
-                continue;
-            }
+        if let Some(no_idx) = opt_no_update
+            && n == no_idx
+            && let Some(book_id) = select_from_list(&no_updates, "无更新的书籍")?
+        {
+            return Ok(Some(book_id));
+        }
+        if let Some(no_idx) = opt_no_update
+            && n == no_idx
+        {
+            continue;
         }
 
         let max = opt_no_update.unwrap_or(updates.len());

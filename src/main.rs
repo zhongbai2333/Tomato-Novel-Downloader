@@ -1,3 +1,14 @@
+//! Tomato Novel Downloader（番茄小说下载器）Rust 实现。
+//!
+//! 本 crate 负责：配置加载、交互界面（TUI/CLI）、下载调度、内容解析与导出（txt/epub/有声书等）。
+//!
+//! 代码结构（读代码入口）：
+//! - `base_system`：配置/日志/重试/路径等基础设施
+//! - `download`：下载流程编排（拉目录、拉内容、冷却/重试等）
+//! - `book_parser`：解析与导出（epub/txt/媒体/有声书）
+//! - `ui`：TUI 与无 UI（old cli）两套交互
+//! - `prewarm_state`：启动预热状态（与 UI 协作显示）
+
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use std::thread;
@@ -31,6 +42,14 @@ struct Cli {
     /// 显示版本信息后退出
     #[arg(long, default_value_t = false)]
     version: bool,
+
+    /// 检查并执行程序自更新（从 GitHub Releases 下载并替换当前可执行文件）
+    #[arg(long, default_value_t = false)]
+    self_update: bool,
+
+    /// 自更新时自动确认（等价于提示输入 Y）
+    #[arg(long, default_value_t = false)]
+    self_update_yes: bool,
 }
 
 fn main() -> Result<()> {
@@ -42,6 +61,11 @@ fn main() -> Result<()> {
     }
 
     let _log = init_logging(cli.debug)?;
+
+    if cli.self_update {
+        let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
+        return Ok(());
+    }
 
     prewarm_state::mark_prewarm_start();
     thread::spawn(|| {

@@ -1,3 +1,5 @@
+//! TUI 更新检查与提示页面。
+
 use super::*;
 use std::thread;
 
@@ -64,10 +66,10 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
                 && row >= rect.y
                 && row < rect.y + rect.height
         };
-        if pos_in(area, me.column, me.row) {
-            if matches!(me.kind, MouseEventKind::Down(MouseButton::Left)) {
-                return exit_update_view(app);
-            }
+        if pos_in(area, me.column, me.row)
+            && matches!(me.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            return exit_update_view(app);
         }
     }
 

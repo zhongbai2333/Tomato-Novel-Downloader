@@ -1,3 +1,5 @@
+//! TUI 封面/基础信息展示。
+
 use super::*;
 use image::{DynamicImage, GenericImageView, imageops::FilterType};
 

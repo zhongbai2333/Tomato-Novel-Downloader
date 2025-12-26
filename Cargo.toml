@@ -24,13 +24,24 @@ indicatif = "0.17"
 arboard = "3.4"
 base64 = "0.22"
 sha1 = "0.10"
+sha2 = "0.10"
 hex = "0.4"
-# 直接复用本 workspace 的 Official-API（内部会通过 FFI 加载 Network-Core 动态库）
-tomato-novel-official-api = { path = "Tomato-Novel-Official-API", features = ["full_api"] }
-
-# EPUB（最小实现：章节文本 -> epub）
+tempfile = "3.10"
+msedge-tts = "0.2.4"
+textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+tomato-novel-official-api = { path = "Tomato-Novel-Official-API", features = ["full_api"] }
 
-# TUI 文本换行/滚动范围计算
-textwrap = "0.16"
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+debug = false
+panic = "abort"
+strip = "symbols"
+incremental = false

@@ -1,3 +1,7 @@
+//! TUI 配置模型与编辑逻辑。
+//!
+//! 将 `Config` 映射为可展示/可编辑的字段列表，并负责写回 `config.yml`。
+
 use std::path::Path;
 
 use anyhow::{Result, anyhow};
@@ -13,6 +17,7 @@ pub(in crate::ui) enum ConfigField {
     NovelFormat,
     BulkFiles,
     AutoClearDump,
+    AutoOpenDownloadedFiles,
     OldCli,
     FirstLineIndentEm,
     EnableSegmentComments,
@@ -22,8 +27,6 @@ pub(in crate::ui) enum ConfigField {
     RequestTimeout,
     MaxRetries,
     MinConnectTimeout,
-    ForceExitTimeout,
-    GracefulExit,
     MinWait,
     MaxWait,
     EnableAudiobook,
@@ -46,7 +49,6 @@ pub(in crate::ui) enum ConfigField {
     KeepHeicOriginal,
     MediaLimitPerChapter,
     MediaMaxDimensionPx,
-    MediaTotalLimitMb,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +89,10 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                     field: ConfigField::AutoClearDump,
                 },
                 ConfigEntry {
+                    title: "下载完成后自动打开",
+                    field: ConfigField::AutoOpenDownloadedFiles,
+                },
+                ConfigEntry {
                     title: "旧版 CLI UI",
                     field: ConfigField::OldCli,
                 },
@@ -110,14 +116,6 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                 ConfigEntry {
                     title: "最小连接超时(s)",
                     field: ConfigField::MinConnectTimeout,
-                },
-                ConfigEntry {
-                    title: "强制退出等待(s)",
-                    field: ConfigField::ForceExitTimeout,
-                },
-                ConfigEntry {
-                    title: "优雅退出",
-                    field: ConfigField::GracefulExit,
                 },
                 ConfigEntry {
                     title: "最小等待时间(ms)",
@@ -206,10 +204,6 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                     title: "媒体最大尺寸(px)",
                     field: ConfigField::MediaMaxDimensionPx,
                 },
-                ConfigEntry {
-                    title: "媒体总体积上限(MB)",
-                    field: ConfigField::MediaTotalLimitMb,
-                },
             ],
         },
         ConfigCategory {
@@ -255,6 +249,7 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::FirstLineIndentEm => format!("{:.2}", app.config.first_line_indent_em),
         ConfigField::BulkFiles => app.config.bulk_files.to_string(),
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
+        ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files.to_string(),
         ConfigField::OldCli => app.config.old_cli.to_string(),
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments.to_string(),
         ConfigField::UseOfficialApi => app.config.use_official_api.to_string(),
@@ -263,8 +258,6 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::RequestTimeout => app.config.request_timeout.to_string(),
         ConfigField::MaxRetries => app.config.max_retries.to_string(),
         ConfigField::MinConnectTimeout => format!("{:.2}", app.config.min_connect_timeout),
-        ConfigField::ForceExitTimeout => app.config.force_exit_timeout.to_string(),
-        ConfigField::GracefulExit => app.config.graceful_exit.to_string(),
         ConfigField::MinWait => app.config.min_wait_time.to_string(),
         ConfigField::MaxWait => app.config.max_wait_time.to_string(),
         ConfigField::EnableAudiobook => app.config.enable_audiobook.to_string(),
@@ -289,7 +282,6 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::KeepHeicOriginal => app.config.keep_heic_original.to_string(),
         ConfigField::MediaLimitPerChapter => app.config.media_limit_per_chapter.to_string(),
         ConfigField::MediaMaxDimensionPx => app.config.media_max_dimension_px.to_string(),
-        ConfigField::MediaTotalLimitMb => app.config.media_total_limit_mb.to_string(),
     }
 }
 
@@ -298,10 +290,10 @@ pub(in crate::ui) fn cfg_field_is_bool(field: ConfigField) -> bool {
         field,
         ConfigField::BulkFiles
             | ConfigField::AutoClearDump
+            | ConfigField::AutoOpenDownloadedFiles
             | ConfigField::OldCli
             | ConfigField::EnableSegmentComments
             | ConfigField::UseOfficialApi
-            | ConfigField::GracefulExit
             | ConfigField::EnableAudiobook
             | ConfigField::DownloadCommentImages
             | ConfigField::DownloadCommentAvatars
@@ -316,10 +308,10 @@ fn cfg_field_current_bool(app: &App, field: ConfigField) -> Option<bool> {
     let val = match field {
         ConfigField::BulkFiles => app.config.bulk_files,
         ConfigField::AutoClearDump => app.config.auto_clear_dump,
+        ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files,
         ConfigField::OldCli => app.config.old_cli,
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments,
         ConfigField::UseOfficialApi => app.config.use_official_api,
-        ConfigField::GracefulExit => app.config.graceful_exit,
         ConfigField::EnableAudiobook => app.config.enable_audiobook,
         ConfigField::DownloadCommentImages => app.config.download_comment_images,
         ConfigField::DownloadCommentAvatars => app.config.download_comment_avatars,
@@ -366,12 +358,13 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
     if entry_idx >= category.entries.len() {
         return Ok(());
     }
-    let entry = &category.entries[entry_idx];
+    let field = category.entries[entry_idx].field;
+    let entry_title = category.entries[entry_idx].title;
     let raw = app.cfg_edit_buffer.trim();
 
     let mut note: Option<String> = None;
 
-    match entry.field {
+    match field {
         ConfigField::SavePath => {
             app.config.save_path = raw.to_string();
         }
@@ -402,6 +395,10 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
         ConfigField::AutoClearDump => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
             app.config.auto_clear_dump = val;
+        }
+        ConfigField::AutoOpenDownloadedFiles => {
+            let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
+            app.config.auto_open_downloaded_files = val;
         }
         ConfigField::OldCli => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
@@ -450,14 +447,6 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 return Ok(());
             }
             app.config.min_connect_timeout = val;
-        }
-        ConfigField::ForceExitTimeout => {
-            let val: u64 = raw.parse().map_err(|_| anyhow!("请输入秒数"))?;
-            app.config.force_exit_timeout = val;
-        }
-        ConfigField::GracefulExit => {
-            let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
-            app.config.graceful_exit = val;
         }
         ConfigField::MinWait => {
             let val: u64 = raw.parse().map_err(|_| anyhow!("请输入整数毫秒"))?;
@@ -576,17 +565,13 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
             let val: u32 = raw.parse().map_err(|_| anyhow!("请输入整数"))?;
             app.config.media_max_dimension_px = val;
         }
-        ConfigField::MediaTotalLimitMb => {
-            let val: u32 = raw.parse().map_err(|_| anyhow!("请输入整数"))?;
-            app.config.media_total_limit_mb = val;
-        }
     }
 
     let path = Path::new(Config::FILE_NAME);
     write_with_comments(&app.config, path).map_err(|e| anyhow!(e.to_string()))?;
     match note {
-        Some(extra) => app.status = format!("已保存: {}（{}）", entry.title, extra),
-        None => app.status = format!("已保存: {}", entry.title),
+        Some(extra) => app.status = format!("已保存: {}（{}）", entry_title, extra),
+        None => app.status = format!("已保存: {}", entry_title),
     }
     Ok(())
 }

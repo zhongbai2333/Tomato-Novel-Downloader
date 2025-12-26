@@ -1,3 +1,5 @@
+//! 无 UI 下载交互与执行。
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -36,10 +38,11 @@ pub(super) fn search_and_pick(keyword: &str) -> Result<Option<String>> {
     if choice == "0" || choice.eq_ignore_ascii_case("q") {
         return Ok(None);
     }
-    if let Ok(idx) = choice.parse::<usize>() {
-        if idx >= 1 && idx <= resp.books.len() {
-            return Ok(Some(resp.books[idx - 1].book_id.clone()));
-        }
+    if let Ok(idx) = choice.parse::<usize>()
+        && idx >= 1
+        && idx <= resp.books.len()
+    {
+        return Ok(Some(resp.books[idx - 1].book_id.clone()));
     }
 
     println!("输入无效，已取消\n");
@@ -146,13 +149,16 @@ pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
     }
 
     if pending.is_empty() {
-        println!("没有需要下载的章节，操作结束。\n");
-        dl::finalize_from_manager(&mut manager, &chosen_chapters)?;
-        return Ok(());
+        println!("没有需要下载的章节，将仅补齐段评缓存并执行收尾生成。\n");
     }
 
     println!("\n开始下载...");
+    let mut last_reporter: Option<dl::ProgressReporter> = None;
     loop {
+        // If we are starting a new stage (retry), clear previous stage bars first.
+        if let Some(mut prev) = last_reporter.take() {
+            prev.finish_cli_bars();
+        }
         let mut reporter = dl::make_reporter(config, &chosen_chapters, &pending, None);
         let book_name = manager.book_name.clone();
         let result = dl::download_chapters_into_manager(
@@ -160,7 +166,9 @@ pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
             &plan.book_id,
             &book_name,
             &mut manager,
+            &chosen_chapters,
             &pending,
+            Some(&plan._raw),
             &mut reporter,
             None,
         )?;
@@ -168,6 +176,9 @@ pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
             "\n下载完成（阶段）成功: {} 章 | 失败: {} 章 | 取消: {} 章",
             result.success, result.failed, result.canceled
         );
+
+        // Keep the reporter (and its CLI progress bars) for finalize/audiobook.
+        last_reporter = Some(reporter);
 
         pending = dl::pending_failed(&manager, &chosen_chapters);
         if pending.is_empty() {
@@ -183,7 +194,15 @@ pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
         println!("\n重新下载失败章节: {} 章...", pending.len());
     }
 
-    dl::finalize_from_manager(&mut manager, &chosen_chapters)?;
+    let mut reporter =
+        last_reporter.unwrap_or_else(|| dl::make_reporter(config, &chosen_chapters, &[], None));
+    dl::finalize_from_manager(
+        &mut manager,
+        &chosen_chapters,
+        Some(&plan._raw),
+        Some(&mut reporter),
+        None,
+    )?;
     println!(
         "\n下载完成！用时 {:.1} 秒",
         start_time.elapsed().as_secs_f32()

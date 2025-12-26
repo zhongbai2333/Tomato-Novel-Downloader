@@ -1,3 +1,5 @@
+//! EPUB 生成器。
+
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
@@ -78,7 +80,27 @@ impl EpubGenerator {
             .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
     }
 
-    pub fn add_aux_page(&mut self, title: &str, content: &str, include_in_spine: bool) {
+    #[allow(dead_code)]
+    pub fn peek_next_aux_file_name(&self) -> String {
+        format!("aux_{:05}.xhtml", self.file_counter)
+    }
+
+    #[allow(dead_code)]
+    pub fn peek_next_aux_file_name_after_next_chapter(&self) -> String {
+        format!("aux_{:05}.xhtml", self.file_counter + 1)
+    }
+
+    #[allow(dead_code)]
+    pub fn peek_next_chapter_file_name(&self) -> String {
+        format!("chapter_{:05}.xhtml", self.file_counter)
+    }
+
+    #[allow(dead_code)]
+    pub fn peek_next_chapter_file_name_after_next_aux(&self) -> String {
+        format!("chapter_{:05}.xhtml", self.file_counter + 1)
+    }
+
+    pub fn add_aux_page(&mut self, title: &str, content: &str, include_in_spine: bool) -> String {
         let file_name = format!("aux_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
         let cleaned = if content.trim().is_empty() {
@@ -93,6 +115,8 @@ impl EpubGenerator {
             self.chapters
                 .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
         }
+
+        file_name
     }
 
     pub fn add_resource_bytes(&mut self, path: &str, bytes: Vec<u8>, mime: &str) -> Result<()> {
@@ -177,13 +201,13 @@ fn wrap_chapter_html(title: &str, body: &str) -> String {
 }
 
 fn title_from_file_or_html(file_name: &str, html: &str) -> String {
-    if let Some(start) = html.find("<title>") {
-        if let Some(end) = html[start + 7..].find("</title>") {
-            let raw = &html[start + 7..start + 7 + end];
-            let trimmed = raw.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_string();
-            }
+    if let Some(start) = html.find("<title>")
+        && let Some(end) = html[start + 7..].find("</title>")
+    {
+        let raw = &html[start + 7..start + 7 + end];
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
         }
     }
     file_name.to_string()

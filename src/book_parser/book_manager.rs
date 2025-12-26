@@ -1,3 +1,5 @@
+//! 书籍下载过程的状态管理与落盘。
+
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -161,10 +163,10 @@ impl BookManager {
             }
         }
 
-        if self.finished.is_none() {
-            if let Some(b) = data.get("finished").and_then(|v| v.as_bool()) {
-                self.finished = Some(b);
-            }
+        if self.finished.is_none()
+            && let Some(b) = data.get("finished").and_then(|v| v.as_bool())
+        {
+            self.finished = Some(b);
         }
 
         if self.chapter_count.is_none() {

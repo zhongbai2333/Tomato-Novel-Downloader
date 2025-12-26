@@ -1,3 +1,7 @@
+//! 全局配置结构（Config）与默认值。
+//!
+//! 该模块同时提供生成 `config.yml` 的字段元信息。
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,10 +29,6 @@ pub struct Config {
     pub min_wait_time: u64,
     #[serde(default = "default_min_connect_timeout")]
     pub min_connect_timeout: f64,
-    #[serde(default = "default_force_exit_timeout")]
-    pub force_exit_timeout: u64,
-    #[serde(default = "default_true")]
-    pub graceful_exit: bool,
 
     // 保存配置
     #[serde(default = "default_novel_format")]
@@ -37,6 +37,8 @@ pub struct Config {
     pub bulk_files: bool,
     #[serde(default = "default_true")]
     pub auto_clear_dump: bool,
+    #[serde(default = "default_false")]
+    pub auto_open_downloaded_files: bool,
     #[serde(default = "default_false")]
     pub enable_audiobook: bool,
     #[serde(default = "default_audiobook_voice")]
@@ -95,8 +97,6 @@ pub struct Config {
     pub media_limit_per_chapter: usize,
     #[serde(default = "default_media_max_dimension_px")]
     pub media_max_dimension_px: u32,
-    #[serde(default = "default_media_total_limit_mb")]
-    pub media_total_limit_mb: u32,
 
     #[serde(skip)]
     folder_path: Option<PathBuf>,
@@ -125,11 +125,10 @@ impl Default for Config {
             max_wait_time: default_max_wait_time(),
             min_wait_time: default_min_wait_time(),
             min_connect_timeout: default_min_connect_timeout(),
-            force_exit_timeout: default_force_exit_timeout(),
-            graceful_exit: default_true(),
             novel_format: default_novel_format(),
             bulk_files: default_false(),
             auto_clear_dump: default_true(),
+            auto_open_downloaded_files: default_false(),
             enable_audiobook: default_false(),
             audiobook_voice: default_audiobook_voice(),
             audiobook_rate: default_audiobook_rate(),
@@ -155,7 +154,6 @@ impl Default for Config {
             first_line_indent_em: default_first_line_indent_em(),
             media_limit_per_chapter: default_media_limit_per_chapter(),
             media_max_dimension_px: default_media_max_dimension_px(),
-            media_total_limit_mb: default_media_total_limit_mb(),
             folder_path: None,
             last_status_was_new: false,
             last_status_claimed: false,
@@ -168,7 +166,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 38] = [
+        static FIELDS: [FieldMeta; 36] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -198,14 +196,6 @@ impl ConfigSpec for Config {
                 description: "最小连接超时时间",
             },
             FieldMeta {
-                name: "force_exit_timeout",
-                description: "强制退出等待时间",
-            },
-            FieldMeta {
-                name: "graceful_exit",
-                description: "是否启用优雅退出",
-            },
-            FieldMeta {
                 name: "novel_format",
                 description: "保存小说格式, 可选: [txt, epub]",
             },
@@ -216,6 +206,10 @@ impl ConfigSpec for Config {
             FieldMeta {
                 name: "auto_clear_dump",
                 description: "是否自动清理缓存文件",
+            },
+            FieldMeta {
+                name: "auto_open_downloaded_files",
+                description: "下载完成后自动用默认应用打开生成的小说文件/文件夹（txt/epub）",
             },
             FieldMeta {
                 name: "enable_audiobook",
@@ -317,10 +311,6 @@ impl ConfigSpec for Config {
                 name: "media_max_dimension_px",
                 description: "图片最长边像素上限，>0 时缩放并转成 JPEG",
             },
-            FieldMeta {
-                name: "media_total_limit_mb",
-                description: "本次会话媒体总下载上限（MB，0 表示不限制）",
-            },
         ];
         &FIELDS
     }
@@ -345,21 +335,21 @@ impl Config {
                 entry.claimed = true;
             }
         }
-        if let Some(last) = &self.folder_path {
-            if last == path {
-                self.last_status_claimed = true;
-            }
+        if let Some(last) = &self.folder_path
+            && last == path
+        {
+            self.last_status_claimed = true;
         }
     }
 
     pub fn mark_status_folder_removed(&mut self, path: &Path) {
         self.status_registry.retain(|e| e.path != path);
-        if let Some(last) = &self.folder_path {
-            if last == path {
-                self.folder_path = None;
-                self.last_status_was_new = false;
-                self.last_status_claimed = false;
-            }
+        if let Some(last) = &self.folder_path
+            && last == path
+        {
+            self.folder_path = None;
+            self.last_status_was_new = false;
+            self.last_status_claimed = false;
         }
     }
 
@@ -368,7 +358,7 @@ impl Config {
         self.status_registry
             .iter()
             .filter(|entry| entry.is_new && !entry.claimed)
-            .filter(|entry| exclude.as_ref().map_or(true, |ex| ex != &entry.path))
+            .filter(|entry| exclude.as_ref() != Some(&entry.path))
             .map(|entry| entry.path.clone())
             .collect()
     }
@@ -379,10 +369,10 @@ impl Config {
                 return entry.is_new;
             }
         }
-        if let Some(last) = &self.folder_path {
-            if last == path {
-                return self.last_status_was_new;
-            }
+        if let Some(last) = &self.folder_path
+            && last == path
+        {
+            return self.last_status_was_new;
         }
         false
     }
@@ -402,10 +392,12 @@ impl Config {
         let existed_before = path.exists();
         fs::create_dir_all(&path)?;
 
-        if let Some(prev) = &self.folder_path {
-            if self.last_status_was_new && !self.last_status_claimed && prev != &path {
-                let _ = fs::remove_dir_all(prev);
-            }
+        if let Some(prev) = &self.folder_path
+            && self.last_status_was_new
+            && !self.last_status_claimed
+            && prev != &path
+        {
+            let _ = fs::remove_dir_all(prev);
         }
 
         self.folder_path = Some(path.clone());
@@ -417,7 +409,7 @@ impl Config {
         let entry = self.status_registry.iter_mut().find(|e| e.path == path);
 
         let is_new_this_session =
-            (!existed_before) || entry.as_ref().map_or(false, |e| e.is_new && !e.claimed);
+            (!existed_before) || entry.as_ref().is_some_and(|e| e.is_new && !e.claimed);
 
         match entry {
             Some(e) => {
@@ -512,10 +504,6 @@ fn default_min_connect_timeout() -> f64 {
     3.05
 }
 
-fn default_force_exit_timeout() -> u64 {
-    5
-}
-
 fn default_novel_format() -> String {
     "epub".to_string()
 }
@@ -574,8 +562,4 @@ fn default_media_limit_per_chapter() -> usize {
 
 fn default_media_max_dimension_px() -> u32 {
     1280
-}
-
-fn default_media_total_limit_mb() -> u32 {
-    0
 }

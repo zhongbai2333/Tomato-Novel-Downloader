@@ -1,10 +1,14 @@
+//! TUI 下载页。
+//!
+//! 处理用户输入、启动下载任务、展示进度与状态。
+
 use std::sync::{Arc, atomic::AtomicBool};
 use std::thread;
 
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use crate::download::downloader::{self, ChapterRange, ProgressSnapshot};
+use crate::download::downloader::{self, ChapterRange, ProgressSnapshot, SavePhase};
 
 use super::{App, Focus, PendingDownload, View, WorkerMsg, start_spinner};
 
@@ -37,6 +41,7 @@ pub(super) fn start_download_task(
         group_total: pending.plan.chapters.len().div_ceil(25),
         saved_chapters: pending.downloaded_count,
         chapter_total: pending.plan.chapters.len(),
+        save_phase: SavePhase::TextSave,
         comment_fetch: 0,
         comment_total: if app.config.enable_segment_comments {
             pending.plan.chapters.len()

@@ -1,3 +1,5 @@
+//! TUI 首页。
+
 use super::*;
 
 use std::io::Write;
@@ -57,21 +59,20 @@ pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                 }
             }
             KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Ok(mut clip) = arboard::Clipboard::new() {
-                    if let Ok(text) = clip.get_text() {
-                        app.input.push_str(&text);
-                    }
+                if let Ok(mut clip) = arboard::Clipboard::new()
+                    && let Ok(text) = clip.get_text()
+                {
+                    app.input.push_str(&text);
                 }
             }
             KeyCode::Char('p') => {
                 if app.focus == Focus::Input {
                     app.input.push('p');
-                } else if app.focus == Focus::Results {
-                    if let Some(idx) = app.list_state.selected() {
-                        if let Some(item) = app.results.get(idx).cloned() {
-                            super::cover::show_cover(app, &item.book_id, &item.title, None)?;
-                        }
-                    }
+                } else if app.focus == Focus::Results
+                    && let Some(idx) = app.list_state.selected()
+                    && let Some(item) = app.results.get(idx).cloned()
+                {
+                    super::cover::show_cover(app, &item.book_id, &item.title, None)?;
                 }
             }
             KeyCode::Char(c)

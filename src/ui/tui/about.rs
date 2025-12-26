@@ -1,3 +1,7 @@
+//! TUI About 页面。
+//!
+//! 展示项目信息，并提供打开链接等按钮。
+
 use super::*;
 
 pub(super) fn handle_event_about(app: &mut App, event: Event) -> Result<()> {
@@ -130,7 +134,12 @@ fn handle_mouse_about(app: &mut App, me: event::MouseEvent) -> Result<()> {
 fn open_github_repo(app: &mut App) -> Result<()> {
     let url = "https://github.com/zhongbai2333/Tomato-Novel-Downloader";
     let spawn_result = if cfg!(target_os = "windows") {
-        Command::new("cmd").args(["/C", "start", url]).spawn()
+        // Avoid spawning `cmd.exe` (it can mutate console modes and break mouse events).
+        // `explorer.exe` uses the default URL handler without touching our console settings.
+        Command::new("explorer")
+            .arg(url)
+            .spawn()
+            .or_else(|_| Command::new("cmd").args(["/C", "start", url]).spawn())
     } else if cfg!(target_os = "macos") {
         Command::new("open").arg(url).spawn()
     } else {
@@ -141,5 +150,11 @@ fn open_github_repo(app: &mut App) -> Result<()> {
         Ok(_) => app.status = format!("已尝试在浏览器打开: {url}"),
         Err(e) => app.status = format!("打开浏览器失败: {e}"),
     }
+
+    // Best-effort: some OS openers may still toggle console modes.
+    // Re-assert our expected modes so returning to the TUI keeps mouse usable.
+    let _ = enable_raw_mode();
+    let mut out = std::io::stdout();
+    let _ = crossterm_execute!(&mut out, EnableMouseCapture);
     Ok(())
 }

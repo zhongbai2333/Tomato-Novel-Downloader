@@ -1,3 +1,5 @@
+//! 段评/评论相关的解析与拼装工具。
+
 use regex::Regex;
 
 /// 将 [笑] 形式的简单表情替换为 emoji。
@@ -44,8 +46,7 @@ pub fn to_cjk_numeral(n: i32) -> String {
 /// 提取指定段落的纯文本摘要（用于段评回链）。
 pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
     let re = Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap();
-    let mut idx = 0usize;
-    for cap in re.captures_iter(chapter_html) {
+    for (idx, cap) in re.captures_iter(chapter_html).enumerate() {
         if idx == target_idx {
             let inner = cap.get(2).map(|m| m.as_str()).unwrap_or("");
             let inner_text = strip_tags(inner).trim().to_string();
@@ -59,60 +60,70 @@ pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
                 .unwrap_or_else(|| inner_text.len().min(20));
             return inner_text[..cut].trim().to_string();
         }
-        idx += 1;
     }
     String::new()
 }
 
-/// 统计段评 meta 中的条数。
-pub fn segment_meta_count(meta: &serde_json::Value) -> usize {
-    if !meta.is_object() {
-        return 0;
-    }
-    if let Some(c) = meta.get("count").and_then(|v| v.as_i64()) {
-        if c > 0 {
-            return c as usize;
-        }
-    }
-    meta.get("detail")
-        .and_then(|d| d.get("data_list"))
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.len())
-        .unwrap_or(0)
-}
+pub fn inject_segment_links(
+    content_html: &str,
+    comments_file: &str,
+    seg_counts: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    // Mirror Python logic in `segment_utils.py`:
+    // - iterate <p> in-order with a monotonically increasing idx
+    // - if cnt>0 and <p> has no id=, add id="p-{idx}" while preserving other attrs
+    // - append a badge link to the segment comment page
+    let re = Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap();
+    let re_has_id = Regex::new(r"(?is)\bid\s*=").unwrap();
 
-pub fn inject_segment_links(content_html: &str, comments_file: &str, seg_counts: &serde_json::Map<String, serde_json::Value>) -> String {
-    let re = Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap();
     let mut out = String::new();
     let mut last_end = 0usize;
-    for m in re.find_iter(content_html) {
+
+    for (idx, m) in re.find_iter(content_html).enumerate() {
         out.push_str(&content_html[last_end..m.start()]);
+
         let caps = re.captures(m.as_str()).unwrap();
-        let open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        let inner = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        let mut open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
+        let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-        let idx = out.matches("<p").count();
+
         let cnt = seg_counts
             .get(&idx.to_string())
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        let mut tag = open_tag.to_string();
-        if cnt > 0 && !open_tag.contains("id=") {
-            tag = format!("{} id=\"p-{}\">", &open_tag[..open_tag.len() - 1], idx);
-        }
-        out.push_str(&tag);
-        out.push_str(inner);
+
         if cnt > 0 {
-            out.push_str(&format!(
-                " <a class=\"seg-count\" href=\"{}#para-{}\">({})</a>",
-                comments_file, idx, cnt
+            if !re_has_id.is_match(&open_tag) && open_tag.ends_with('>') {
+                open_tag.pop();
+                open_tag.push_str(&format!(" id=\"p-{idx}\">"));
+            }
+            inner.push_str(&format!(
+                " <a class=\"seg-count\" href=\"{}#para-{}\" title=\"查看本段评论\">({})</a>",
+                html_escape_attr(comments_file),
+                idx,
+                cnt
             ));
         }
+
+        out.push_str(&open_tag);
+        out.push_str(&inner);
         out.push_str(close_tag);
+
         last_end = m.end();
     }
+
     out.push_str(&content_html[last_end..]);
     out
+}
+
+fn html_escape_attr(input: &str) -> String {
+    // Sufficient for EPUB internal href attr.
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn strip_tags(raw: &str) -> String {

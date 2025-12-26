@@ -1,4 +1,5 @@
 name: Refresh Build
+
 on:
   workflow_dispatch:
   repository_dispatch:
@@ -39,75 +40,61 @@ jobs:
         with:
           ref: ${{ env.BUILD_TAG }}
 
-      - name: Setup Python (Linux)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux)
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: 安装 B 的构建依赖 (Linux)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
-
-      - name: 编译 Cython 扩展 (Linux)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          cd ..
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: 缓存 A 仓库的 pip 依赖 (Linux)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: 安装 A 仓库所需依赖 (Linux)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: 使用 PyInstaller 打包成可执行文件 (Linux)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Linux_amd64-${{ env.BUILD_TAG }} \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Linux_amd64-${BUILD_TAG}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist/TomatoNovelDownloader-*
+          path: dist
 
   build-linux-arm64:
     name: 构建 Linux ARM64 可执行文件
@@ -121,75 +108,61 @@ jobs:
         with:
           ref: ${{ env.BUILD_TAG }}
 
-      - name: Setup Python (Linux ARM64)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Linux ARM64)
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: 安装 B 的构建依赖 (Linux ARM64)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
-
-      - name: 编译 Cython 扩展 (Linux ARM64)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          cd ..
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: 将编译好的 .so 文件复制到仓库根目录 (Linux ARM64)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: 缓存 A 仓库的 pip 依赖 (Linux ARM64)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: 安装 A 仓库所需依赖 (Linux ARM64)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: 使用 PyInstaller 打包成可执行文件 (Linux ARM64)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Linux_arm64-${{ env.BUILD_TAG }} \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Linux_arm64-${BUILD_TAG}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload Linux ARM64 Artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-build
-          path: dist/TomatoNovelDownloader-*
+          path: dist
 
   build-windows:
     name: 构建 Windows 可执行文件
@@ -203,86 +176,60 @@ jobs:
         with:
           ref: ${{ env.BUILD_TAG }}
 
-      - name: Setup Python (Windows)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (Windows)
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: 安装 B 的构建依赖 (Windows)
-        shell: pwsh
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if (Test-Path "B\\requirements.txt") { pip install -r B\\requirements.txt }
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: 编译 Cython 扩展 (Windows)
-        shell: pwsh
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if (Test-Path 'setup_offical.py') {
-            Write-Host 'Building fanqie_mod via setup_offical.py'
-            python setup_offical.py build_ext --inplace
-          } else {
-            Write-Host 'setup_offical.py missing (fanqie_mod not built)'
-          }
-          cd ..
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: 将编译好的 .pyd 文件复制到仓库根目录 (Windows)
-        shell: pwsh
-        run: |
-          Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
-          if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
-
-      - name: 缓存 A 仓库的 pip 依赖 (Windows)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: 安装 A 仓库所需依赖 (Windows)
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: 下载并准备 UPX (Windows)
-        shell: pwsh
+      - name: Bundle artifacts
+        shell: powershell
         run: |
-          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile upx.zip
-          Expand-Archive -Path upx.zip -DestinationPath upx
-
-      - name: 使用 PyInstaller 打包成可执行文件 (Windows)
-        shell: pwsh
-        run: |
-          $upxDir = "$pwd\upx\upx-5.0.0-win64"
-          if (Test-Path "$upxDir\upx.exe") { icacls "$upxDir\upx.exe" /grant Everyone:F }
-          pyinstaller --onefile `
-            --upx-dir "$upxDir" `
-            --collect-data fake_useragent `
-            --hidden-import=portalocker `
-            --hidden-import=TTEncrypt `
-            -i img/Tomato-downlaoder-ico.ico `
-            --name=TomatoNovelDownloader-Win64-${{ env.BUILD_TAG }} `
-            --clean `
-            main.py
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $out = "TomatoNovelDownloader-Win64-${{ env.BUILD_TAG }}.exe"
+          Copy-Item -Path target\release\tomato-novel-downloader.exe -Destination (Join-Path dist $out) -Force
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist\TomatoNovelDownloader-*.exe
+          path: dist
 
   build-macos:
     name: 构建 macOS (arm64) 可执行文件
@@ -296,157 +243,61 @@ jobs:
         with:
           ref: ${{ env.BUILD_TAG }}
 
-      - name: Setup Python (macOS)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS)
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: 安装 B 的构建依赖 (macOS)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
-
-      - name: 编译 Cython 扩展 (macOS)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          cd ..
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: 将编译好的 .so 文件复制到仓库根目录 (macOS)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: 缓存 A 仓库的 pip 依赖 (macOS)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: 安装 A 仓库所需依赖 (macOS)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: 使用 PyInstaller 打包成可执行文件 (macOS arm64)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-macOS_arm64-${{ env.BUILD_TAG }} \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-macOS_arm64-${BUILD_TAG}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/TomatoNovelDownloader-macOS_arm64-*
-
-  build-macos-intel:
-    name: 构建 macOS (Intel x86_64) 可执行文件
-    needs: fetch_and_clean
-    runs-on: macos-13
-    env:
-      BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
-    steps:
-      - name: Checkout 代码 (按最新 Tag)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.BUILD_TAG }}
-
-      - name: Setup Python (macOS Intel)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout 私有仓库 B 并编译 Cython 扩展 (macOS Intel)
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: 安装 B 的构建依赖 (macOS Intel)
-        run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then pip install -r B/requirements.txt; fi
-
-      - name: 编译 Cython 扩展 (macOS Intel)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
-          fi
-          cd ..
-
-      - name: 将编译好的 .so 文件复制到仓库根目录 (macOS Intel)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
-
-      - name: 缓存 A 仓库的 pip 依赖 (macOS Intel)
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 安装 A 仓库所需依赖 (macOS Intel)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: 使用 PyInstaller 打包成可执行文件 (macOS Intel)
-        run: |
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-macOS_amd64-${{ env.BUILD_TAG }} \
-            --clean \
-            main.py
-
-      - name: Upload macOS Intel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-intel-build
-          path: dist/TomatoNovelDownloader-macOS_amd64-*
+          path: dist
 
   upload_assets:
     name: 上传构建产物到 Release
@@ -456,7 +307,6 @@ jobs:
       - build-linux-arm64
       - build-windows
       - build-macos
-      - build-macos-intel
     runs-on: ubuntu-latest
     steps:
       - name: Checkout A Repository
@@ -483,6 +333,5 @@ jobs:
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
-            release-artifacts/macos-intel-build/TomatoNovelDownloader-macOS_amd64-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

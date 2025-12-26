@@ -26,76 +26,56 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout private repo B
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: Install B's build dependencies (Linux)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-
-      - name: Build Cython extensions from B (Linux)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
           else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+            PYTHON=python
           fi
-          cd ..
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: Copy compiled B extensions into A's root (Linux)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Dependencies (Linux)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: Install Dependencies (Linux)
-        run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Build Executable (Linux)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-              VERSION="${{ github.ref_name }}"
-          else
-              VERSION="sha-${{ github.sha }}"
-          fi
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Linux_amd64-$VERSION \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="sha-${{ github.event.pull_request.head.sha }}"
+          out="TomatoNovelDownloader-Linux_amd64-${VERSION}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
@@ -114,76 +94,56 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout private repo B
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: Install B's build dependencies (Linux ARM64)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-
-      - name: Build Cython extensions from B (Linux ARM64)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
           else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+            PYTHON=python
           fi
-          cd ..
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: Copy compiled B extensions into A's root (Linux ARM64)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Dependencies (Linux ARM64)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: Install Dependencies (Linux ARM64)
-        run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Build Executable (Linux ARM64)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-              VERSION="${{ github.ref_name }}"
-          else
-              VERSION="sha-${{ github.sha }}"
-          fi
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-Linux_arm64-$VERSION \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="sha-${{ github.event.pull_request.head.sha }}"
+          out="TomatoNovelDownloader-Linux_arm64-${VERSION}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload Linux ARM64 Artifact
         uses: actions/upload-artifact@v4
@@ -202,89 +162,55 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout private repo B
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: Install B's build dependencies (Windows)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if (Test-Path "B\\requirements.txt") {
-            pip install -r B\\requirements.txt
-          }
-        shell: powershell
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: Build Cython extensions from B (Windows)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if (Test-Path 'setup_offical.py') {
-            Write-Host 'Building fanqie_mod via setup_offical.py'
-            python setup_offical.py build_ext --inplace
-          } else {
-            Write-Host 'setup_offical.py missing (fanqie_mod not built)'
-          }
-          cd ..
-        shell: powershell
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Copy compiled B extensions into A's root (Windows)
-        run: |
-          Get-ChildItem B\fanqie_mod*.pyd -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_ -Destination . -Force }
-          if (Test-Path novel_src\offical_tools\TTEncrypt.py) { Copy-Item novel_src\offical_tools\TTEncrypt.py . -Force }
-        shell: powershell
-
-      - name: Cache Dependencies (Windows)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: Install Dependencies (Windows)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-        shell: powershell
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Download UPX (Windows)
-        run: |
-          $url = "https://github.com/upx/upx/releases/download/v5.0.0/upx-5.0.0-win64.zip"
-          Invoke-WebRequest -Uri $url -OutFile upx.zip
-          Expand-Archive -Path upx.zip -DestinationPath upx
+      - name: Bundle artifacts
         shell: powershell
-
-      - name: Build Executable (Windows)
         run: |
-          $upxDir = "$pwd\upx\upx-5.0.0-win64"
-          if (Test-Path "$upxDir\upx.exe") {
-              icacls "$upxDir\upx.exe" /grant Everyone:F
-          }
-          if ("${{ github.ref_type }}" -eq "tag") {
-            $version = "${{ github.ref_name }}"
-          } else {
-            $version = "sha-${{ github.sha }}"
-          }
-          pyinstaller --onefile `
-            --upx-dir "$upxDir" `
-            --collect-data fake_useragent `
-            --hidden-import=portalocker `
-            --hidden-import=TTEncrypt `
-            -i img/Tomato-downlaoder-ico.ico `
-            --name=TomatoNovelDownloader-Win64-$version `
-            --clean `
-            main.py
-        shell: powershell
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $version = "sha-${{ github.event.pull_request.head.sha }}"
+          $out = "TomatoNovelDownloader-Win64-$version.exe"
+          Copy-Item -Path target\release\tomato-novel-downloader.exe -Destination (Join-Path dist $out) -Force
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
@@ -303,76 +229,56 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout private repo B
+      - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
         with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
 
-      - name: Install B's build dependencies (macOS arm64)
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-
-      - name: Build Cython extensions from B (macOS arm64)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
           else
-            echo "setup_offical.py missing (fanqie_mod not built)"
+            PYTHON=python
           fi
-          cd ..
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
 
-      - name: Copy compiled B extensions into A's root (macOS arm64)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Dependencies (macOS arm64)
+      - name: Cache cargo artifacts
         uses: actions/cache@v4
         with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-cargo-
 
-      - name: Install Dependencies (macOS arm64)
-        run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install pyinstaller
+      - name: Build release binary
+        run: cargo build --release
 
-      - name: Build Executable (macOS arm64)
+      - name: Bundle artifacts
+        shell: bash
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-              VERSION="${{ github.ref_name }}"
-          else
-              VERSION="sha-${{ github.sha }}"
-          fi
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-macOS_arm64-$VERSION \
-            --clean \
-            main.py
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="sha-${{ github.event.pull_request.head.sha }}"
+          out="TomatoNovelDownloader-macOS_arm64-${VERSION}"
+          cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload macOS arm64 Artifact
         uses: actions/upload-artifact@v4
@@ -380,96 +286,8 @@ jobs:
           name: macos-build
           path: dist/TomatoNovelDownloader-macOS_arm64-*
 
-  build-macos-intel:
-    if: github.event.label.name == 'run-build'
-    runs-on: macos-13   # Intel x86_64 runner
-    steps:
-      - name: Checkout PR 源分支代码
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13.3'
-
-      - name: Checkout private repo B
-        uses: actions/checkout@v4
-        with:
-          repository: zhongbai2333/Fanqie-Novel-Official-API-Helper
-          token: ${{ secrets.PYD_PAT }}
-          path: B
-
-      - name: Install B's build dependencies (macOS Intel)
-        run: |
-          python -m pip install --upgrade pip
-          pip install Cython
-          if [ -f B/requirements.txt ]; then
-            pip install -r B/requirements.txt
-          fi
-
-      - name: Build Cython extensions from B (macOS Intel)
-        run: |
-          cd B
-          python setup.py build_ext --inplace
-          if [ -f setup_offical.py ]; then
-            echo "Building fanqie_mod via setup_offical.py"
-            python setup_offical.py build_ext --inplace
-          else
-            echo "setup_offical.py missing (fanqie_mod not built)"
-          fi
-          cd ..
-
-      - name: Copy compiled B extensions into A's root (macOS Intel)
-        run: |
-          cp B/fanqie_mod.*.so . 2>/dev/null || true
-          cp novel_src/offical_tools/TTEncrypt.py . 2>/dev/null || true
-
-      - name: Cache Dependencies (macOS Intel)
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install Dependencies (macOS Intel)
-        run: |
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install pyinstaller
-
-      - name: Build Executable (macOS Intel)
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-              VERSION="${{ github.ref_name }}"
-          else
-              VERSION="sha-${{ github.sha }}"
-          fi
-          pyinstaller \
-            --onefile \
-            --strip \
-            --exclude-module _bootlocale \
-            --exclude-module _cffi_backend \
-            --collect-data fake_useragent \
-            --hidden-import=portalocker \
-            --hidden-import=TTEncrypt \
-            -i img/Tomato-downlaoder-ico.ico \
-            --name=TomatoNovelDownloader-macOS_amd64-$VERSION \
-            --clean \
-            main.py
-
-      - name: Upload macOS Intel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-intel-build
-          path: dist/TomatoNovelDownloader-macOS_amd64-*
-
   build-on-label:
-    needs: [build-linux, build-linux-arm64, build-windows, build-macos, build-macos-intel]
+    needs: [build-linux, build-linux-arm64, build-windows, build-macos]
     if: github.event.label.name == 'run-build'
     runs-on: ubuntu-latest
     steps:
@@ -482,7 +300,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '✅ 多平台构建完成（含 macOS Intel），已生成可执行文件。'
+              body: '✅ Rust 多平台构建完成，已生成可执行文件。'
             });
             await github.rest.issues.removeLabel({
               issue_number: context.issue.number,

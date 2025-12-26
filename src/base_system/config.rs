@@ -1,3 +1,5 @@
+//! 配置文件读写与带注释生成。
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -114,7 +116,7 @@ fn has_missing_fields<T: ConfigSpec>(path: &Path) -> Result<bool, ConfigError> {
         return Ok(true);
     };
     for field in T::fields() {
-        if !map.contains_key(&Value::String(field.name.to_string())) {
+        if !map.contains_key(Value::String(field.name.to_string())) {
             return Ok(true);
         }
     }

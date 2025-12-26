@@ -1,3 +1,7 @@
+//! 下载主流程编排。
+//!
+//! 负责拉取目录、批量拉取章节内容、保存与断点续传等核心链路。
+
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
@@ -13,14 +17,465 @@ use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
 use crossbeam_channel as channel;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tomato_novel_official_api::ReviewResponse;
 use tomato_novel_official_api::{
     ChapterRef, DirectoryClient, DirectoryMeta, FanqieClient, SearchClient,
 };
+use tomato_novel_official_api::{CommentDownloadOptions, ReviewClient};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SegmentCommentsParaCache {
+    count: u64,
+    #[serde(default)]
+    detail: Option<ReviewResponse>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SegmentCommentsChapterCache {
+    #[allow(dead_code)]
+    chapter_id: String,
+    #[allow(dead_code)]
+    book_id: String,
+    item_version: String,
+    top_n: usize,
+    #[serde(default)]
+    paras: std::collections::BTreeMap<String, SegmentCommentsParaCache>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SegmentEvent {
+    Saved,
+}
+
+fn segment_enabled(cfg: &Config) -> bool {
+    cfg.enable_segment_comments && cfg.novel_format.eq_ignore_ascii_case("epub")
+}
+
+fn count_segment_comment_cache_files(seg_dir: &Path) -> usize {
+    let Ok(rd) = std::fs::read_dir(seg_dir) else {
+        return 0;
+    };
+    rd.filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+pub(crate) struct SegmentCommentPool {
+    tx: Option<channel::Sender<String>>,
+    rx_evt: channel::Receiver<SegmentEvent>,
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl SegmentCommentPool {
+    fn new(
+        cfg: Config,
+        book_id: String,
+        status_dir: PathBuf,
+        item_versions: HashMap<String, String>,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Option<Self> {
+        if !segment_enabled(&cfg) {
+            return None;
+        }
+
+        // Segment comments are very request-heavy (stats + many para requests + optional media).
+        // Avoid nested/high fan-out concurrency that can easily trigger IP 风控.
+        let workers = cfg.segment_comments_workers.clamp(1, 8);
+        let (tx, rx) = channel::unbounded::<String>();
+        let (tx_evt, rx_evt) = channel::unbounded::<SegmentEvent>();
+
+        let item_versions = Arc::new(item_versions);
+        let seg_dir = status_dir.join("segment_comments");
+        let _ = std::fs::create_dir_all(&seg_dir);
+
+        let mut handles = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let rx = rx.clone();
+            let tx_evt = tx_evt.clone();
+            let cfg = cfg.clone();
+            let book_id = book_id.clone();
+            let status_dir = status_dir.clone();
+            let item_versions = item_versions.clone();
+            let cancel = cancel.clone();
+
+            handles.push(std::thread::spawn(move || {
+                // Treat cfg.media_download_workers as a global budget and distribute it across
+                // segment-comment workers to avoid multiplicative explosions.
+                let media_workers = {
+                    let total = cfg.media_download_workers.max(1);
+                    let per = total.div_ceil(workers);
+                    per.clamp(1, 8)
+                };
+                let review_options = CommentDownloadOptions {
+                    enable_comments: true,
+                    download_avatars: cfg.download_comment_avatars,
+                    download_images: cfg.download_comment_images,
+                    media_workers,
+                    status_dir: Some(status_dir.clone()),
+                    media_timeout_secs: 8,
+                    media_retries: 2,
+                };
+                let client = match ReviewClient::new(review_options) {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+
+                let seg_dir = status_dir.join("segment_comments");
+                let _ = std::fs::create_dir_all(&seg_dir);
+
+                // Fetch directory (item_version map) lazily if missing.
+                let dir_cache: OnceLock<HashMap<String, String>> = OnceLock::new();
+
+                loop {
+                    if cancel
+                        .as_ref()
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+
+                    let chapter_id = match rx.recv_timeout(Duration::from_millis(200)) {
+                        Ok(id) => id,
+                        Err(channel::RecvTimeoutError::Timeout) => continue,
+                        Err(channel::RecvTimeoutError::Disconnected) => return,
+                    };
+
+                    let out_path = seg_dir.join(format!("{}.json", chapter_id));
+                    if out_path.exists() {
+                        let _ = tx_evt.send(SegmentEvent::Saved);
+                        continue;
+                    }
+
+                    let item_version = item_versions
+                        .get(&chapter_id)
+                        .cloned()
+                        .or_else(|| {
+                            // Fall back to a one-time directory fetch if plan raw didn't include versions.
+                            dir_cache
+                                .get_or_init(|| {
+                                    let mut map = HashMap::new();
+                                    if let Ok(c) = DirectoryClient::new()
+                                        && let Ok(dir) =
+                                            c.fetch_directory_with_cover(&book_id, None, None)
+                                    {
+                                        map = extract_item_version_map(&dir.raw);
+                                    }
+                                    map
+                                })
+                                .get(&chapter_id)
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| "0".to_string());
+
+                    let top_n = cfg.segment_comments_top_n.max(1);
+
+                    let cache = fetch_segment_comments_for_chapter(
+                        &client,
+                        &cfg,
+                        &book_id,
+                        &chapter_id,
+                        &item_version,
+                        top_n,
+                        Some(&status_dir),
+                        cancel.as_ref(),
+                    )
+                    .unwrap_or_else(|| SegmentCommentsChapterCache {
+                        chapter_id: chapter_id.clone(),
+                        book_id: book_id.clone(),
+                        item_version: item_version.clone(),
+                        top_n,
+                        paras: std::collections::BTreeMap::new(),
+                    });
+
+                    // Best-effort write; 仅在落盘成功后上报进度，避免“进度跑满但还在写”。
+                    if let Ok(bytes) = serde_json::to_vec(&cache)
+                        && write_atomic(&out_path, &bytes).is_ok()
+                    {
+                        let _ = tx_evt.send(SegmentEvent::Saved);
+                    }
+                }
+            }));
+        }
+
+        Some(Self {
+            tx: Some(tx),
+            rx_evt,
+            handles,
+        })
+    }
+
+    fn submit(&self, chapter_id: &str) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(chapter_id.to_string());
+        }
+    }
+
+    fn drain_progress(&self, progress: &mut ProgressReporter) {
+        for evt in self.rx_evt.try_iter() {
+            match evt {
+                SegmentEvent::Saved => {
+                    progress.inc_comment_fetch();
+                    progress.inc_comment_saved();
+                }
+            }
+        }
+    }
+
+    fn shutdown(&mut self, progress: &mut ProgressReporter) {
+        self.tx.take();
+        for h in self.handles.drain(..) {
+            let _ = h.join();
+        }
+        self.drain_progress(progress);
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!(
+        "{}part",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("")
+    ));
+    std::fs::write(&tmp, bytes)?;
+    let _ = std::fs::remove_file(path);
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
+fn extract_item_version_map(directory_raw: &Value) -> HashMap<String, String> {
+    fn pick_string_or_number(v: Option<&Value>) -> Option<String> {
+        match v {
+            Some(Value::String(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    let mut out = HashMap::new();
+    let candidates = [
+        directory_raw.get("catalog_data"),
+        directory_raw.get("item_data_list"),
+        directory_raw.get("items"),
+    ];
+
+    for arr in candidates {
+        let Some(arr) = arr.and_then(Value::as_array) else {
+            continue;
+        };
+
+        for item in arr {
+            let Some(obj) = item.as_object() else {
+                continue;
+            };
+            let id = pick_string_or_number(
+                obj.get("item_id")
+                    .or_else(|| obj.get("catalog_id"))
+                    .or_else(|| obj.get("id")),
+            );
+            let version = pick_string_or_number(
+                obj.get("item_version")
+                    .or_else(|| obj.get("version"))
+                    .or_else(|| obj.get("item_version_code"))
+                    .or_else(|| obj.get("item_version_str")),
+            );
+            let (Some(id), Some(version)) = (id, version) else {
+                continue;
+            };
+            if !id.is_empty() && !version.is_empty() {
+                out.insert(id, version);
+            }
+        }
+    }
+
+    out
+}
+
+fn extract_para_counts_from_stats(stats: &Value) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+
+    fn pick_i64(v: Option<&Value>) -> Option<i64> {
+        match v {
+            Some(Value::Number(n)) => n.as_i64(),
+            Some(Value::String(s)) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    fn push_from_index_object_map(
+        out: &mut serde_json::Map<String, Value>,
+        obj: &serde_json::Map<String, Value>,
+    ) {
+        for (k, v) in obj {
+            let Ok(idx) = k.parse::<i64>() else {
+                continue;
+            };
+            if idx < 0 {
+                continue;
+            }
+
+            let cnt = match v {
+                Value::Object(m) => pick_i64(
+                    m.get("count")
+                        .or_else(|| m.get("comment_count"))
+                        .or_else(|| m.get("commentCount"))
+                        .or_else(|| m.get("idea_count"))
+                        .or_else(|| m.get("total")),
+                ),
+                Value::Number(_) | Value::String(_) => pick_i64(Some(v)),
+                _ => None,
+            };
+
+            let Some(cnt) = cnt else {
+                continue;
+            };
+            if cnt <= 0 {
+                continue;
+            }
+
+            out.insert(
+                idx.to_string(),
+                Value::Number(serde_json::Number::from(cnt as u64)),
+            );
+        }
+    }
+
+    if let Some(obj) = stats.as_object() {
+        push_from_index_object_map(&mut out, obj);
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    if let Some(obj) = stats.get("data").and_then(Value::as_object) {
+        push_from_index_object_map(&mut out, obj);
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    if let Some(paras) = stats.get("paras").and_then(|v| v.as_object()) {
+        for (k, v) in paras {
+            let cnt = pick_i64(v.get("count").or_else(|| v.get("comment_count")));
+            if let (Ok(idx), Some(cnt)) = (k.parse::<i64>(), cnt)
+                && idx >= 0
+                && cnt > 0
+            {
+                out.insert(
+                    idx.to_string(),
+                    Value::Number(serde_json::Number::from(cnt as u64)),
+                );
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fetch_segment_comments_for_chapter(
+    client: &ReviewClient,
+    _cfg: &Config,
+    book_id: &str,
+    chapter_id: &str,
+    item_version: &str,
+    top_n: usize,
+    status_dir: Option<&Path>,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Option<SegmentCommentsChapterCache> {
+    if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+        return None;
+    }
+    let stats = client
+        .fetch_comment_stats(chapter_id, item_version)
+        .ok()??;
+    let seg_counts = extract_para_counts_from_stats(&stats);
+
+    let mut paras: std::collections::BTreeMap<String, SegmentCommentsParaCache> =
+        std::collections::BTreeMap::new();
+    let mut para_with_comments: Vec<i32> = Vec::new();
+    for (k, v) in seg_counts {
+        let idx = k.parse::<i32>().ok()?;
+        let cnt = v.as_u64().unwrap_or(0);
+        paras.insert(
+            k.clone(),
+            SegmentCommentsParaCache {
+                count: cnt,
+                detail: None,
+            },
+        );
+        if cnt > 0 {
+            para_with_comments.push(idx);
+        }
+    }
+
+    if para_with_comments.is_empty() {
+        return Some(SegmentCommentsChapterCache {
+            chapter_id: chapter_id.to_string(),
+            book_id: book_id.to_string(),
+            item_version: item_version.to_string(),
+            top_n,
+            paras,
+        });
+    }
+
+    // IMPORTANT: Do NOT spawn a per-paragraph thread pool here.
+    // This function is called inside a chapter-level worker pool, and per-paragraph
+    // parallelism (plus per-thread media pools) can explode into hundreds/thousands
+    // of concurrent requests, easily triggering IP 风控.
+    //
+    // Keep it sequential and rely on the outer pool for parallelism.
+    let _ = status_dir; // kept for API stability (media is handled by the ReviewClient options)
+    for para_idx in &para_with_comments {
+        if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+            return None;
+        }
+        let fetched = client
+            .fetch_para_comments(chapter_id, book_id, *para_idx, item_version, top_n, 2)
+            .or_else(|_| {
+                client.fetch_para_comments(chapter_id, book_id, *para_idx, item_version, top_n, 0)
+            });
+        if let Ok(Some(res)) = fetched
+            && !res.response.reviews.is_empty()
+            && let Some(entry) = paras.get_mut(&para_idx.to_string())
+        {
+            entry.detail = Some(res.response);
+        } else {
+            // Soft throttle on errors to reduce burst retries when upstream starts rate-limiting.
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    Some(SegmentCommentsChapterCache {
+        chapter_id: chapter_id.to_string(),
+        book_id: book_id.to_string(),
+        item_version: item_version.to_string(),
+        top_n,
+        paras,
+    })
+}
 
 fn normalize_base(base: &str) -> String {
     base.trim().trim_end_matches('/').to_string()
@@ -37,6 +492,7 @@ fn ensure_trailing_query_base(url: &str) -> String {
     format!("{}?", u)
 }
 
+#[allow(clippy::type_complexity)]
 fn resolve_api_urls(
     cfg: &Config,
 ) -> Result<(Option<String>, Option<(String, String)>), anyhow::Error> {
@@ -293,14 +749,30 @@ pub struct ProgressSnapshot {
     pub group_total: usize,
     pub saved_chapters: usize,
     pub chapter_total: usize,
+    pub save_phase: SavePhase,
     pub comment_fetch: usize,
     pub comment_total: usize,
     pub comment_saved: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SavePhase {
+    #[default]
+    TextSave,
+    Audiobook,
+}
+
+struct CliBars {
+    #[allow(dead_code)]
+    mp: MultiProgress,
+    download_bar: ProgressBar,
+    save_bar: ProgressBar,
+}
+
 pub(crate) struct ProgressReporter {
     snapshot: ProgressSnapshot,
     cb: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>, // optional UI callback
+    cli: Option<CliBars>,
 }
 
 impl ProgressReporter {
@@ -318,6 +790,65 @@ impl ProgressReporter {
     fn inc_saved(&mut self) {
         self.snapshot.saved_chapters += 1;
         self.emit();
+    }
+
+    pub(crate) fn set_save_phase(&mut self, phase: SavePhase) {
+        self.snapshot.save_phase = phase;
+        self.emit();
+    }
+
+    pub(crate) fn reset_save_progress(&mut self, total: usize) {
+        self.snapshot.saved_chapters = 0;
+        self.snapshot.chapter_total = total;
+        self.emit();
+    }
+
+    pub(crate) fn inc_save_progress(&mut self) {
+        if self.snapshot.chapter_total == 0 {
+            return;
+        }
+        self.snapshot.saved_chapters =
+            (self.snapshot.saved_chapters + 1).min(self.snapshot.chapter_total);
+        self.emit();
+    }
+
+    pub(crate) fn inc_comment_fetch(&mut self) {
+        if self.snapshot.comment_total == 0 {
+            return;
+        }
+        self.snapshot.comment_fetch =
+            (self.snapshot.comment_fetch + 1).min(self.snapshot.comment_total);
+        self.emit();
+    }
+
+    pub(crate) fn inc_comment_saved(&mut self) {
+        if self.snapshot.comment_total == 0 {
+            return;
+        }
+        self.snapshot.comment_saved =
+            (self.snapshot.comment_saved + 1).min(self.snapshot.comment_total);
+        self.emit();
+    }
+
+    fn cli_download_bar(&self) -> Option<ProgressBar> {
+        self.cli.as_ref().map(|c| c.download_bar.clone())
+    }
+
+    pub(crate) fn cli_save_bar(&self) -> Option<ProgressBar> {
+        self.cli.as_ref().map(|c| c.save_bar.clone())
+    }
+
+    pub(crate) fn finish_cli_bars(&mut self) {
+        let Some(cli) = self.cli.take() else {
+            return;
+        };
+        cli.download_bar.finish_and_clear();
+        cli.save_bar.finish_and_clear();
+        drop(cli);
+    }
+
+    pub(crate) fn has_ui_callback(&self) -> bool {
+        self.cb.is_some()
     }
 }
 
@@ -344,6 +875,7 @@ impl ChapterDownloader {
         chapters: &[ChapterRef],
         progress: &mut ProgressReporter,
         cancel: Option<&Arc<AtomicBool>>,
+        mut seg_pool: Option<&mut SegmentCommentPool>,
     ) -> Result<DownloadResult> {
         if chapters.is_empty() {
             return Ok(DownloadResult::default());
@@ -357,116 +889,284 @@ impl ChapterDownloader {
         let total_chapters = chapters.len() as u64;
         let mut saved_in_job: u64 = 0;
 
-        let use_bars = progress.cb.is_none();
-        let (mut _mp, mut download_bar, mut save_bar) = if use_bars {
-            let mp = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
-            let style = ProgressStyle::with_template(
-                "{prefix} [{elapsed_precise}] {wide_bar} {pos}/{len} ({eta})",
-            )?
-            .progress_chars("##-");
+        // Official API: allow optional multi-thread downloading via max_workers.
+        // Default remains sequential (max_workers=1) to minimize cooldown/风控风险.
+        let worker_count = self.config.max_workers.max(1);
 
-            let download_bar = mp.add(ProgressBar::new(total_groups));
-            download_bar.set_style(style.clone());
-            download_bar.set_prefix("章节下载");
-
-            let save_bar = mp.add(ProgressBar::new(total_chapters));
-            save_bar.set_style(style);
-            save_bar.set_prefix("正文保存");
-
-            (Some(mp), Some(download_bar), Some(save_bar))
+        let use_bars = progress.cb.is_none() && worker_count <= 1 && progress.cli.is_some();
+        let mut download_bar = if use_bars {
+            progress.cli_download_bar()
         } else {
-            (None, None, None)
+            None
+        };
+        let mut save_bar = if use_bars {
+            progress.cli_save_bar()
+        } else {
+            None
         };
 
         let mut result = DownloadResult::default();
 
-        for (group_idx, group) in groups.iter().enumerate() {
-            if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
-                info!(target: "download", "收到停止信号，结束任务");
-                let mut result = result;
-                result.canceled = 1;
-                return Err(anyhow!("用户停止下载"));
-            }
+        if worker_count <= 1 {
+            'group_loop: for (group_idx, group) in groups.iter().enumerate() {
+                if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+                    info!(target: "download", "收到停止信号，结束任务");
+                    let mut result = result;
+                    result.canceled = 1;
+                    return Err(anyhow!("用户停止下载"));
+                }
 
-            if self.config.graceful_exit {
-                // 可选的优雅退出开关：预留外部信号处理
-            }
+                let ids = group
+                    .iter()
+                    .map(|c| c.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
 
-            let ids = group
-                .iter()
-                .map(|c| c.id.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
+                // 特判：解密失败时强制刷新 IID/密钥并重试整组。
+                let epub_mode = self.config.novel_format == "epub";
+                let mut decrypt_failures = 0usize;
+                let value = loop {
+                    match fetch_with_cooldown_retry(&self.client, &ids, epub_mode) {
+                        Ok(v) => break v,
+                        Err(err) => {
+                            let msg = err.to_string();
+                            if msg.contains("Decryption failed") {
+                                decrypt_failures += 1;
+                                error!(
+                                    target: "download",
+                                    attempt = decrypt_failures,
+                                    "批量获取章节解密失败，将强制刷新 IID/密钥并重试"
+                                );
 
-            let value = match fetch_with_cooldown_retry(
-                &self.client,
-                &ids,
-                self.config.novel_format == "epub",
-            ) {
-                Ok(v) => v,
-                Err(err) => {
-                    error!("批量获取章节失败: {}", err);
-                    for ch in *group {
-                        manager.save_error_chapter(&ch.id, &ch.title);
-                        result.failed += 1;
-                        if let Some(bar) = save_bar.as_ref() {
-                            bar.inc(1);
+                                // 尝试强制刷新 IID/会话（触发重新获取 register key 等）。
+                                if let Err(e) = self.client.force_refresh_session() {
+                                    error!(target: "download", error = %e, "强制刷新会话失败");
+                                }
+
+                                if decrypt_failures >= 3 {
+                                    return Err(anyhow!(
+                                        "内容解密失败连续 {} 次，停止下载",
+                                        decrypt_failures
+                                    ));
+                                }
+                                continue;
+                            }
+
+                            error!("批量获取章节失败: {}", msg);
+                            for ch in *group {
+                                manager.save_error_chapter(&ch.id, &ch.title);
+                                result.failed += 1;
+                                if let Some(bar) = save_bar.as_ref() {
+                                    bar.inc(1);
+                                }
+                                progress.inc_saved();
+                            }
+                            if let Some(bar) = download_bar.as_ref() {
+                                bar.inc(1);
+                            }
+                            progress.inc_group();
+                            continue 'group_loop;
                         }
-                        progress.inc_saved();
                     }
-                    if let Some(bar) = download_bar.as_ref() {
+                };
+
+                let parsed = ContentParser::extract_api_content(&value, &self.config);
+                for ch in *group {
+                    match parsed.get(&ch.id) {
+                        Some((content, title)) if !content.is_empty() => {
+                            let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
+                                extract_body_fragment(content)
+                            } else {
+                                content.clone()
+                            };
+                            manager.save_chapter(&ch.id, title, &cleaned);
+                            manager.append_downloaded_chapter(&ch.id, title, &cleaned);
+                            result.success += 1;
+                            if let Some(pool) = seg_pool.as_mut() {
+                                pool.submit(&ch.id);
+                            }
+                        }
+                        _ => {
+                            manager.save_error_chapter(&ch.id, &ch.title);
+                            result.failed += 1;
+                        }
+                    }
+                    if let Some(bar) = save_bar.as_ref() {
                         bar.inc(1);
                     }
-                    progress.inc_group();
-                    continue;
-                }
-            };
+                    progress.inc_saved();
+                    saved_in_job += 1;
+                    let remaining = total_chapters.saturating_sub(saved_in_job);
 
-            let parsed = ContentParser::extract_api_content(&value, &self.config);
-            for ch in *group {
-                match parsed.get(&ch.id) {
-                    Some((content, title)) if !content.is_empty() => {
-                        let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
-                            extract_body_fragment(content)
-                        } else {
-                            content.clone()
-                        };
-                        manager.save_chapter(&ch.id, title, &cleaned);
-                        manager.append_downloaded_chapter(&ch.id, title, &cleaned);
-                        result.success += 1;
-                    }
-                    _ => {
-                        manager.save_error_chapter(&ch.id, &ch.title);
-                        result.failed += 1;
+                    // 避免日志量过大导致 IO 拖慢进度刷新：默认每 10 章输出一次进度。
+                    if saved_in_job.is_multiple_of(10) || remaining == 0 {
+                        info!(
+                            target: "download",
+                            done = saved_in_job,
+                            remaining,
+                            "保存完成 {} 章 剩 {} 章",
+                            saved_in_job,
+                            remaining
+                        );
+                    } else {
+                        debug!(
+                            target: "download",
+                            done = saved_in_job,
+                            remaining,
+                            "保存完成 {} 章 剩 {} 章",
+                            saved_in_job,
+                            remaining
+                        );
                     }
                 }
-                if let Some(bar) = save_bar.as_ref() {
+
+                if let Some(pool) = seg_pool.as_ref() {
+                    pool.drain_progress(progress);
+                }
+
+                if let Some(bar) = download_bar.as_ref() {
                     bar.inc(1);
                 }
-                progress.inc_saved();
-                saved_in_job += 1;
-                let remaining = total_chapters.saturating_sub(saved_in_job);
-                info!(target: "download", done = saved_in_job, remaining, "保存完成 {} 章 剩 {} 章", saved_in_job, remaining);
+                progress.inc_group();
+
+                // 每组完成后立即落盘一次状态，保证断点续传。
+                manager.save_download_status();
+                let done_groups = (group_idx + 1) as u64;
+                let remaining_groups = total_groups.saturating_sub(done_groups);
+                info!(target: "download", done = done_groups, remaining = remaining_groups, "下载完成 {} 组 剩 {} 组", done_groups, remaining_groups);
             }
+        } else {
+            let (tx_jobs, rx_jobs) = channel::unbounded::<Vec<ChapterRef>>();
+            let (tx_res, rx_res) = channel::unbounded::<Result<(Vec<ChapterRef>, Value)>>();
 
-            if let Some(bar) = download_bar.as_ref() {
-                bar.inc(1);
+            for group in groups.iter() {
+                let _ = tx_jobs.send(group.to_vec());
             }
-            progress.inc_group();
+            drop(tx_jobs);
 
-            // 每组完成后立即落盘一次状态，保证断点续传。
-            manager.save_download_status();
-            let done_groups = (group_idx + 1) as u64;
-            let remaining_groups = total_groups.saturating_sub(done_groups);
-            info!(target: "download", done = done_groups, remaining = remaining_groups, "下载完成 {} 组 剩 {} 组", done_groups, remaining_groups);
+            for _ in 0..worker_count {
+                let rx = rx_jobs.clone();
+                let tx = tx_res.clone();
+                let cfg = self.config.clone();
+                let cancel = cancel.cloned();
+                std::thread::spawn(move || {
+                    let client = match FanqieClient::new() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            let _ = tx.send(Err(anyhow!(e.to_string())));
+                            return;
+                        }
+                    };
+                    for group in rx.iter() {
+                        if cancel
+                            .as_ref()
+                            .map(|c| c.load(Ordering::Relaxed))
+                            .unwrap_or(false)
+                        {
+                            let _ = tx.send(Err(anyhow!("用户停止下载")));
+                            return;
+                        }
+                        let ids = group
+                            .iter()
+                            .map(|c| c.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",");
+
+                        let epub_mode = cfg.novel_format == "epub";
+                        let mut decrypt_failures = 0usize;
+                        let value = loop {
+                            match fetch_with_cooldown_retry(&client, &ids, epub_mode) {
+                                Ok(v) => break Ok(v),
+                                Err(err) => {
+                                    let msg = err.to_string();
+                                    if msg.contains("Decryption failed") {
+                                        decrypt_failures += 1;
+                                        // 强制刷新 IID/会话（触发重新获取解密密钥等）。
+                                        let _ = client.force_refresh_session();
+                                        if decrypt_failures >= 3 {
+                                            break Err(anyhow!(
+                                                "内容解密失败连续 {} 次，停止下载",
+                                                decrypt_failures
+                                            ));
+                                        }
+                                        continue;
+                                    }
+                                    break Err(anyhow!(msg));
+                                }
+                            }
+                        };
+
+                        let _ = tx.send(value.map(|v| (group, v)));
+                    }
+                });
+            }
+            drop(tx_res);
+
+            let mut done_groups: u64 = 0;
+            for res in rx_res.iter() {
+                if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+                    return Err(anyhow!("用户停止下载"));
+                }
+
+                let (group, value) = match res {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // Treat as a fatal stop signal.
+                        return Err(e);
+                    }
+                };
+
+                let parsed = ContentParser::extract_api_content(&value, &self.config);
+                for ch in &group {
+                    match parsed.get(&ch.id) {
+                        Some((content, title)) if !content.is_empty() => {
+                            let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
+                                extract_body_fragment(content)
+                            } else {
+                                content.clone()
+                            };
+                            manager.save_chapter(&ch.id, title, &cleaned);
+                            manager.append_downloaded_chapter(&ch.id, title, &cleaned);
+                            result.success += 1;
+                            if let Some(pool) = seg_pool.as_mut() {
+                                pool.submit(&ch.id);
+                            }
+                        }
+                        _ => {
+                            manager.save_error_chapter(&ch.id, &ch.title);
+                            result.failed += 1;
+                        }
+                    }
+                    progress.inc_saved();
+                    saved_in_job += 1;
+                }
+
+                if let Some(pool) = seg_pool.as_ref() {
+                    pool.drain_progress(progress);
+                }
+
+                progress.inc_group();
+                done_groups += 1;
+                let remaining_groups = total_groups.saturating_sub(done_groups);
+                let remaining_chapters = total_chapters.saturating_sub(saved_in_job);
+                info!(
+                    target: "download",
+                    done = done_groups,
+                    remaining = remaining_groups,
+                    chapters_remaining = remaining_chapters,
+                    "下载完成 {} 组 剩 {} 组（剩余章节约 {}）",
+                    done_groups,
+                    remaining_groups,
+                    remaining_chapters
+                );
+
+                manager.save_download_status();
+            }
         }
 
-        if let Some(bar) = download_bar.take() {
-            bar.finish_and_clear();
-        }
-        if let Some(bar) = save_bar.take() {
-            bar.finish_and_clear();
-        }
+        // Keep CLI bars alive for finalize/audiobook to reuse.
+        let _ = download_bar.take();
+        let _ = save_bar.take();
 
         let elapsed = start.elapsed().as_secs_f32();
         info!(
@@ -555,12 +1255,20 @@ pub fn download_with_plan(
         &plan.book_id,
         &book_name,
         &mut manager,
+        &chosen_chapters,
         &pending,
+        Some(&plan._raw),
         &mut reporter,
         cancel_flag.as_ref(),
     )?;
 
-    finalize_from_manager(&mut manager, &chosen_chapters)
+    finalize_from_manager(
+        &mut manager,
+        &chosen_chapters,
+        Some(&plan._raw),
+        Some(&mut reporter),
+        cancel_flag.as_ref(),
+    )
 }
 
 pub(crate) fn init_manager_from_plan(config: &Config, plan: &DownloadPlan) -> Result<BookManager> {
@@ -609,163 +1317,258 @@ pub(crate) fn make_reporter(
 ) -> ProgressReporter {
     let total = chosen.len();
     let group_total = pending.len().div_ceil(25);
+
+    let use_cli_bars = progress.is_none()
+        && config.use_official_api
+        && config.max_workers.max(1) <= 1
+        && !pending.is_empty();
+
+    let cli = if use_cli_bars {
+        let mp = MultiProgress::with_draw_target(ProgressDrawTarget::stderr());
+        let style = ProgressStyle::with_template(
+            "{prefix} [{elapsed_precise}] {wide_bar} {pos}/{len} ({eta})",
+        )
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("##-");
+
+        let download_bar = mp.add(ProgressBar::new(group_total as u64));
+        download_bar.set_style(style.clone());
+        download_bar.set_prefix("章节下载");
+
+        let save_bar = mp.add(ProgressBar::new(pending.len() as u64));
+        save_bar.set_style(style);
+        save_bar.set_prefix("正文保存");
+
+        Some(CliBars {
+            mp,
+            download_bar,
+            save_bar,
+        })
+    } else {
+        None
+    };
+
     let mut reporter = ProgressReporter {
         snapshot: ProgressSnapshot {
             group_done: 0,
             group_total,
             saved_chapters: total.saturating_sub(pending.len()),
             chapter_total: total,
+            save_phase: SavePhase::TextSave,
             comment_fetch: 0,
-            comment_total: if config.enable_segment_comments {
-                total
-            } else {
-                0
-            },
+            comment_total: if segment_enabled(config) { total } else { 0 },
             comment_saved: 0,
         },
         cb: progress,
+        cli,
     };
     reporter.emit();
     reporter
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn download_chapters_into_manager(
     config: &Config,
     book_id: &str,
     book_name: &str,
     manager: &mut BookManager,
-    chapters: &[ChapterRef],
+    chosen_chapters: &[ChapterRef],
+    pending_chapters: &[ChapterRef],
+    directory_raw: Option<&Value>,
     reporter: &mut ProgressReporter,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<DownloadResult> {
-    if chapters.is_empty() {
-        info!("没有需要下载的章节，跳过下载阶段");
+    // 初始化段评进度：以磁盘缓存为准，避免断点续传时“假满”。
+    if segment_enabled(config) && reporter.snapshot.comment_total > 0 {
+        let seg_dir = manager.book_folder().join("segment_comments");
+        let _ = std::fs::create_dir_all(&seg_dir);
+        let cached = count_segment_comment_cache_files(&seg_dir);
+        reporter.snapshot.comment_fetch = cached.min(reporter.snapshot.comment_total);
+        reporter.snapshot.comment_saved = reporter.snapshot.comment_fetch;
+        reporter.emit();
+    }
+
+    if pending_chapters.is_empty() {
+        info!("没有需要下载的章节，跳过下载阶段（断点续传：仅补段评缓存）");
+    }
+
+    debug!(target: "download", pending = pending_chapters.len(), total = reporter.snapshot.chapter_total, "待下载章节统计");
+
+    let item_versions = directory_raw
+        .map(extract_item_version_map)
+        .unwrap_or_default();
+    let status_dir = manager.book_folder().to_path_buf();
+    let mut seg_pool = SegmentCommentPool::new(
+        config.clone(),
+        book_id.to_string(),
+        status_dir,
+        item_versions,
+        cancel.cloned(),
+    );
+
+    // 段评与正文同时开始：先为缺失缓存的章节提交段评抓取任务（包含断点续传场景）。
+    if let Some(pool) = seg_pool.as_ref() {
+        let seg_dir = manager.book_folder().join("segment_comments");
+        for ch in chosen_chapters {
+            let out_path = seg_dir.join(format!("{}.json", ch.id));
+            if !out_path.exists() {
+                pool.submit(&ch.id);
+            }
+        }
+    }
+
+    if pending_chapters.is_empty() {
+        if let Some(pool) = seg_pool.as_mut() {
+            pool.shutdown(reporter);
+        }
         reporter.snapshot.group_done = reporter.snapshot.group_total;
         reporter.snapshot.saved_chapters = reporter.snapshot.chapter_total;
-        if reporter.snapshot.comment_total > 0 {
-            reporter.snapshot.comment_fetch = reporter.snapshot.comment_total;
-            reporter.snapshot.comment_saved = reporter.snapshot.comment_total;
-        }
         reporter.emit();
         return Ok(DownloadResult::default());
     }
 
-    debug!(target: "download", pending = chapters.len(), total = reporter.snapshot.chapter_total, "待下载章节统计");
-
     // 官方 API 模式：速度/冷却基本固定，网络参数意义不大，保留原逻辑。
-    if config.use_official_api {
+    let result = if config.use_official_api {
         let client = FanqieClient::new().context("init FanqieClient")?;
         let downloader = ChapterDownloader::new(book_id, config.clone(), client);
-        return downloader.download_book(manager, book_name, chapters, reporter, cancel);
-    }
-
-    // 第三方 API 模式：地址池 + 预热剔除 + 并发抓取
-    if config.api_endpoints.is_empty() {
-        return Err(anyhow!("use_official_api=false 时，api_endpoints 不能为空"));
-    }
-
-    let probe_chapter_id = chapters.first().map(|c| c.id.as_str()).unwrap_or("");
-    if probe_chapter_id.is_empty() {
-        return Err(anyhow!("章节列表为空，无法预热第三方 API"));
-    }
-
-    let mut valid = validate_endpoints(config, probe_chapter_id);
-    if valid.is_empty() {
-        // 防御：避免探测逻辑误伤导致无法启动（后续请求阶段仍会自动剔除无效 endpoint）
-        valid = config
-            .api_endpoints
-            .iter()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-    if valid.is_empty() {
-        return Err(anyhow!("第三方 API 地址池为空"));
-    }
-
-    info!(target: "download", endpoints = valid.len(), "第三方 API 地址池预热完成");
-
-    let endpoints = Arc::new(std::sync::Mutex::new(valid));
-    let picker = Arc::new(AtomicUsize::new(0));
-    let worker_count = config.max_workers.max(1);
-    let epub_mode = config.novel_format.eq_ignore_ascii_case("epub");
-
-    let (tx_jobs, rx_jobs) = channel::unbounded::<Vec<ChapterRef>>();
-    let (tx_res, rx_res) = channel::unbounded::<Result<(Vec<ChapterRef>, Value)>>();
-
-    for group in chapters.chunks(25) {
-        tx_jobs.send(group.to_vec()).ok();
-    }
-    drop(tx_jobs);
-
-    for _ in 0..worker_count {
-        let rx = rx_jobs.clone();
-        let tx = tx_res.clone();
-        let cfg = config.clone();
-        let endpoints = endpoints.clone();
-        let picker = picker.clone();
-        let cancel = cancel.cloned();
-        std::thread::spawn(move || {
-            for group in rx.iter() {
-                if cancel
-                    .as_ref()
-                    .map(|c| c.load(Ordering::Relaxed))
-                    .unwrap_or(false)
-                {
-                    let _ = tx.send(Err(anyhow!("用户停止下载")));
-                    return;
-                }
-                let value = fetch_group_third_party(&cfg, &endpoints, &picker, &group, epub_mode);
-                let _ = tx.send(value.map(|v| (group, v)));
-            }
-        });
-    }
-    drop(tx_res);
-
-    let mut result = DownloadResult::default();
-    for res in rx_res.iter() {
-        if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
-            return Err(anyhow!("用户停止下载"));
+        downloader.download_book(
+            manager,
+            book_name,
+            pending_chapters,
+            reporter,
+            cancel,
+            seg_pool.as_mut(),
+        )
+    } else {
+        // 第三方 API 模式：地址池 + 预热剔除 + 并发抓取
+        if config.api_endpoints.is_empty() {
+            return Err(anyhow!("use_official_api=false 时，api_endpoints 不能为空"));
         }
 
-        let (group, value) = match res {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        };
-
-        let parsed = ContentParser::extract_api_content(&value, config);
-        for ch in &group {
-            match parsed.get(&ch.id) {
-                Some((content, title)) if !content.is_empty() => {
-                    let cleaned = if epub_mode {
-                        extract_body_fragment(content)
-                    } else {
-                        content.clone()
-                    };
-                    manager.save_chapter(&ch.id, title, &cleaned);
-                    manager.append_downloaded_chapter(&ch.id, title, &cleaned);
-                    result.success += 1;
-                }
-                _ => {
-                    manager.save_error_chapter(&ch.id, &ch.title);
-                    result.failed += 1;
-                }
-            }
-            reporter.inc_saved();
+        let probe_chapter_id = pending_chapters
+            .first()
+            .map(|c| c.id.as_str())
+            .unwrap_or("");
+        if probe_chapter_id.is_empty() {
+            return Err(anyhow!("章节列表为空，无法预热第三方 API"));
         }
-        reporter.inc_group();
 
-        // 每组完成后立即落盘一次状态，保证断点续传。
-        manager.save_download_status();
+        let mut valid = validate_endpoints(config, probe_chapter_id);
+        if valid.is_empty() {
+            // 防御：避免探测逻辑误伤导致无法启动（后续请求阶段仍会自动剔除无效 endpoint）
+            valid = config
+                .api_endpoints
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if valid.is_empty() {
+            return Err(anyhow!("第三方 API 地址池为空"));
+        }
+
+        info!(target: "download", endpoints = valid.len(), "第三方 API 地址池预热完成");
+
+        let endpoints = Arc::new(std::sync::Mutex::new(valid));
+        let picker = Arc::new(AtomicUsize::new(0));
+        let worker_count = config.max_workers.max(1);
+        let epub_mode = config.novel_format.eq_ignore_ascii_case("epub");
+
+        let (tx_jobs, rx_jobs) = channel::unbounded::<Vec<ChapterRef>>();
+        let (tx_res, rx_res) = channel::unbounded::<Result<(Vec<ChapterRef>, Value)>>();
+
+        for group in pending_chapters.chunks(25) {
+            tx_jobs.send(group.to_vec()).ok();
+        }
+        drop(tx_jobs);
+
+        for _ in 0..worker_count {
+            let rx = rx_jobs.clone();
+            let tx = tx_res.clone();
+            let cfg = config.clone();
+            let endpoints = endpoints.clone();
+            let picker = picker.clone();
+            let cancel = cancel.cloned();
+            std::thread::spawn(move || {
+                for group in rx.iter() {
+                    if cancel
+                        .as_ref()
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(false)
+                    {
+                        let _ = tx.send(Err(anyhow!("用户停止下载")));
+                        return;
+                    }
+                    let value =
+                        fetch_group_third_party(&cfg, &endpoints, &picker, &group, epub_mode);
+                    let _ = tx.send(value.map(|v| (group, v)));
+                }
+            });
+        }
+        drop(tx_res);
+
+        let mut result = DownloadResult::default();
+        for res in rx_res.iter() {
+            if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+                return Err(anyhow!("用户停止下载"));
+            }
+
+            let (group, value) = res?;
+
+            let parsed = ContentParser::extract_api_content(&value, config);
+            for ch in &group {
+                match parsed.get(&ch.id) {
+                    Some((content, title)) if !content.is_empty() => {
+                        let cleaned = if epub_mode {
+                            extract_body_fragment(content)
+                        } else {
+                            content.clone()
+                        };
+                        manager.save_chapter(&ch.id, title, &cleaned);
+                        manager.append_downloaded_chapter(&ch.id, title, &cleaned);
+                        result.success += 1;
+                        if let Some(pool) = seg_pool.as_ref() {
+                            pool.submit(&ch.id);
+                        }
+                    }
+                    _ => {
+                        manager.save_error_chapter(&ch.id, &ch.title);
+                        result.failed += 1;
+                    }
+                }
+                reporter.inc_saved();
+            }
+            reporter.inc_group();
+            if let Some(pool) = seg_pool.as_ref() {
+                pool.drain_progress(reporter);
+            }
+
+            // 每组完成后立即落盘一次状态，保证断点续传。
+            manager.save_download_status();
+        }
+
+        info!(
+            target: "download",
+            "第三方下载完成：{} ({} 章)",
+            book_name,
+            pending_chapters.len()
+        );
+        Ok(result)
+    };
+
+    if let Some(pool) = seg_pool.as_mut() {
+        pool.shutdown(reporter);
     }
 
-    info!(target: "download", "第三方下载完成：{} ({} 章)", book_name, chapters.len());
-    Ok(result)
+    result
 }
 
 pub(crate) fn finalize_from_manager(
     manager: &mut BookManager,
     chosen: &[ChapterRef],
+    directory_raw: Option<&Value>,
+    mut reporter: Option<&mut ProgressReporter>,
+    cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<()> {
     debug!(target: "download", "保存下载状态");
     manager.save_download_status();
@@ -782,16 +1585,35 @@ pub(crate) fn finalize_from_manager(
     }
 
     let result_code = 0;
-    let cleanup_deferred = finalize_utils::run_finalize(manager, &chapter_values, result_code);
+    let reporter_ref = reporter.as_deref_mut();
+    let finalize_ok = finalize_utils::run_finalize(
+        manager,
+        &chapter_values,
+        result_code,
+        directory_raw,
+        reporter_ref,
+        cancel,
+    );
     manager.save_download_status();
-    if cleanup_deferred {
-        finalize_utils::perform_deferred_cleanup(manager);
+
+    let finished = manager.finished.unwrap_or(manager.end);
+    let full_book_range = manager
+        .chapter_count
+        .map(|n| n == chosen.len())
+        .unwrap_or(false);
+
+    if finalize_ok
+        && manager.config.auto_clear_dump
+        && finished
+        && full_book_range
+        && chapter_values.len() == chosen.len()
+        && let Err(e) = manager.delete_status_folder()
+    {
+        error!(target: "book_manager", error = ?e, "删除状态目录失败");
     }
 
-    if manager.end && chapter_values.len() == chosen.len() {
-        if let Err(e) = manager.delete_status_folder() {
-            error!(target: "book_manager", error = ?e, "删除状态目录失败");
-        }
+    if let Some(r) = reporter {
+        r.finish_cli_bars();
     }
 
     Ok(())
@@ -924,12 +1746,12 @@ fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<Chap
 
 fn extract_body_fragment(input: &str) -> String {
     let lower = input.to_lowercase();
-    if let Some(body_idx) = lower.find("<body") {
-        if let Some(open_end) = lower[body_idx..].find('>') {
-            let start = body_idx + open_end + 1;
-            if let Some(close_idx) = lower[start..].find("</body>") {
-                return input[start..start + close_idx].to_string();
-            }
+    if let Some(body_idx) = lower.find("<body")
+        && let Some(open_end) = lower[body_idx..].find('>')
+    {
+        let start = body_idx + open_end + 1;
+        if let Some(close_idx) = lower[start..].find("</body>") {
+            return input[start..start + close_idx].to_string();
         }
     }
     input.to_string()

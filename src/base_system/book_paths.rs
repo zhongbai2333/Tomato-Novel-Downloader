@@ -1,3 +1,5 @@
+//! 本地路径规划与命名。
+
 use std::path::PathBuf;
 
 use crate::base_system::context::{Config, safe_fs_name};

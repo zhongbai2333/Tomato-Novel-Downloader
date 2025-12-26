@@ -1,3 +1,5 @@
+//! 缓存与临时文件清理。
+
 use std::fs;
 use std::io;
 use std::path::Path;

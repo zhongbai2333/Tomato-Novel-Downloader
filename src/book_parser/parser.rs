@@ -1,3 +1,5 @@
+//! 章节内容解析与文本处理。
+
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;

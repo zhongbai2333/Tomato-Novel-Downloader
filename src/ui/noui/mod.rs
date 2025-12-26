@@ -1,3 +1,7 @@
+//! 无 UI（旧 CLI）交互入口。
+//!
+//! 使用标准输入输出进行交互，并在进入前尽量恢复终端模式。
+
 use std::fs;
 use std::io::{self, BufRead, Write};
 
@@ -47,7 +51,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
 
     loop {
         let prompt = format!(
-            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / u更新 / q退出，默认保存到 {}）：",
+            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / u更新 / U程序更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
         );
         let input = read_line(&prompt)?;
@@ -72,6 +76,14 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
                     Err(err) => println!("下载失败: {}\n", err),
                 }
             }
+            continue;
+        }
+
+        if text == "U" {
+            let _ = crate::base_system::self_update::check_for_updates(
+                env!("CARGO_PKG_VERSION"),
+                false,
+            );
             continue;
         }
 

@@ -1,3 +1,7 @@
+//! 无 UI 配置编辑器。
+//!
+//! 提供交互式菜单修改 `config.yml`。
+
 use std::fs;
 use std::path::Path;
 
@@ -20,7 +24,6 @@ enum ConfigField {
     SavePath,
     NovelFormat,
     BulkFiles,
-    GracefulExit,
     AutoClearDump,
     EnableAudiobook,
     AudiobookVoice,
@@ -35,7 +38,6 @@ enum ConfigField {
     MinWaitTime,
     MaxWaitTime,
     MinConnectTimeout,
-    ForceExitTimeout,
     UseOfficialApi,
     ApiEndpoints,
     EnableSegmentComments,
@@ -52,7 +54,6 @@ enum ConfigField {
     KeepHeicOriginal,
     MediaLimitPerChapter,
     MediaMaxDimensionPx,
-    MediaTotalLimitMb,
     FirstLineIndentEm,
     OldCli,
 }
@@ -80,11 +81,6 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
         ConfigOption {
             name: "是否以散装形式保存小说",
             field: ConfigField::BulkFiles,
-            ty: ConfigValueType::Bool,
-        },
-        ConfigOption {
-            name: "优雅退出模式",
-            field: ConfigField::GracefulExit,
             ty: ConfigValueType::Bool,
         },
         ConfigOption {
@@ -156,11 +152,6 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             name: "最小连接超时时间",
             field: ConfigField::MinConnectTimeout,
             ty: ConfigValueType::Float,
-        },
-        ConfigOption {
-            name: "强制退出等待时间(秒)",
-            field: ConfigField::ForceExitTimeout,
-            ty: ConfigValueType::Int,
         },
         ConfigOption {
             name: "是否使用官方API",
@@ -243,11 +234,6 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             ty: ConfigValueType::Int,
         },
         ConfigOption {
-            name: "会话媒体总下载上限(MB,0不限制)",
-            field: ConfigField::MediaTotalLimitMb,
-            ty: ConfigValueType::Int,
-        },
-        ConfigOption {
             name: "EPUB首行缩进(em)",
             field: ConfigField::FirstLineIndentEm,
             ty: ConfigValueType::Float,
@@ -322,7 +308,6 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::SavePath => config.save_path.clone(),
         ConfigField::NovelFormat => config.novel_format.clone(),
         ConfigField::BulkFiles => config.bulk_files.to_string(),
-        ConfigField::GracefulExit => config.graceful_exit.to_string(),
         ConfigField::AutoClearDump => config.auto_clear_dump.to_string(),
         ConfigField::EnableAudiobook => config.enable_audiobook.to_string(),
         ConfigField::AudiobookVoice => config.audiobook_voice.clone(),
@@ -337,7 +322,6 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::MinWaitTime => config.min_wait_time.to_string(),
         ConfigField::MaxWaitTime => config.max_wait_time.to_string(),
         ConfigField::MinConnectTimeout => config.min_connect_timeout.to_string(),
-        ConfigField::ForceExitTimeout => config.force_exit_timeout.to_string(),
         ConfigField::UseOfficialApi => config.use_official_api.to_string(),
         ConfigField::ApiEndpoints => config.api_endpoints.join(","),
         ConfigField::EnableSegmentComments => config.enable_segment_comments.to_string(),
@@ -354,7 +338,6 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::KeepHeicOriginal => config.keep_heic_original.to_string(),
         ConfigField::MediaLimitPerChapter => config.media_limit_per_chapter.to_string(),
         ConfigField::MediaMaxDimensionPx => config.media_max_dimension_px.to_string(),
-        ConfigField::MediaTotalLimitMb => config.media_total_limit_mb.to_string(),
         ConfigField::FirstLineIndentEm => config.first_line_indent_em.to_string(),
         ConfigField::OldCli => config.old_cli.to_string(),
     }
@@ -400,7 +383,6 @@ fn apply_config_edit(config: &mut Config, opt: ConfigOption, text: &str) -> Resu
 fn set_bool(config: &mut Config, field: ConfigField, v: bool) -> Result<()> {
     match field {
         ConfigField::BulkFiles => config.bulk_files = v,
-        ConfigField::GracefulExit => config.graceful_exit = v,
         ConfigField::AutoClearDump => config.auto_clear_dump = v,
         ConfigField::EnableAudiobook => config.enable_audiobook = v,
         ConfigField::UseOfficialApi => config.use_official_api = v,
@@ -463,12 +445,6 @@ fn set_int(config: &mut Config, field: ConfigField, v: i64) -> Result<()> {
             }
             config.max_wait_time = v;
         }
-        ConfigField::ForceExitTimeout => {
-            if v < 0 {
-                return Err(anyhow!("强制退出等待时间不能为负"));
-            }
-            config.force_exit_timeout = v as u64;
-        }
         ConfigField::AudiobookConcurrency => {
             if v <= 0 {
                 return Err(anyhow!("有声小说并发数必须大于 0"));
@@ -494,7 +470,7 @@ fn set_int(config: &mut Config, field: ConfigField, v: i64) -> Result<()> {
             config.media_download_workers = v as usize;
         }
         ConfigField::JpegQuality => {
-            if v < 0 || v > 100 {
+            if !(0..=100).contains(&v) {
                 return Err(anyhow!("JPEG质量需在 0-100 之间"));
             }
             config.jpeg_quality = v as u8;
@@ -510,12 +486,6 @@ fn set_int(config: &mut Config, field: ConfigField, v: i64) -> Result<()> {
                 return Err(anyhow!("图片最长边像素上限不能为负"));
             }
             config.media_max_dimension_px = v as u32;
-        }
-        ConfigField::MediaTotalLimitMb => {
-            if v < 0 {
-                return Err(anyhow!("媒体总下载上限不能为负"));
-            }
-            config.media_total_limit_mb = v as u32;
         }
         _ => return Err(anyhow!("该字段不是 int")),
     }
