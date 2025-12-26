@@ -59,10 +59,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if config.old_cli {
-        ui::noui::run(&mut config)
-    } else {
-        ui::tui::run(config)
+    loop {
+        if config.old_cli {
+            info!(target: "startup", "当前版本: v{}", VERSION);
+            return ui::noui::run(&mut config);
+        }
+
+        match ui::tui::run(config)? {
+            ui::tui::TuiExit::Quit => return Ok(()),
+            ui::tui::TuiExit::SwitchToOldCli => {
+                // 模拟“重启”：重新从磁盘加载配置，然后进入 noui
+                config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
+                config.old_cli = true;
+            }
+        }
     }
 }
 

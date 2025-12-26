@@ -1,5 +1,10 @@
 use super::*;
 
+use std::io::Write;
+use std::path::Path;
+
+use crate::base_system::config::{ConfigSpec, write_with_comments};
+
 pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Paste(s) => {
@@ -222,6 +227,25 @@ fn select_prev_menu(app: &mut App) {
 
 pub(super) fn process_input(app: &mut App) -> Result<()> {
     let text = app.input.trim();
+
+    if text.eq_ignore_ascii_case("ooo") {
+        app.config.old_cli = true;
+        let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
+        if let Err(err) = write_with_comments(&app.config, path) {
+            app.status = format!("切换失败: {err}");
+            return Ok(());
+        }
+
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x07");
+        let _ = out.flush();
+
+        app.status = "已切换到旧版CLI(读屏友好)，请手动重启程序。".to_string();
+        app.input.clear();
+        app.should_quit = true;
+        return Ok(());
+    }
+
     if let Some(pending) = app.pending_download.clone() {
         match parse_range_input(text, pending.plan.chapters.len()) {
             Ok(range) => {

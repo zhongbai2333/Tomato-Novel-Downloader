@@ -4,6 +4,11 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
+                let editing_bool = app
+                    .cfg_categories
+                    .get(cat_idx)
+                    .and_then(|c| c.entries.get(entry_idx))
+                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
                 match key.code {
                     KeyCode::Esc => {
                         app.cfg_editing = None;
@@ -11,6 +16,11 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
                         app.status = "取消修改".to_string();
                     }
                     KeyCode::Enter => {
+                        if editing_bool {
+                            let sel = app.cfg_bool_state.selected().unwrap_or(0);
+                            app.cfg_edit_buffer =
+                                if sel == 0 { "true" } else { "false" }.to_string();
+                        }
                         if let Err(err) = super::apply_cfg_edit(app, cat_idx, entry_idx) {
                             app.status = format!("保存失败: {err}");
                         } else {
@@ -18,10 +28,17 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
                             app.cfg_edit_buffer.clear();
                         }
                     }
-                    KeyCode::Backspace => {
+                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
+                        if editing_bool =>
+                    {
+                        let cur = app.cfg_bool_state.selected().unwrap_or(0);
+                        let next = if cur == 0 { 1 } else { 0 };
+                        app.cfg_bool_state.select(Some(next));
+                    }
+                    KeyCode::Backspace if !editing_bool => {
                         app.cfg_edit_buffer.pop();
                     }
-                    KeyCode::Char(c) => {
+                    KeyCode::Char(c) if !editing_bool => {
                         app.cfg_edit_buffer.push(c);
                     }
                     _ => {}
@@ -96,6 +113,37 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
 
     match me.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            if let Some((cat_idx, entry_idx)) = app.cfg_editing {
+                let editing_bool = app
+                    .cfg_categories
+                    .get(cat_idx)
+                    .and_then(|c| c.entries.get(entry_idx))
+                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+
+                if editing_bool {
+                    if let Some(bool_area) = app.last_config_bool_area {
+                        if pos_in(bool_area, me.column, me.row) {
+                            let idx = me.row.saturating_sub(bool_area.y + 1) as usize;
+                            if idx < 2 {
+                                app.cfg_bool_state.select(Some(idx));
+                                app.cfg_edit_buffer =
+                                    if idx == 0 { "true" } else { "false" }.to_string();
+                                if let Err(err) = super::apply_cfg_edit(app, cat_idx, entry_idx) {
+                                    app.status = format!("保存失败: {err}");
+                                } else {
+                                    app.cfg_editing = None;
+                                    app.cfg_edit_buffer.clear();
+                                }
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+
+                // 编辑中时，点击其他区域不触发选择/跳转
+                return Ok(());
+            }
+
             if pos_in(cat_area, me.column, me.row) {
                 if !app.cfg_categories.is_empty() {
                     let idx = me.row.saturating_sub(cat_area.y + 1) as usize;
@@ -134,6 +182,28 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
         }
         MouseEventKind::Moved => {
+            if let Some((cat_idx, entry_idx)) = app.cfg_editing {
+                let editing_bool = app
+                    .cfg_categories
+                    .get(cat_idx)
+                    .and_then(|c| c.entries.get(entry_idx))
+                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+
+                if editing_bool {
+                    if let Some(bool_area) = app.last_config_bool_area {
+                        if pos_in(bool_area, me.column, me.row) {
+                            let idx = me.row.saturating_sub(bool_area.y + 1) as usize;
+                            if idx < 2 {
+                                app.cfg_bool_state.select(Some(idx));
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+
+                return Ok(());
+            }
+
             if pos_in(cat_area, me.column, me.row) {
                 if !app.cfg_categories.is_empty() {
                     let idx = me.row.saturating_sub(cat_area.y + 1) as usize;
@@ -256,10 +326,12 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
                 if let Some((cat_i, entry_i)) = app.cfg_editing {
                     if Some(cat_i) == app.cfg_cat_state.selected() && entry_i == idx {
                         spans.push(Span::raw("  [编辑中] "));
-                        spans.push(Span::styled(
-                            app.cfg_edit_buffer.clone(),
-                            Style::default().fg(Color::Yellow),
-                        ));
+                        if !super::cfg_field_is_bool(entry.field) {
+                            spans.push(Span::styled(
+                                app.cfg_edit_buffer.clone(),
+                                Style::default().fg(Color::Yellow),
+                            ));
+                        }
                     }
                 }
                 ListItem::new(Line::from(spans))
@@ -305,19 +377,62 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_stateful_widget(btn_list, footer[0], &mut app.cfg_button_state);
 
     let mut msg_lines: Vec<Line> = vec![Line::from(app.status.clone())];
-    if app.cfg_editing.is_some() {
-        msg_lines.push(Line::from("编辑中: 回车保存，Esc 取消。"));
-    } else {
+
+    let editing_bool = app
+        .cfg_editing
+        .and_then(|(cat_idx, entry_idx)| {
+            app.cfg_categories
+                .get(cat_idx)
+                .and_then(|c| c.entries.get(entry_idx))
+        })
+        .is_some_and(|e| super::cfg_field_is_bool(e.field));
+
+    if app.cfg_editing.is_some() && editing_bool {
+        let status_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(5), Constraint::Min(3)])
+            .split(footer[1]);
+
+        let items = vec![ListItem::new("True"), ListItem::new("False")];
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("选择值(方向键/鼠标，Enter保存)"),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::LightCyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> ");
+        app.last_config_bool_area = Some(status_layout[0]);
+        frame.render_stateful_widget(list, status_layout[0], &mut app.cfg_bool_state);
+
         msg_lines.push(Line::from(
-            "左右/Tab 切换分类，↑↓ 选择，Enter 编辑，鼠标点击或按钮返回。",
+            "编辑中: 方向键选择 True/False，Enter 保存，Esc 取消。",
         ));
+        let messages = Paragraph::new(msg_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("状态"));
+        frame.render_widget(messages, status_layout[1]);
+    } else {
+        app.last_config_bool_area = None;
+
+        if app.cfg_editing.is_some() {
+            msg_lines.push(Line::from("编辑中: 回车保存，Esc 取消。"));
+        } else {
+            msg_lines.push(Line::from(
+                "左右/Tab 切换分类，↑↓ 选择，Enter 编辑，鼠标点击或按钮返回。",
+            ));
+        }
+
+        let messages = Paragraph::new(msg_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("状态"));
+
+        frame.render_widget(messages, footer[1]);
     }
-
-    let messages = Paragraph::new(msg_lines)
-        .wrap(Wrap { trim: true })
-        .block(Block::default().borders(Borders::ALL).title("状态"));
-
-    frame.render_widget(messages, footer[1]);
 
     super::render_log_box(frame, log_area, app);
 }

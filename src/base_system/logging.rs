@@ -4,6 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::{io, panic, thread, time::Duration};
 
+use crossterm::event::DisableMouseCapture;
+use crossterm::execute;
+use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
 use ctrlc;
 use time::OffsetDateTime;
 use time::macros::format_description;
@@ -224,6 +227,12 @@ impl LogRuntime {
     fn install_signal_handler(self: &Arc<Self>) {
         let runtime = Arc::clone(self);
         let _ = ctrlc::set_handler(move || {
+            // Best-effort console restore: if the app is in TUI raw mode / alt screen,
+            // leaving it as-is will make subsequent PowerShell input appear "stuck".
+            let _ = disable_raw_mode();
+            let mut out = io::stdout();
+            let _ = execute!(out, DisableMouseCapture, LeaveAlternateScreen);
+
             runtime.safe_exit();
             std::process::exit(0);
         });
