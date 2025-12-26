@@ -69,9 +69,7 @@ def _finalize_txt(manager, chapters: list[dict], output_file: Path):
 
 # -------- EPUB 主流程 --------
 def _finalize_epub(manager, chapters: list[dict], output_file: Path):
-    publisher = None
-    if isinstance(manager.tags, str) and manager.tags.strip():
-        publisher = ", ".join([t for t in manager.tags.split("|") if t])
+    publisher = None  # 不使用标签作为出版社，保持为空或使用默认值
     epub = EpubGenerator(
         manager.book_id or manager.book_name or "id",
         manager.book_name or "",
@@ -79,6 +77,7 @@ def _finalize_epub(manager, chapters: list[dict], output_file: Path):
         manager.author or None,
         manager.description or None,
         publisher,
+        manager.tags,  # 将标签传递给EPUB生成器，添加到DC.subject元数据
     )
     # 早期兜底：如果没有任何可用章节（例如用户中断在早期），也生成一个仅包含“介绍页”的最小 EPUB，避免 Document is empty
     safe_minimal_mode = False
