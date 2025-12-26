@@ -14,6 +14,7 @@ class EpubGenerator:
         author=None,
         description=None,
         publisher=None,
+        tags=None,
     ):
         """
         初始化EPUB书籍对象
@@ -21,7 +22,9 @@ class EpubGenerator:
         :param title: 书籍标题
         :param language: 语言代码（默认'en'）
         :param author: 作者（可选）
+        :param description: 书籍描述（可选）
         :param publisher: 出版社（可选）
+        :param tags: 书籍标签列表或字符串（可选）
         """
         self.book = epub.EpubBook()
 
@@ -73,6 +76,20 @@ class EpubGenerator:
             self.book.add_metadata("DC", "publisher", publisher)
         if description:
             self.book.add_metadata("DC", "description", description)
+        
+        # 添加标签到DC.subject元数据
+        if tags:
+            # 处理标签格式：如果是字符串则分割，否则直接使用列表
+            if isinstance(tags, str):
+                tag_list = [t.strip() for t in tags.split("|") if t.strip()]
+            elif isinstance(tags, list):
+                tag_list = [str(t).strip() for t in tags if str(t).strip()]
+            else:
+                tag_list = []
+            
+            # 为每个标签添加DC.subject元数据
+            for tag in tag_list:
+                self.book.add_metadata("DC", "subject", tag)
 
         self.chapters = []
         self._file_counter = 0  # 用于生成自动文件名
