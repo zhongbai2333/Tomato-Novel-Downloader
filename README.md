@@ -2,6 +2,8 @@
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
+目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了~~（虽说原本的Python版本也没几行是原项目的了）~~，Fork网络也是由于我懒得更换仓库
+
 我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
 
 本项目~~完全~~基于第三方API，~~未~~使用官方API
@@ -58,7 +60,7 @@
     国内用户可使用：
 
     ```sh
-    RAW_URL="https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh"; API="https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL"; DL_URL="$(curl -fsSL "$API" | sed -n 's/.*\"downUrl\":\"\([^\"]*\)\".*/\1/p')"; DL_URL="${DL_URL//\\//}"; [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; bash <(curl -fsSL "$DL_URL")
+    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
 
 3. 电脑端该如何运行？
@@ -74,7 +76,7 @@
     国内用户可使用：
 
     ```sh
-    RAW_URL="https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh"; API="https://api.cenguigui.cn/api/github/?type=json&url=$RAW_URL"; DL_URL="$(curl -fsSL "$API" | sed -n 's/.*\"downUrl\":\"\([^\"]*\)\".*/\1/p')"; DL_URL="${DL_URL//\\//}"; [ -z "$DL_URL" ] && DL_URL="$RAW_URL"; bash <(curl -fsSL "$DL_URL")
+    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
 
 4. 小说id是什么？在哪里获取？

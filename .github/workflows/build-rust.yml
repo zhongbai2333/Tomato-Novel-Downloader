@@ -1,30 +1,23 @@
-name: PR 标签触发多平台构建
+name: Build Rust Downloader
 
 on:
-  pull_request_target:
-    types: [labeled]
+  push:
+    branches: [ "main", "dev" ]
+    tags: [ "v*" ]
+    paths:
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-rust.yml"
+  workflow_dispatch:
 
 jobs:
-  cancel_if_unrelated:
-    runs-on: ubuntu-latest
-    # 只保留 run-build，其它标签添加则取消
-    if: github.event.label.name != 'run-build'
-    steps:
-      - name: 非目标标签，取消本次 Workflow
-        uses: styfle/cancel-workflow-action@0.9.1
-        with:
-          access_token: ${{ secrets.GITHUB_TOKEN }}
-
   build-linux:
-    if: github.event.label.name == 'run-build'
+    name: Build (linux-amd64)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR 源分支代码
+      - name: Checkout A Repository
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
@@ -80,26 +73,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          VERSION="sha-${{ github.event.pull_request.head.sha }}"
-          out="TomatoNovelDownloader-Linux_amd64-${VERSION}"
+          out="TomatoNovelDownloader-Linux_amd64-${GITHUB_REF_NAME}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
-      - name: Upload Linux Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist/TomatoNovelDownloader-*
+          path: dist
 
   build-linux-arm64:
-    if: github.event.label.name == 'run-build'
+    name: Build (linux-arm64)
     runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout PR 源分支代码
+      - name: Checkout A Repository
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
@@ -155,26 +143,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          VERSION="sha-${{ github.event.pull_request.head.sha }}"
-          out="TomatoNovelDownloader-Linux_arm64-${VERSION}"
+          out="TomatoNovelDownloader-Linux_arm64-${GITHUB_REF_NAME}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
-      - name: Upload Linux ARM64 Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-build
-          path: dist/TomatoNovelDownloader-*
+          path: dist
 
   build-windows:
-    if: github.event.label.name == 'run-build'
+    name: Build (windows)
     runs-on: windows-latest
     steps:
-      - name: Checkout PR 源分支代码
+      - name: Checkout A Repository
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
@@ -226,29 +209,25 @@ jobs:
         run: cargo build --release
 
       - name: Bundle artifacts
-        shell: powershell
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $version = "sha-${{ github.event.pull_request.head.sha }}"
-          $out = "TomatoNovelDownloader-Win64-$version.exe"
-          Copy-Item -Path target\release\tomato-novel-downloader.exe -Destination (Join-Path dist $out) -Force
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Win64-${GITHUB_REF_NAME}.exe"
+          cp target/release/tomato-novel-downloader.exe "dist/${out}"
 
-      - name: Upload Windows Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist\TomatoNovelDownloader-*.exe
+          path: dist
 
   build-macos:
-    if: github.event.label.name == 'run-build'
+    name: Build (macos-arm64)
     runs-on: macos-latest
     steps:
-      - name: Checkout PR 源分支代码
+      - name: Checkout A Repository
         uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Checkout Tomato-Novel-Official-API (private)
         uses: actions/checkout@v4
@@ -304,35 +283,90 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          VERSION="sha-${{ github.event.pull_request.head.sha }}"
-          out="TomatoNovelDownloader-macOS_arm64-${VERSION}"
+          out="TomatoNovelDownloader-macOS_arm64-${GITHUB_REF_NAME}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
-      - name: Upload macOS arm64 Artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/TomatoNovelDownloader-macOS_arm64-*
+          path: dist
 
-  build-on-label:
+  publish-release:
     needs: [build-linux, build-linux-arm64, build-windows, build-macos]
-    if: github.event.label.name == 'run-build'
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
     steps:
-      - name: 评论 & 删除标签
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: List Artifacts
+        run: ls -R release-artifacts
+
+      - name: Generate Release Notes
+        id: generate_notes
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
           script: |
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '✅ Rust 多平台构建完成，已生成可执行文件。'
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const tag = context.ref.replace('refs/tags/', '');
+            const releasesResp = await github.rest.repos.listReleases({ owner, repo, per_page: 100 });
+            const releases = releasesResp.data;
+            const tags = releases.map(r => r.tag_name);
+            const idx = tags.indexOf(tag);
+            const prev = idx < releases.length - 1 ? releases[idx+1] : null;
+            const since = prev ? prev.published_at : null;
+            const prevTag = prev ? prev.tag_name : null;
+            const compareUrl = prevTag ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}` : '';
+            const params = { owner, repo, state: 'closed', per_page: 100 };
+            if (since) params.since = since;
+            const issuesResp = await github.rest.issues.listForRepo(params);
+            const items = issuesResp.data.filter(item =>
+              !item.labels.some(lbl => ['wontfix', 'duplicate'].includes(lbl.name.toLowerCase()))
+            );
+            const groups = { Fix: [], Update: [], Feature: [] };
+            items.forEach(item => {
+              item.labels.forEach(lbl => {
+                if (lbl.name === 'bug') groups.Fix.push(item);
+                else if (lbl.name === 'update') groups.Update.push(item);
+                else if (lbl.name === 'enhancement') groups.Feature.push(item);
+              });
             });
-            await github.rest.issues.removeLabel({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: context.payload.label.name
-            });
+            let body = "# What's Changed\n\n";
+            const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
+            for (const key of ['Fix','Update','Feature']) {
+              if (groups[key].length) {
+                body += `## ${key}\n\n`;
+                for (const i of groups[key]) {
+                  body += `- ${zh[key]}：[#${i.number}](${i.html_url}) ${i.title}\n`;
+                }
+                body += "\n";
+              }
+            }
+            if (compareUrl) {
+              body += `**Full Changelog**: ${compareUrl}\n`;
+            }
+            return body;
+
+      - name: Create Unified Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Tomato Novel Downloader ${{ github.ref_name }}
+          body: ${{ steps.generate_notes.outputs.result }}
+          files: |
+            release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
+            release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
+            release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
+            release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
