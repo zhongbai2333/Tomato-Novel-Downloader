@@ -35,9 +35,13 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     debug: bool,
 
-    /// 启用服务器模式（暂未实现）
+    /// 启用服务器模式（Web UI）
     #[arg(long, default_value_t = false)]
     server: bool,
+
+    /// Web UI 密码（启用锁模式，防止陌生人使用）
+    #[arg(long)]
+    password: Option<String>,
 
     /// 显示版本信息后退出
     #[arg(long, default_value_t = false)]
@@ -79,8 +83,10 @@ fn main() -> Result<()> {
     let mut config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
 
     if cli.server {
-        println!("服务器模式暂未实现，当前仅支持终端 UI 模式。");
-        return Ok(());
+        let password = cli
+            .password
+            .or_else(|| std::env::var("TOMATO_WEB_PASSWORD").ok());
+        return ui::web::run(&mut config, password);
     }
 
     loop {

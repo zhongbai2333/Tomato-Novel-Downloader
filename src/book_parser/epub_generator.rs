@@ -18,7 +18,14 @@ pub struct EpubGenerator {
 }
 
 impl EpubGenerator {
-    pub fn new(identifier: &str, title: &str, cfg: &Config) -> Result<Self> {
+    pub fn new(
+        identifier: &str,
+        title: &str,
+        author: &str,
+        tags: &str,
+        description: &str,
+        cfg: &Config,
+    ) -> Result<Self> {
         let zip = ZipLibrary::new().map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut book = EpubBuilder::new(zip).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -26,7 +33,28 @@ impl EpubGenerator {
         book.metadata("identifier", safe_id).ok();
         book.metadata("title", title).ok();
         book.metadata("language", "zh").ok();
-        book.metadata("author", "unknown").ok();
+
+        let author = author.trim();
+        if !author.is_empty() {
+            // epub-builder uses Dublin Core style names; `creator` is the standard field.
+            // Keep `author` too for compatibility with older readers/tooling.
+            book.metadata("creator", author).ok();
+            book.metadata("author", author).ok();
+        }
+
+        let tags = tags.trim();
+        if !tags.is_empty() {
+            // Tags/keywords
+            book.metadata("subject", tags).ok();
+        }
+
+        let description = description.trim();
+        if !description.is_empty() {
+            book.metadata("description", description).ok();
+        }
+
+        // A stable default publisher helps some readers display richer info.
+        book.metadata("publisher", "Tomato-Novel-Downloader").ok();
 
         let indent_em = cfg.first_line_indent_em.max(0.0);
         let indent_rule = if indent_em > 0.0 {

@@ -743,7 +743,7 @@ pub struct ChapterRange {
     pub end: usize,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct ProgressSnapshot {
     pub group_done: usize,
     pub group_total: usize,
@@ -755,7 +755,7 @@ pub struct ProgressSnapshot {
     pub comment_saved: usize,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SavePhase {
     #[default]
     TextSave,

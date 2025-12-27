@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tomato Novel Downloader</title>
+    <link rel="stylesheet" href="/assets/app.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">Tomato Novel Downloader</div>
+      <nav class="nav">
+        <a href="#status" id="navStatus">状态</a>
+        <a href="#config" id="navConfig">配置</a>
+        <a href="#search" id="navSearch">搜索</a>
+        <a href="#jobs" id="navJobs">任务</a>
+        <a href="#library" id="navLibrary">下载库</a>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <section id="status" class="card">
+        <h2>状态</h2>
+        <div class="row"><span class="k">版本</span><code id="version">(loading)</code></div>
+        <div class="row"><span class="k">预热</span><code id="prewarm">(loading)</code></div>
+        <div class="row"><span class="k">保存目录</span><code id="saveDir">(loading)</code></div>
+        <div class="row"><span class="k">监听地址</span><code id="bind">(see console)</code></div>
+        <div class="row"><span class="k">锁定模式</span><code id="locked">(loading)</code></div>
+        <p class="tip">局域网访问：设置 <code>TOMATO_WEB_ADDR=0.0.0.0:18423</code> 然后运行 <code>--server</code>。</p>
+      </section>
+
+      <section id="config" class="card">
+        <h2>配置</h2>
+        <form id="configForm" class="formCol">
+          <label class="row">
+            <span class="k">小说格式</span>
+            <select id="cfgNovelFormat">
+              <option value="txt">txt</option>
+              <option value="epub">epub</option>
+            </select>
+          </label>
+
+          <label class="row">
+            <span class="k">散装保存</span>
+            <input id="cfgBulkFiles" type="checkbox" />
+          </label>
+
+          <label class="row">
+            <span class="k">生成有声</span>
+            <input id="cfgEnableAudiobook" type="checkbox" />
+          </label>
+
+          <label class="row">
+            <span class="k">有声格式</span>
+            <select id="cfgAudiobookFormat">
+              <option value="mp3">mp3</option>
+              <option value="wav">wav</option>
+            </select>
+          </label>
+
+          <div class="row">
+            <button type="submit">保存配置</button>
+            <span id="configMsg" class="k"></span>
+          </div>
+        </form>
+        <div class="small">注：这里只开放了与下载输出相关的部分配置；保存会写回 <code>config.yml</code>。</div>
+      </section>
+
+      <section id="search" class="card">
+        <h2>搜索书籍</h2>
+        <form id="searchForm" class="form">
+          <input id="q" name="q" placeholder="输入关键词…" autocomplete="off" />
+          <button type="submit">搜索</button>
+        </form>
+        <div id="searchHint" class="k"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>书名</th>
+              <th>作者</th>
+              <th>Book ID</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="searchResults">
+            <tr><td colspan="4" class="k">请输入关键词并搜索</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="jobs" class="card">
+        <h2>下载任务</h2>
+        <div class="k">下载会在后台执行，可刷新/切换页面。</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>书名</th>
+              <th>状态</th>
+              <th>进度</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="jobsBody">
+            <tr><td colspan="5" class="k">暂无任务</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="library" class="card">
+        <h2>下载库</h2>
+        <div class="k">默认只列出当前目录的文件与子文件夹（子文件夹展示汇总，可进入查看；也可打包下载整个文件夹为 zip）。</div>
+        <div class="row">
+          <span class="k">当前路径</span><code id="libPath">/</code>
+          <button id="libBack" type="button">返回上级</button>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>大小</th>
+              <th>修改时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="libraryBody">
+            <tr><td colspan="4" class="k">加载中…</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <div id="loginModal" class="modal hidden">
+      <div class="modalCard">
+        <h3>需要密码</h3>
+        <div class="k">该 Web UI 已启用锁定模式，请输入密码登录。</div>
+        <form id="loginForm" class="form">
+          <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
+          <button type="submit">登录</button>
+        </form>
+        <div id="loginMsg" class="k"></div>
+      </div>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

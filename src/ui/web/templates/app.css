@@ -1,0 +1,30 @@
+:root{--fg:#111;--muted:#666;--bg:#fff;--card:#fff;--border:#e6e6e6;--link:#0b5fff;}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--fg)}
+.top{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg)}
+.brand{font-weight:700}
+.nav a{margin-right:10px;color:var(--link);text-decoration:none}
+.nav a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:18px auto;padding:0 18px;display:grid;gap:14px}
+.card{border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--card)}
+.k{color:var(--muted)}
+code{background:#f6f6f6;border-radius:6px;padding:2px 6px}
+.row{display:flex;gap:10px;align-items:center;margin:6px 0}
+.row .k{min-width:78px}
+.tip{margin-top:10px;color:var(--muted)}
+.form{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.formCol{display:grid;gap:10px;margin-bottom:10px}
+input{flex:1;min-width:180px;padding:8px 10px;border-radius:8px;border:1px solid var(--border)}
+select{padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg)}
+button{padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:#f8f8f8;cursor:pointer}
+button:hover{background:#f2f2f2}
+.table{width:100%;border-collapse:collapse;margin-top:8px}
+.table th,.table td{border-bottom:1px solid #eee;padding:8px 6px;text-align:left;vertical-align:top}
+.table th{color:var(--muted);font-weight:600}
+.badge{display:inline-block;font-size:12px;padding:1px 8px;border-radius:999px;background:#f6f6f6;color:#333;margin-left:8px}
+.small{font-size:12px;color:var(--muted)}
+.actions a{margin-right:10px}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;padding:18px}
+.modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px}
+.hidden{display:none}

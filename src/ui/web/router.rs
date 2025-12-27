@@ -1,0 +1,96 @@
+use axum::Router;
+use axum::extract::connect_info::ConnectInfo;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{Next, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+
+use sha2::{Digest, Sha256};
+use tracing::info;
+
+use super::routes;
+use super::state::AppState;
+
+pub(crate) fn build_router(state: AppState) -> Router {
+    let protected = Router::new()
+        .route("/", get(routes::index::index))
+        .route("/assets/app.css", get(routes::index::asset_css))
+        .route("/assets/app.js", get(routes::index::asset_js))
+        .route("/api/login", post(routes::auth::api_login))
+        .route("/api/status", get(routes::status::api_status))
+        .route(
+            "/api/config",
+            get(routes::auth::get_config).post(routes::auth::set_config),
+        )
+        .route("/api/library", get(routes::library::api_library))
+        .route("/download/*path", get(routes::download::download_file))
+        .route("/download-zip/*path", get(routes::download::download_zip))
+        .route("/api/search", get(routes::search::api_search))
+        .route(
+            "/api/jobs",
+            get(routes::jobs::list_jobs).post(routes::jobs::create_job),
+        )
+        .route("/api/jobs/:id/cancel", post(routes::jobs::cancel_job));
+
+    protected
+        .layer(from_fn_with_state(state.clone(), auth_and_log_mw))
+        .with_state(state)
+}
+
+async fn auth_and_log_mw(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let path = req.uri().path().to_string();
+    let method = req.method().to_string();
+    let ip = req
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0)
+        .map(|a| a.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // If lock mode enabled, require password for any non-asset route,
+    // except the login endpoint and landing page.
+    if let Some(auth) = &state.auth {
+        let allow = path == "/" || path.starts_with("/assets/") || path == "/api/login";
+
+        if !allow {
+            let provided_header = req
+                .headers()
+                .get("x-tomato-password")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            let provided_cookie = req
+                .headers()
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|raw| {
+                    raw.split(';')
+                        .map(|p| p.trim())
+                        .find_map(|p| p.strip_prefix("tomato_pw="))
+                })
+                .unwrap_or("");
+
+            let provided = if !provided_header.is_empty() {
+                provided_header
+            } else {
+                provided_cookie
+            };
+
+            let mut h = Sha256::new();
+            h.update(provided.as_bytes());
+            let out = h.finalize();
+            if out.as_slice() != auth.password_sha256 {
+                info!(target: "web_access", ip = %ip, method = %method, path = %path, status = 401, "unauthorized");
+                return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+            }
+        }
+    }
+
+    let resp = next.run(req).await;
+    info!(target: "web_access", ip = %ip, method = %method, path = %path, status = %resp.status().as_u16(), "ok");
+    resp
+}

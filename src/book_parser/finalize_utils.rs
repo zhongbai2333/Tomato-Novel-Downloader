@@ -804,7 +804,14 @@ fn finalize_epub(
     directory_raw: Option<&Value>,
     mut reporter: Option<&mut crate::download::downloader::ProgressReporter>,
 ) -> anyhow::Result<()> {
-    let mut epub_gen = EpubGenerator::new(&manager.book_id, &manager.book_name, &manager.config)?;
+    let mut epub_gen = EpubGenerator::new(
+        &manager.book_id,
+        &manager.book_name,
+        &manager.author,
+        &manager.tags,
+        &manager.description,
+        &manager.config,
+    )?;
 
     info!(
         target: "segment",

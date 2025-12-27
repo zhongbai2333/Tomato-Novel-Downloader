@@ -32,7 +32,11 @@ textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-tomato-novel-official-api = { path = "../Tomato-Novel-Official-API", features = ["full_api"] }
+tomato-novel-official-api = { path = "../Tomato-Novel-Official-API" }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-core = "0.3"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
