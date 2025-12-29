@@ -13,6 +13,7 @@
         <a href="#status" id="navStatus">状态</a>
         <a href="#config" id="navConfig">配置</a>
         <a href="#search" id="navSearch">搜索</a>
+        <a href="#updates" id="navUpdates">更新</a>
         <a href="#jobs" id="navJobs">任务</a>
         <a href="#library" id="navLibrary">下载库</a>
       </nav>
@@ -86,6 +87,31 @@
             <tr><td colspan="4" class="k">请输入关键词并搜索</td></tr>
           </tbody>
         </table>
+      </section>
+
+      <section id="updates" class="card">
+        <h2>更新小说</h2>
+        <div class="row">
+          <button id="updatesRefresh" type="button">扫描更新</button>
+          <span id="updatesHint" class="k">(loading)</span>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>书名</th>
+              <th>Book ID</th>
+              <th>本地</th>
+              <th>远端</th>
+              <th>新章节</th>
+              <th>失败章节</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="updatesBody">
+            <tr><td colspan="7" class="k">加载中…</td></tr>
+          </tbody>
+        </table>
+        <div class="small">提示：点击“更新”会创建一个下载任务；下载器会自动跳过已完成章节并重试失败章节。</div>
       </section>
 
       <section id="jobs" class="card">

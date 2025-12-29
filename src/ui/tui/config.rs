@@ -2,6 +2,8 @@
 
 use super::*;
 
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+
 pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
     if app.segment_comments_confirm_open {
         match event {
@@ -228,11 +230,62 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
     let cat_area = layout[1];
     let entry_area = layout[2];
     let button_area = app.last_config_button;
-    let pos_in = |area: Rect, col: u16, row: u16| {
-        col >= area.x && col < area.x + area.width && row >= area.y && row < area.y + area.height
-    };
+    let pos_in = |area: Rect, col: u16, row: u16| super::pos_in(area, col, row);
 
     match me.kind {
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let up = matches!(me.kind, MouseEventKind::ScrollUp);
+
+            // When editing a bool, wheel toggles the True/False selector.
+            if let Some((cat_idx, entry_idx)) = app.cfg_editing {
+                let editing_bool = app
+                    .cfg_categories
+                    .get(cat_idx)
+                    .and_then(|c| c.entries.get(entry_idx))
+                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+                if editing_bool
+                    && let Some(bool_area) = app.last_config_bool_area
+                    && pos_in(bool_area, me.column, me.row)
+                {
+                    let cur = app.cfg_bool_state.selected().unwrap_or(0);
+                    let next = if cur == 0 { 1 } else { 0 };
+                    app.cfg_bool_state.select(Some(next));
+                    app.cfg_edit_buffer = if next == 0 { "true" } else { "false" }.to_string();
+                    return Ok(());
+                }
+            }
+
+            // Scroll categories.
+            if pos_in(cat_area, me.column, me.row) && !app.cfg_categories.is_empty() {
+                let cur = app.cfg_cat_state.selected().unwrap_or(0);
+                let next = if up {
+                    cur.saturating_sub(1)
+                } else {
+                    (cur + 1).min(app.cfg_categories.len().saturating_sub(1))
+                };
+                app.cfg_cat_state.select(Some(next));
+                super::ensure_entry_selection(app);
+                app.cfg_focus = ConfigFocus::Category;
+                return Ok(());
+            }
+
+            // Scroll entries.
+            if pos_in(entry_area, me.column, me.row) {
+                if let Some(entries) = super::current_cfg_entries(app)
+                    && !entries.is_empty()
+                {
+                    let cur = app.cfg_entry_state.selected().unwrap_or(0);
+                    let next = if up {
+                        cur.saturating_sub(1)
+                    } else {
+                        (cur + 1).min(entries.len().saturating_sub(1))
+                    };
+                    app.cfg_entry_state.select(Some(next));
+                    app.cfg_focus = ConfigFocus::Entry;
+                    return Ok(());
+                }
+            }
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
                 let editing_bool = app
@@ -286,8 +339,12 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
 
             if pos_in(cat_area, me.column, me.row) {
                 if !app.cfg_categories.is_empty() {
-                    let idx = me.row.saturating_sub(cat_area.y + 1) as usize;
-                    if idx < app.cfg_categories.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        cat_area,
+                        me.row,
+                        &app.cfg_cat_state,
+                        app.cfg_categories.len(),
+                    ) {
                         app.cfg_cat_state.select(Some(idx));
                         super::ensure_entry_selection(app);
                         app.cfg_focus = ConfigFocus::Category;
@@ -308,8 +365,12 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
 
             if pos_in(entry_area, me.column, me.row) {
                 if let Some(entries) = super::current_cfg_entries(app) {
-                    let idx = me.row.saturating_sub(entry_area.y + 1) as usize;
-                    if idx < entries.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        entry_area,
+                        me.row,
+                        &app.cfg_entry_state,
+                        entries.len(),
+                    ) {
                         app.cfg_entry_state.select(Some(idx));
                         app.cfg_focus = ConfigFocus::Entry;
                         super::start_cfg_edit(app);
@@ -326,8 +387,12 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             // Hover category: only change color, do NOT change selected category / entries.
             if pos_in(cat_area, me.column, me.row) {
                 if !app.cfg_categories.is_empty() {
-                    let idx = me.row.saturating_sub(cat_area.y + 1) as usize;
-                    if idx < app.cfg_categories.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        cat_area,
+                        me.row,
+                        &app.cfg_cat_state,
+                        app.cfg_categories.len(),
+                    ) {
                         app.cfg_cat_hover = Some(idx);
                     } else {
                         app.cfg_cat_hover = None;
@@ -370,8 +435,12 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
 
             if pos_in(entry_area, me.column, me.row) {
                 if let Some(entries) = super::current_cfg_entries(app) {
-                    let idx = me.row.saturating_sub(entry_area.y + 1) as usize;
-                    if idx < entries.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        entry_area,
+                        me.row,
+                        &app.cfg_entry_state,
+                        entries.len(),
+                    ) {
                         app.cfg_entry_state.select(Some(idx));
                         app.cfg_focus = ConfigFocus::Entry;
                     }
@@ -458,16 +527,49 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
             ListItem::new(Line::from(Span::styled(c.title, style)))
         })
         .collect();
-    let cat_list = List::new(cat_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("分类 (左右/Tab 切换)"),
+    let cat_block = Block::default()
+        .borders(Borders::ALL)
+        .title("分类 (左右/Tab 切换)");
+    frame.render_widget(cat_block.clone(), body[0]);
+    let cat_inner = cat_block.inner(body[0]);
+    let need_cat_scrollbar = app.cfg_categories.len() > 0
+        && cat_inner.height > 0
+        && app.cfg_categories.len() > cat_inner.height as usize;
+    let (cat_area, cat_sb) = if need_cat_scrollbar && cat_inner.width > 0 {
+        let w = cat_inner.width.saturating_sub(1).max(1);
+        (
+            Rect {
+                x: cat_inner.x,
+                y: cat_inner.y,
+                width: w,
+                height: cat_inner.height,
+            },
+            Some(Rect {
+                x: cat_inner.x.saturating_add(w),
+                y: cat_inner.y,
+                width: 1,
+                height: cat_inner.height,
+            }),
         )
+    } else {
+        (cat_inner, None)
+    };
+
+    let cat_list = List::new(cat_items)
         // Keep highlight style minimal; active/hover styles are applied per-item.
         .highlight_style(Style::default())
         .highlight_symbol(">> ");
-    frame.render_stateful_widget(cat_list, body[0], &mut app.cfg_cat_state);
+    frame.render_stateful_widget(cat_list, cat_area, &mut app.cfg_cat_state);
+    if let Some(sb_area) = cat_sb {
+        let pos = app
+            .cfg_cat_state
+            .selected()
+            .unwrap_or(0)
+            .min(app.cfg_categories.len().saturating_sub(1));
+        let mut sb_state = ScrollbarState::new(app.cfg_categories.len()).position(pos);
+        let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(sb, sb_area, &mut sb_state);
+    }
 
     let entries = super::current_cfg_entries(app);
     let entry_items: Vec<ListItem> = if let Some(entries) = entries {
@@ -504,16 +606,48 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
         Style::default().fg(Color::LightCyan)
     };
 
-    let entry_list = List::new(entry_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("配置项 (上下选择, 回车编辑/保存)"),
+    let entry_block = Block::default()
+        .borders(Borders::ALL)
+        .title("配置项 (上下选择, 回车编辑/保存)");
+    frame.render_widget(entry_block.clone(), body[1]);
+    let entry_inner = entry_block.inner(body[1]);
+    let entry_len = super::current_cfg_entries(app).map(|e| e.len()).unwrap_or(0);
+    let need_entry_scrollbar =
+        entry_len > 0 && entry_inner.height > 0 && entry_len > entry_inner.height as usize;
+    let (entry_area, entry_sb) = if need_entry_scrollbar && entry_inner.width > 0 {
+        let w = entry_inner.width.saturating_sub(1).max(1);
+        (
+            Rect {
+                x: entry_inner.x,
+                y: entry_inner.y,
+                width: w,
+                height: entry_inner.height,
+            },
+            Some(Rect {
+                x: entry_inner.x.saturating_add(w),
+                y: entry_inner.y,
+                width: 1,
+                height: entry_inner.height,
+            }),
         )
+    } else {
+        (entry_inner, None)
+    };
+
+    let entry_list = List::new(entry_items)
         .highlight_style(entry_highlight)
         .highlight_symbol(">> ");
-
-    frame.render_stateful_widget(entry_list, body[1], &mut app.cfg_entry_state);
+    frame.render_stateful_widget(entry_list, entry_area, &mut app.cfg_entry_state);
+    if let Some(sb_area) = entry_sb {
+        let pos = app
+            .cfg_entry_state
+            .selected()
+            .unwrap_or(0)
+            .min(entry_len.saturating_sub(1));
+        let mut sb_state = ScrollbarState::new(entry_len).position(pos);
+        let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(sb, sb_area, &mut sb_state);
+    }
 
     let footer = Layout::default()
         .direction(Direction::Horizontal)

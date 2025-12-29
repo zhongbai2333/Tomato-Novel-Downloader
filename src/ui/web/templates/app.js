@@ -4,6 +4,7 @@ function showLogin(show) {
   const modal = document.getElementById('loginModal');
   if (!modal) return;
   modal.classList.toggle('hidden', !show);
+  document.body.style.overflow = show ? 'hidden' : '';
   if (show) {
     const inp = document.getElementById('loginPassword');
     if (inp) inp.focus();
@@ -240,6 +241,49 @@ async function refreshJobs() {
   }
 }
 
+async function refreshUpdates() {
+  const hint = document.getElementById('updatesHint');
+  const tbody = document.getElementById('updatesBody');
+  if (!tbody) return;
+
+  if (hint) hint.textContent = '扫描中…';
+  tbody.innerHTML = '<tr><td colspan="7" class="k">加载中…</td></tr>';
+
+  const data = await j('/api/updates');
+  const updates = data.updates || [];
+  const noUpdates = data.no_updates || [];
+  const total = updates.length + noUpdates.length;
+
+  if (hint) {
+    hint.textContent = `可更新 ${updates.length} 本 / 无更新 ${noUpdates.length} 本 / 总计 ${total} 本`;
+  }
+
+  tbody.innerHTML = '';
+  for (const it of updates) {
+    const tr = document.createElement('tr');
+    const title = it.book_name || '';
+    const bookId = it.book_id || '';
+    const localTotal = Number(it.local_total || 0);
+    const remoteTotal = Number(it.remote_total || 0);
+    const newCount = Number(it.new_count || 0);
+    const failed = Number(it.local_failed || 0);
+    tr.innerHTML = `
+      <td>${esc(title)}</td>
+      <td><code>${esc(bookId)}</code></td>
+      <td>${esc(localTotal)}</td>
+      <td>${esc(remoteTotal)}</td>
+      <td>${esc(newCount)}</td>
+      <td>${esc(failed)}</td>
+      <td><button data-bookid="${esc(bookId)}" class="startDownload">更新</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  if (updates.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="k">暂无可更新的小说。</td></tr>';
+  }
+}
+
 async function cancelJob(id) {
   await j(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   await refreshJobs();
@@ -261,6 +305,13 @@ function wire() {
     const q = document.getElementById('q').value.trim();
     try { await doSearch(q); } catch (err) { alert(err); }
   });
+
+  const updBtn = document.getElementById('updatesRefresh');
+  if (updBtn) {
+    updBtn.addEventListener('click', async () => {
+      try { await refreshUpdates(); } catch (err) { alert(err); }
+    });
+  }
 
   const cfgForm = document.getElementById('configForm');
   if (cfgForm) {
@@ -301,6 +352,7 @@ async function boot() {
   wire();
   await refreshStatus();
   await refreshConfig();
+  await refreshUpdates();
   await refreshJobs();
   await refreshLibrary();
   setInterval(() => refreshJobs().catch(() => {}), 1500);

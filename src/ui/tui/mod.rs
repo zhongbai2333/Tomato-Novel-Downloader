@@ -1134,3 +1134,43 @@ pub(super) fn truncate(text: &str, limit: usize) -> String {
     }
     out
 }
+
+pub(super) fn pos_in(area: Rect, col: u16, row: u16) -> bool {
+    col >= area.x
+        && col < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
+pub(super) fn list_inner_area(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+pub(super) fn list_index_from_mouse_row(
+    list_area: Rect,
+    mouse_row: u16,
+    state: &ListState,
+    items_len: usize,
+) -> Option<usize> {
+    if items_len == 0 {
+        return None;
+    }
+
+    let inner = list_inner_area(list_area);
+    if inner.height == 0 {
+        return None;
+    }
+
+    let rel = mouse_row.checked_sub(inner.y)? as usize;
+    if rel >= inner.height as usize {
+        return None;
+    }
+
+    let idx = state.offset().saturating_add(rel);
+    (idx < items_len).then_some(idx)
+}

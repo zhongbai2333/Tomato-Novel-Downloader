@@ -30,7 +30,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/api/jobs",
             get(routes::jobs::list_jobs).post(routes::jobs::create_job),
         )
-        .route("/api/jobs/:id/cancel", post(routes::jobs::cancel_job));
+        .route("/api/jobs/:id/cancel", post(routes::jobs::cancel_job))
+        .route("/api/updates", get(routes::updates::api_updates));
 
     protected
         .layer(from_fn_with_state(state.clone(), auth_and_log_mw))
