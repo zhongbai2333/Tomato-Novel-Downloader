@@ -20,7 +20,6 @@ use crate::base_system::context::safe_fs_name;
 use crate::download::downloader::{self, BookMeta, ChapterRange, ProgressSnapshot, SavePhase};
 
 use super::download::{request_cancel_download, start_download_task};
-use super::update::{expected_book_folder, read_downloaded_count};
 use super::{
     App, Focus, PendingDownload, PreviewFocus, PreviewModalLayout, View, WorkerMsg,
     format_word_count, render_log_box, start_spinner, truncate, upsert_result_detail_from_plan,
@@ -255,8 +254,16 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
     let cfg = app.config.clone();
     thread::spawn(move || {
         let result = downloader::prepare_download_plan(&cfg, &book_id, hint).map(|plan| {
-            let folder = expected_book_folder(&cfg, &plan);
-            let downloaded = read_downloaded_count(&folder, &plan.book_id).unwrap_or(0);
+            let folder = crate::base_system::book_paths::book_folder_path(
+                &cfg,
+                &plan.book_id,
+                plan.meta.book_name.as_deref(),
+            );
+            let downloaded = crate::base_system::novel_updates::read_downloaded_ok_count(
+                &folder,
+                &plan.book_id,
+            )
+            .unwrap_or(0);
             PendingDownload {
                 plan,
                 downloaded_count: downloaded,

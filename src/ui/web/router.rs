@@ -18,6 +18,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/assets/app.js", get(routes::index::asset_js))
         .route("/api/login", post(routes::auth::api_login))
         .route("/api/status", get(routes::status::api_status))
+        .route("/api/app_update", get(routes::app_update::api_app_update))
         .route(
             "/api/config",
             get(routes::auth::get_config).post(routes::auth::set_config),

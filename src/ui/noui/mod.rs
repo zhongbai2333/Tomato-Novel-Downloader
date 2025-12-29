@@ -15,6 +15,7 @@ use crate::base_system::context::Config;
 
 mod config;
 mod download;
+mod app_update;
 mod update;
 
 fn show_config_menu(config: &mut Config) -> Result<()> {
@@ -49,9 +50,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         env!("CARGO_PKG_VERSION")
     );
 
+    // 每次启动检查程序更新（不影响后续流程，失败直接忽略）。
+    app_update::startup_check();
+
     loop {
         let prompt = format!(
-            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / u更新 / U程序更新 / q退出，默认保存到 {}）：",
+            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
         );
         let input = read_line(&prompt)?;
@@ -76,6 +80,11 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
                     Err(err) => println!("下载失败: {}\n", err),
                 }
             }
+            continue;
+        }
+
+        if text.eq_ignore_ascii_case("c") {
+            app_update::check_update_menu()?;
             continue;
         }
 

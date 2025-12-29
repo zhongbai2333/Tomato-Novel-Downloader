@@ -5,6 +5,8 @@ use std::thread;
 
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
+use crate::base_system::novel_updates;
+
 pub(super) fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -213,163 +215,37 @@ pub(super) fn show_update_menu(app: &mut App) -> Result<()> {
 }
 
 fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
-    let mut updates = Vec::new();
-    let mut no_updates = Vec::new();
-
     let save_dir = config.default_save_dir();
-    if !save_dir.exists() {
-        return Ok((updates, no_updates));
-    }
-    let dir_reader =
-        fs::read_dir(&save_dir).with_context(|| format!("read dir {}", save_dir.display()))?;
-    let client = DirectoryClient::new().context("init DirectoryClient")?;
-    for entry in dir_reader.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        let (book_id, book_name) = match name.split_once('_') {
-            Some((id, n)) if id.chars().all(|c| c.is_ascii_digit()) => {
-                (id.to_string(), n.to_string())
-            }
-            _ => continue,
-        };
+    let scan = novel_updates::scan_novel_updates(&save_dir)?;
 
-        let (local_total, _local_ok, local_failed) =
-            read_downloaded_counts(&path, &book_id).unwrap_or((0, 0, 0));
-        let chapter_list = match client.fetch_directory(&book_id) {
-            Ok(d) => d.chapters,
-            Err(_) => Vec::new(),
-        };
-        if chapter_list.is_empty() {
-            continue;
-        }
-        let total = chapter_list.len();
-
-        // "新章节" 应基于本地已知的章节条目数量（包含失败/空内容的条目），
-        // 否则会把“失败章节”误报为“新章节”。
-        let new_count = total.saturating_sub(local_total);
-        let label = if new_count > 0 && local_failed > 0 {
+    let to_entry = |it: novel_updates::NovelUpdateRow| {
+        let label = if it.new_count > 0 && it.local_failed > 0 {
             format!(
                 "《{}》({}) — 新章节: {} | 失败章节: {}",
-                book_name, book_id, new_count, local_failed
+                it.book_name, it.book_id, it.new_count, it.local_failed
             )
-        } else if new_count > 0 {
-            format!("《{}》({}) — 新章节: {}", book_name, book_id, new_count)
-        } else if local_failed > 0 {
-            format!("《{}》({}) — 失败章节: {}", book_name, book_id, local_failed)
+        } else if it.new_count > 0 {
+            format!("《{}》({}) — 新章节: {}", it.book_name, it.book_id, it.new_count)
+        } else if it.local_failed > 0 {
+            format!("《{}》({}) — 失败章节: {}", it.book_name, it.book_id, it.local_failed)
         } else {
-            format!("《{}》({}) — 新章节: 0", book_name, book_id)
+            format!("《{}》({}) — 新章节: 0", it.book_name, it.book_id)
         };
 
-        let has_update = new_count > 0 || local_failed > 0;
-        let entry = UpdateEntry {
-            book_id: book_id.clone(),
-            book_name: book_name.clone(),
-            folder: path.clone(),
+        UpdateEntry {
+            book_id: it.book_id.clone(),
+            book_name: it.book_name.clone(),
+            folder: it.folder.clone(),
             label,
-            _new_count: new_count,
-            _has_update: has_update,
-        };
-        if has_update {
-            updates.push(entry);
-        } else {
-            no_updates.push(entry);
+            _new_count: it.new_count,
+            _has_update: it.has_update,
         }
-    }
-    Ok((updates, no_updates))
-}
-
-fn read_downloaded_counts(folder: &Path, book_id: &str) -> Option<(usize, usize, usize)> {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return None;
     };
-    let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
 
-    let total = downloaded.len();
-    let mut ok = 0usize;
-    for (_cid, pair) in downloaded {
-        match pair {
-            Value::Array(arr) => {
-                if arr.get(1).and_then(|v| v.as_str()).is_some() {
-                    ok += 1;
-                }
-            }
-            Value::Object(obj) => {
-                if obj
-                    .get("content")
-                    .or_else(|| obj.get("text"))
-                    .and_then(|v| v.as_str())
-                    .is_some()
-                {
-                    ok += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-    let failed = total.saturating_sub(ok);
-    Some((total, ok, failed))
-}
-
-pub(super) fn expected_book_folder(config: &Config, plan: &DownloadPlan) -> PathBuf {
-    crate::base_system::book_paths::book_folder_path(
-        config,
-        &plan.book_id,
-        plan.meta.book_name.as_deref(),
-    )
-}
-
-pub(super) fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usize> {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return None;
-    };
-    let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
-
-    // 仅统计“成功下载”的章节：downloaded[chapter_id] = [title, content]
-    // 其中 content=null 表示下载失败（或未完成），不应该计入“已下载”。
-    let mut ok = 0usize;
-    for (_cid, pair) in downloaded {
-        match pair {
-            Value::Array(arr) => {
-                if arr.get(1).and_then(|v| v.as_str()).is_some() {
-                    ok += 1;
-                }
-            }
-            Value::Object(obj) => {
-                if obj
-                    .get("content")
-                    .or_else(|| obj.get("text"))
-                    .and_then(|v| v.as_str())
-                    .is_some()
-                {
-                    ok += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-    Some(ok)
+    Ok((
+        scan.updates.into_iter().map(to_entry).collect(),
+        scan.no_updates.into_iter().map(to_entry).collect(),
+    ))
 }
 
 pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {

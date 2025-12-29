@@ -12,4 +12,6 @@ pub mod cooldown_retry;
 pub mod file_cleaner;
 pub mod json_extract;
 pub mod logging;
+pub mod novel_updates;
+pub mod app_update;
 pub mod self_update;

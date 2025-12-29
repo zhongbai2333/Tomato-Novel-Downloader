@@ -95,6 +95,63 @@ function fmtTime(ms) {
   return new Date(x).toLocaleString();
 }
 
+const DISMISS_KEY = 'tnd.dismissed_release_tag';
+
+function getDismissedTag() {
+  try { return (localStorage.getItem(DISMISS_KEY) || '').toString(); } catch { return ''; }
+}
+
+function setDismissedTag(tag) {
+  try { localStorage.setItem(DISMISS_KEY, (tag || '').toString()); } catch {}
+}
+
+function showAppUpdateBanner(show) {
+  const el = document.getElementById('appUpdateBanner');
+  if (!el) return;
+  el.classList.toggle('hidden', !show);
+}
+
+async function refreshAppUpdate(manual) {
+  const hint = document.getElementById('appUpdateHint');
+  const latestEl = document.getElementById('appUpdateLatest');
+  const bodyEl = document.getElementById('appUpdateBody');
+  const linkEl = document.getElementById('appUpdateLink');
+
+  if (hint) hint.textContent = manual ? '检查中…' : '';
+
+  const data = await j('/api/app_update');
+  const latestTag = (data.latest_tag || '').toString();
+  const latestBody = (data.latest_body || '').toString();
+  const latestUrl = (data.latest_url || '').toString();
+  const hasUpdate = !!data.has_update;
+
+  if (latestEl) latestEl.textContent = latestTag || '';
+  if (bodyEl) bodyEl.textContent = latestBody || '';
+  if (linkEl) {
+    linkEl.href = latestUrl || '#';
+    linkEl.style.pointerEvents = latestUrl ? '' : 'none';
+  }
+
+  const dismissed = getDismissedTag();
+  const shouldShow = hasUpdate && latestTag && dismissed !== latestTag;
+
+  if (shouldShow) {
+    showAppUpdateBanner(true);
+    if (hint) hint.textContent = '发现新版本';
+  } else {
+    showAppUpdateBanner(false);
+    if (manual) {
+      if (!hasUpdate) {
+        if (hint) hint.textContent = '已是最新版本';
+      } else if (dismissed === latestTag) {
+        if (hint) hint.textContent = '已忽略该版本提醒';
+      }
+    }
+  }
+
+  return { latestTag, hasUpdate };
+}
+
 let libraryPath = '';
 
 async function refreshStatus() {
@@ -313,6 +370,30 @@ function wire() {
     });
   }
 
+  const appUpdBtn = document.getElementById('appUpdateCheck');
+  if (appUpdBtn) {
+    appUpdBtn.addEventListener('click', async () => {
+      try { await refreshAppUpdate(true); } catch (err) { alert(err); }
+    });
+  }
+
+  const dismissBtn = document.getElementById('appUpdateDismiss');
+  if (dismissBtn) {
+    dismissBtn.addEventListener('click', async () => {
+      try {
+        const { latestTag } = await refreshAppUpdate(false);
+        if (latestTag) {
+          setDismissedTag(latestTag);
+          showAppUpdateBanner(false);
+          const hint = document.getElementById('appUpdateHint');
+          if (hint) hint.textContent = '已设置不再提醒';
+        }
+      } catch (err) {
+        alert(err);
+      }
+    });
+  }
+
   const cfgForm = document.getElementById('configForm');
   if (cfgForm) {
     cfgForm.addEventListener('submit', async (e) => {
@@ -351,12 +432,14 @@ function wire() {
 async function boot() {
   wire();
   await refreshStatus();
+  await refreshAppUpdate(false).catch(() => {});
   await refreshConfig();
   await refreshUpdates();
   await refreshJobs();
   await refreshLibrary();
   setInterval(() => refreshJobs().catch(() => {}), 1500);
   setInterval(() => refreshStatus().catch(() => {}), 5000);
+  setInterval(() => refreshAppUpdate(false).catch(() => {}), 6 * 60 * 60 * 1000);
 }
 
 boot().catch(err => {

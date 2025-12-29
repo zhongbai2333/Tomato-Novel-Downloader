@@ -27,6 +27,18 @@
         <div class="row"><span class="k">保存目录</span><code id="saveDir">(loading)</code></div>
         <div class="row"><span class="k">监听地址</span><code id="bind">(see console)</code></div>
         <div class="row"><span class="k">锁定模式</span><code id="locked">(loading)</code></div>
+        <div class="row">
+          <button id="appUpdateCheck" type="button">检查程序更新</button>
+          <span id="appUpdateHint" class="k"></span>
+        </div>
+        <div id="appUpdateBanner" class="card hidden">
+          <div class="row"><span class="k">最新版本</span><code id="appUpdateLatest">(loading)</code></div>
+          <div class="row">
+            <a id="appUpdateLink" href="#" target="_blank" rel="noopener">打开 Release</a>
+            <button id="appUpdateDismiss" type="button">不再提醒</button>
+          </div>
+          <div id="appUpdateBody" class="small prewrap"></div>
+        </div>
         <p class="tip">局域网访问：设置 <code>TOMATO_WEB_ADDR=0.0.0.0:18423</code> 然后运行 <code>--server</code>。</p>
       </section>
 
