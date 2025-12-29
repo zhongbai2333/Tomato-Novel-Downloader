@@ -19,6 +19,7 @@ pub(in crate::ui) enum ConfigField {
     AutoClearDump,
     AutoOpenDownloadedFiles,
     AllowOverwriteFiles,
+    PreferredBookNameField,
     OldCli,
     FirstLineIndentEm,
     EnableSegmentComments,
@@ -96,6 +97,10 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                 ConfigEntry {
                     title: "允许覆盖已存在文件",
                     field: ConfigField::AllowOverwriteFiles,
+                },
+                ConfigEntry {
+                    title: "优先书名字段",
+                    field: ConfigField::PreferredBookNameField,
                 },
                 ConfigEntry {
                     title: "旧版 CLI UI",
@@ -256,6 +261,7 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files.to_string(),
         ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files.to_string(),
+        ConfigField::PreferredBookNameField => app.config.preferred_book_name_field.clone(),
         ConfigField::OldCli => app.config.old_cli.to_string(),
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments.to_string(),
         ConfigField::UseOfficialApi => app.config.use_official_api.to_string(),
@@ -411,6 +417,14 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
         ConfigField::AllowOverwriteFiles => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
             app.config.allow_overwrite_files = val;
+        }
+        ConfigField::PreferredBookNameField => {
+            let lower = raw.to_ascii_lowercase();
+            if lower != "book_name" && lower != "original_book_name" && lower != "book_short_name" {
+                app.status = "仅支持 book_name、original_book_name 或 book_short_name".to_string();
+                return Ok(());
+            }
+            app.config.preferred_book_name_field = lower;
         }
         ConfigField::OldCli => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;

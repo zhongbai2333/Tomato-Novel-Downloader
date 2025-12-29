@@ -26,6 +26,7 @@ enum ConfigField {
     BulkFiles,
     AutoClearDump,
     AllowOverwriteFiles,
+    PreferredBookNameField,
     EnableAudiobook,
     AudiobookVoice,
     AudiobookRate,
@@ -93,6 +94,11 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             name: "是否允许覆盖已存在的文件",
             field: ConfigField::AllowOverwriteFiles,
             ty: ConfigValueType::Bool,
+        },
+        ConfigOption {
+            name: "优先书名字段(book_name/original_book_name/book_short_name)",
+            field: ConfigField::PreferredBookNameField,
+            ty: ConfigValueType::String,
         },
         ConfigOption {
             name: "是否生成有声小说",
@@ -316,6 +322,7 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::BulkFiles => config.bulk_files.to_string(),
         ConfigField::AutoClearDump => config.auto_clear_dump.to_string(),
         ConfigField::AllowOverwriteFiles => config.allow_overwrite_files.to_string(),
+        ConfigField::PreferredBookNameField => config.preferred_book_name_field.clone(),
         ConfigField::EnableAudiobook => config.enable_audiobook.to_string(),
         ConfigField::AudiobookVoice => config.audiobook_voice.clone(),
         ConfigField::AudiobookRate => config.audiobook_rate.clone(),
@@ -550,6 +557,13 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
                 return Err(anyhow!("有声小说格式仅支持 mp3/wav"));
             }
             config.audiobook_format = lower;
+        }
+        ConfigField::PreferredBookNameField => {
+            let lower = v.trim().to_ascii_lowercase();
+            if lower != "book_name" && lower != "original_book_name" && lower != "book_short_name" {
+                return Err(anyhow!("优先书名字段仅支持 book_name/original_book_name/book_short_name"));
+            }
+            config.preferred_book_name_field = lower;
         }
         _ => return Err(anyhow!("该字段不是 string")),
     }

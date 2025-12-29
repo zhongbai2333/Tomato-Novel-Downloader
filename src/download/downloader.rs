@@ -1211,12 +1211,17 @@ pub fn prepare_download_plan(
     // For book_name: Prefer the hint (what user saw in search) to maintain consistency
     // For other metadata: Prefer authoritative directory metadata
     let merged = merge_meta_prefer_hint_name(meta_from_dir, meta_hint);
-    let completed_meta =
+    let mut completed_meta =
         if merged.book_name.is_some() && merged.author.is_some() && merged.description.is_some() {
             merged
         } else {
             merge_meta(merged, search_metadata(book_id).unwrap_or_default())
         };
+    
+    // 应用用户配置的书名字段偏好
+    if let Some(preferred_name) = config.pick_preferred_book_name(&completed_meta) {
+        completed_meta.book_name = Some(preferred_name);
+    }
 
     Ok(DownloadPlan {
         book_id: dir.book_id.clone(),
