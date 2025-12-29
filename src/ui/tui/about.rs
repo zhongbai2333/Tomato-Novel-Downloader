@@ -19,9 +19,12 @@ pub(super) fn handle_event_about(app: &mut App, event: Event) -> Result<()> {
                     check_app_update(app)?;
                 }
                 Some(2) => {
-                    dismiss_app_update(app)?;
+                    request_self_update(app)?;
                 }
                 Some(3) => {
+                    dismiss_app_update(app)?;
+                }
+                Some(4) => {
                     app.view = View::Home;
                     app.status = "返回主菜单".to_string();
                 }
@@ -55,7 +58,7 @@ pub(super) fn draw_about(frame: &mut ratatui::Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Length(6),
+            Constraint::Length(7),
             Constraint::Min(5),
         ])
         .split(main);
@@ -157,6 +160,14 @@ fn dismiss_app_update(app: &mut App) -> Result<()> {
     Ok(())
 }
 
+fn request_self_update(app: &mut App) -> Result<()> {
+    app.status = "即将执行自更新（退出 TUI 后开始）…".to_string();
+    app.self_update_requested = true;
+    app.self_update_auto_yes = false;
+    app.should_quit = true;
+    Ok(())
+}
+
 fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, line) in body.lines().enumerate() {
@@ -212,10 +223,14 @@ fn handle_mouse_about(app: &mut App, me: event::MouseEvent) -> Result<()> {
                 }
                 2 => {
                     app.about_btn_state.select(Some(2));
-                    dismiss_app_update(app)?;
+                    request_self_update(app)?;
                 }
                 3 => {
                     app.about_btn_state.select(Some(3));
+                    dismiss_app_update(app)?;
+                }
+                4 => {
+                    app.about_btn_state.select(Some(4));
                     app.view = View::Home;
                     app.status = "返回主菜单".to_string();
                 }

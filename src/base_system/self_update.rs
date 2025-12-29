@@ -383,19 +383,7 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
     let _ = fs::remove_file(&staged);
     fs::rename(tmp_file, &staged).context("stage new executable")?;
 
-    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let arg_line = args
-        .drain(..)
-        .map(|a| {
-            let s = a.to_string_lossy();
-            // very small quoting for cmd.exe
-            if s.contains(' ') || s.contains('"') {
-                OsString::from(format!("\"{}\"", s.replace('"', "\\\"")))
-            } else {
-                OsString::from(s.as_ref())
-            }
-        })
-        .collect::<Vec<_>>();
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     let exe_name = local_exe
         .file_name()
@@ -420,12 +408,9 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
     lines.push("".to_string());
     lines.push("set PYINSTALLER_RESET_ENVIRONMENT=1".to_string());
 
-    let mut start_line = format!("start \"\" \"{}\"", new_name);
-    for a in arg_line {
-        start_line.push(' ');
-        start_line.push_str(&a.to_string_lossy());
-    }
-    lines.push(start_line);
+    // Use %* to forward args passed to this .bat.
+    // We pass args from Rust when spawning the .bat, which avoids fragile manual quoting.
+    lines.push(format!("start \"\" \"{}\" %*", new_name));
     lines.push("".to_string());
     lines.push("del \"%~f0\"".to_string());
 
@@ -434,6 +419,7 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
     fs::write(&bat_path, bat_content).context("write update bat")?;
 
     Command::new(&bat_path)
+        .args(args)
         .spawn()
         .context("spawn update bat")?;
 

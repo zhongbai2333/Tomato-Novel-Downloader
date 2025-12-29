@@ -218,6 +218,10 @@ pub(super) struct App {
     // app update (program update)
     app_update_report: Option<crate::base_system::app_update::UpdateCheckReport>,
 
+    // app self update (download & replace binary)
+    self_update_requested: bool,
+    self_update_auto_yes: bool,
+
     // cover state
     cover_lines: Vec<String>,
     cover_title: String,
@@ -345,6 +349,8 @@ impl App {
             about_btn_state,
             last_about_buttons: None,
             app_update_report: None,
+            self_update_requested: false,
+            self_update_auto_yes: false,
             cover_lines: Vec::new(),
             cover_title: String::new(),
             _previous_view_cover: View::Home,
@@ -424,6 +430,7 @@ impl App {
 pub enum TuiExit {
     Quit,
     SwitchToOldCli,
+    SelfUpdate { auto_yes: bool },
 }
 
 pub fn run(config: Config) -> Result<TuiExit> {
@@ -483,6 +490,10 @@ fn run_loop(
 
     if app.switch_to_old_cli_requested {
         Ok(TuiExit::SwitchToOldCli)
+    } else if app.self_update_requested {
+        Ok(TuiExit::SelfUpdate {
+            auto_yes: app.self_update_auto_yes,
+        })
     } else {
         Ok(TuiExit::Quit)
     }
@@ -701,7 +712,13 @@ const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 const LOG_HEIGHT: u16 = 7;
 
-const ABOUT_BUTTONS: &[&str] = &["打开Github仓库", "检查程序更新", "不再提醒该版本", "返回"];
+const ABOUT_BUTTONS: &[&str] = &[
+    "打开Github仓库",
+    "检查程序更新",
+    "执行自更新",
+    "不再提醒该版本",
+    "返回",
+];
 
 fn current_category(app: &App) -> Option<(usize, &ConfigCategory)> {
     let idx = app.cfg_cat_state.selected()?;

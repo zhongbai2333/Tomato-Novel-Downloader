@@ -394,6 +394,21 @@ function wire() {
     });
   }
 
+  const selfUpdBtn = document.getElementById('appSelfUpdate');
+  if (selfUpdBtn) {
+    selfUpdBtn.addEventListener('click', async () => {
+      const hint = document.getElementById('appUpdateHint');
+      if (hint) hint.textContent = '自更新启动中…';
+      try {
+        await j('/api/self_update', { method: 'POST' });
+        if (hint) hint.textContent = '已触发自更新，服务将重启';
+      } catch (err) {
+        if (hint) hint.textContent = '自更新触发失败';
+        alert(err);
+      }
+    });
+  }
+
   const cfgForm = document.getElementById('configForm');
   if (cfgForm) {
     cfgForm.addEventListener('submit', async (e) => {

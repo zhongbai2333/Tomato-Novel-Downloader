@@ -102,6 +102,10 @@ fn main() -> Result<()> {
                 config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
                 config.old_cli = true;
             }
+            ui::tui::TuiExit::SelfUpdate { auto_yes } => {
+                let _ = base_system::self_update::check_for_updates(VERSION, auto_yes);
+                return Ok(());
+            }
         }
     }
 }
