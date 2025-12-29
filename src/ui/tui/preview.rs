@@ -267,6 +267,7 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
             PendingDownload {
                 plan,
                 downloaded_count: downloaded,
+                custom_book_name: None,
             }
         });
         let _ = tx.send(WorkerMsg::PreviewReady(Box::new(result)));

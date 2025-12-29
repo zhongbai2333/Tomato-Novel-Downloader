@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tomato_novel_official_api::DirectoryClient;
 
+
 #[derive(Debug, Clone)]
 pub struct NovelUpdateRow {
     pub book_id: String,
@@ -18,6 +19,7 @@ pub struct NovelUpdateRow {
     pub remote_total: usize,
     pub new_count: usize,
     pub has_update: bool,
+    pub is_ignored: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -72,6 +74,9 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
         let new_count = remote_total.saturating_sub(local_total);
         let has_update = new_count > 0 || local_failed > 0;
 
+        // 从书籍status.json读取忽略更新状态
+        let is_ignored = read_ignore_updates_flag(&path, &book_id);
+
         let row = NovelUpdateRow {
             book_id,
             book_name,
@@ -82,9 +87,13 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
             remote_total,
             new_count,
             has_update,
+            is_ignored,
         };
 
-        if has_update {
+        // 被忽略的书籍始终归入"无更新"列表
+        if is_ignored {
+            no_updates.push(row);
+        } else if has_update {
             updates.push(row);
         } else {
             no_updates.push(row);
@@ -164,4 +173,33 @@ pub fn read_downloaded_total_count(folder: &Path, book_id: &str) -> Option<usize
 pub fn read_downloaded_ok_count(folder: &Path, book_id: &str) -> Option<usize> {
     let (_total, ok, _failed) = read_downloaded_counts(folder, book_id)?;
     Some(ok)
+}
+
+/// 读取书籍的ignore_updates标志
+pub fn read_ignore_updates_flag(folder: &Path, book_id: &str) -> bool {
+    let status_new = folder.join("status.json");
+    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
+    let path = if status_new.exists() {
+        status_new
+    } else if status_old.exists() {
+        status_old
+    } else {
+        return false;
+    };
+
+    let data = fs::read_to_string(&path).ok();
+    let data = match data {
+        Some(d) => d,
+        None => return false,
+    };
+
+    let value: Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    value
+        .get("ignore_updates")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }

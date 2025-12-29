@@ -13,7 +13,7 @@ pub(crate) async fn api_updates(State(state): State<AppState>) -> Result<Json<Va
     let cfg = state.config.lock().unwrap().clone();
     let save_dir = cfg.default_save_dir();
 
-    let result = tokio::task::spawn_blocking(move || scan_updates(&save_dir))
+    let result = tokio::task::spawn_blocking(move || scan_updates(&save_dir, &cfg))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -23,7 +23,7 @@ pub(crate) async fn api_updates(State(state): State<AppState>) -> Result<Json<Va
     }
 }
 
-fn scan_updates(save_dir: &Path) -> Result<Value> {
+fn scan_updates(save_dir: &Path, _config: &crate::base_system::context::Config) -> Result<Value> {
     let scan = novel_updates::scan_novel_updates(save_dir)?;
 
     let to_row = |it: novel_updates::NovelUpdateRow| {
@@ -36,6 +36,7 @@ fn scan_updates(save_dir: &Path) -> Result<Value> {
             "remote_total": it.remote_total,
             "new_count": it.new_count,
             "has_update": it.has_update,
+            "is_ignored": it.is_ignored,
         })
     };
 

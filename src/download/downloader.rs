@@ -1208,15 +1208,20 @@ pub fn prepare_download_plan(
     }
 
     let meta_from_dir: BookMeta = dir.meta.into();
-    // Prefer authoritative directory metadata, but keep any hints we already have
-    // (e.g., search title/author) as fallback.
-    let merged = merge_meta(meta_from_dir, meta_hint);
-    let completed_meta =
+    // For book_name: Prefer the hint (what user saw in search) to maintain consistency
+    // For other metadata: Prefer authoritative directory metadata
+    let merged = merge_meta_prefer_hint_name(meta_from_dir, meta_hint);
+    let mut completed_meta =
         if merged.book_name.is_some() && merged.author.is_some() && merged.description.is_some() {
             merged
         } else {
             merge_meta(merged, search_metadata(book_id).unwrap_or_default())
         };
+    
+    // 应用用户配置的书名字段偏好
+    if let Some(preferred_name) = config.pick_preferred_book_name(&completed_meta) {
+        completed_meta.book_name = Some(preferred_name);
+    }
 
     Ok(DownloadPlan {
         book_id: dir.book_id.clone(),
@@ -1641,6 +1646,36 @@ fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
         last_chapter_title: primary.last_chapter_title.or(fallback.last_chapter_title),
         category: primary.category.or(fallback.category),
         cover_primary_color: primary.cover_primary_color.or(fallback.cover_primary_color),
+    }
+}
+
+/// Merge metadata with special handling for book_name: prefer hint (what user saw) over dir API
+fn merge_meta_prefer_hint_name(dir_meta: BookMeta, hint_meta: BookMeta) -> BookMeta {
+    BookMeta {
+        // Special: prefer hint's book_name to maintain UI consistency
+        book_name: hint_meta.book_name.or(dir_meta.book_name),
+        // For all other fields, prefer directory (authoritative) over hint
+        author: dir_meta.author.or(hint_meta.author),
+        description: dir_meta.description.or(hint_meta.description),
+        tags: if dir_meta.tags.is_empty() {
+            hint_meta.tags
+        } else {
+            dir_meta.tags
+        },
+        cover_url: dir_meta.cover_url.or(hint_meta.cover_url),
+        detail_cover_url: dir_meta.detail_cover_url.or(hint_meta.detail_cover_url),
+        finished: dir_meta.finished.or(hint_meta.finished),
+        chapter_count: dir_meta.chapter_count.or(hint_meta.chapter_count),
+        word_count: dir_meta.word_count.or(hint_meta.word_count),
+        score: dir_meta.score.or(hint_meta.score),
+        read_count: dir_meta.read_count.or(hint_meta.read_count),
+        read_count_text: dir_meta.read_count_text.or(hint_meta.read_count_text),
+        book_short_name: dir_meta.book_short_name.or(hint_meta.book_short_name),
+        original_book_name: dir_meta.original_book_name.or(hint_meta.original_book_name),
+        first_chapter_title: dir_meta.first_chapter_title.or(hint_meta.first_chapter_title),
+        last_chapter_title: dir_meta.last_chapter_title.or(hint_meta.last_chapter_title),
+        category: dir_meta.category.or(hint_meta.category),
+        cover_primary_color: dir_meta.cover_primary_color.or(hint_meta.cover_primary_color),
     }
 }
 

@@ -98,6 +98,12 @@ pub struct Config {
     #[serde(default = "default_media_max_dimension_px")]
     pub media_max_dimension_px: u32,
 
+    // 文件管理配置
+    #[serde(default = "default_true")]
+    pub allow_overwrite_files: bool,
+    #[serde(default = "default_preferred_book_name_field")]
+    pub preferred_book_name_field: String,
+
     #[serde(skip)]
     folder_path: Option<PathBuf>,
     #[serde(skip)]
@@ -154,6 +160,8 @@ impl Default for Config {
             first_line_indent_em: default_first_line_indent_em(),
             media_limit_per_chapter: default_media_limit_per_chapter(),
             media_max_dimension_px: default_media_max_dimension_px(),
+            allow_overwrite_files: default_true(),
+            preferred_book_name_field: default_preferred_book_name_field(),
             folder_path: None,
             last_status_was_new: false,
             last_status_claimed: false,
@@ -166,7 +174,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 36] = [
+        static FIELDS: [FieldMeta; 38] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -311,6 +319,14 @@ impl ConfigSpec for Config {
                 name: "media_max_dimension_px",
                 description: "图片最长边像素上限，>0 时缩放并转成 JPEG",
             },
+            FieldMeta {
+                name: "allow_overwrite_files",
+                description: "是否允许覆盖已存在的文件",
+            },
+            FieldMeta {
+                name: "preferred_book_name_field",
+                description: "优先使用的书名字段 (book_name/original_book_name/book_short_name)",
+            },
         ];
         &FIELDS
     }
@@ -322,6 +338,21 @@ impl Config {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         } else {
             PathBuf::from(&self.save_path)
+        }
+    }
+
+    /// 根据用户配置的首选字段选择书名
+    pub fn pick_preferred_book_name(&self, book_meta: &crate::download::downloader::BookMeta) -> Option<String> {
+        match self.preferred_book_name_field.as_str() {
+            "original_book_name" => {
+                book_meta.original_book_name.clone()
+                    .or_else(|| book_meta.book_name.clone())
+            }
+            "book_short_name" => {
+                book_meta.book_short_name.clone()
+                    .or_else(|| book_meta.book_name.clone())
+            }
+            _ => book_meta.book_name.clone(), // 默认使用 book_name
         }
     }
 
@@ -562,4 +593,8 @@ fn default_media_limit_per_chapter() -> usize {
 
 fn default_media_max_dimension_px() -> u32 {
     1280
+}
+
+fn default_preferred_book_name_field() -> String {
+    "book_name".to_string()
 }
