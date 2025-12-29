@@ -7,6 +7,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tomato_novel_official_api::DirectoryClient;
 
+use crate::base_system::context::Config;
+
 #[derive(Debug, Clone)]
 pub struct NovelUpdateRow {
     pub book_id: String,
@@ -18,6 +20,7 @@ pub struct NovelUpdateRow {
     pub remote_total: usize,
     pub new_count: usize,
     pub has_update: bool,
+    pub is_ignored: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -29,7 +32,7 @@ pub struct NovelUpdateScanResult {
 /// 扫描保存目录下的书籍文件夹（形如 `<book_id>_<book_name>`），并对比远端目录。
 ///
 /// 备注："新章节" 以本地已知章节条目数（包含失败/空内容条目）为基准，避免把失败章误报成新章。
-pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
+pub fn scan_novel_updates(save_dir: &Path, config: Option<&Config>) -> Result<NovelUpdateScanResult> {
     if !save_dir.exists() {
         return Ok(NovelUpdateScanResult::default());
     }
@@ -72,6 +75,11 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
         let new_count = remote_total.saturating_sub(local_total);
         let has_update = new_count > 0 || local_failed > 0;
 
+        // 检查是否在忽略列表中
+        let is_ignored = config
+            .map(|c| c.is_book_update_ignored(&book_id))
+            .unwrap_or(false);
+
         let row = NovelUpdateRow {
             book_id,
             book_name,
@@ -82,9 +90,13 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
             remote_total,
             new_count,
             has_update,
+            is_ignored,
         };
 
-        if has_update {
+        // 被忽略的书籍始终归入"无更新"列表
+        if is_ignored {
+            no_updates.push(row);
+        } else if has_update {
             updates.push(row);
         } else {
             no_updates.push(row);

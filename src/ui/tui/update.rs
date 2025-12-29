@@ -11,6 +11,25 @@ pub(super) fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => exit_update_view(app)?,
+            KeyCode::Char('i') => {
+                // 切换当前选中书籍的忽略更新状态
+                if let Some(entry) = current_update_entry(app) {
+                    let was_ignored = app.config.is_book_update_ignored(&entry.book_id);
+                    app.config.toggle_ignored_book(&entry.book_id);
+                    
+                    // 保存配置
+                    if let Err(e) = crate::base_system::config::write_with_comments(&app.config, std::path::Path::new("config.yml")) {
+                        app.status = format!("保存配置失败: {}", e);
+                    } else if was_ignored {
+                        app.status = format!("已将《{}》从忽略列表移除", entry.book_name);
+                    } else {
+                        app.status = format!("已将《{}》添加到忽略列表", entry.book_name);
+                    }
+                    
+                    // 重新扫描更新
+                    show_update_menu(app)?;
+                }
+            }
             KeyCode::Char('p') => {
                 if let Some(entry) = current_update_entry(app) {
                     super::cover::show_cover(
@@ -216,20 +235,21 @@ pub(super) fn show_update_menu(app: &mut App) -> Result<()> {
 
 fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
     let save_dir = config.default_save_dir();
-    let scan = novel_updates::scan_novel_updates(&save_dir)?;
+    let scan = novel_updates::scan_novel_updates(&save_dir, Some(config))?;
 
     let to_entry = |it: novel_updates::NovelUpdateRow| {
+        let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
         let label = if it.new_count > 0 && it.local_failed > 0 {
             format!(
-                "《{}》({}) — 新章节: {} | 失败章节: {}",
-                it.book_name, it.book_id, it.new_count, it.local_failed
+                "{}《{}》({}) — 新章节: {} | 失败章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
             )
         } else if it.new_count > 0 {
-            format!("《{}》({}) — 新章节: {}", it.book_name, it.book_id, it.new_count)
+            format!("{}《{}》({}) — 新章节: {}", ignore_marker, it.book_name, it.book_id, it.new_count)
         } else if it.local_failed > 0 {
-            format!("《{}》({}) — 失败章节: {}", it.book_name, it.book_id, it.local_failed)
+            format!("{}《{}》({}) — 失败章节: {}", ignore_marker, it.book_name, it.book_id, it.local_failed)
         } else {
-            format!("《{}》({}) — 新章节: 0", it.book_name, it.book_id)
+            format!("{}《{}》({}) — 新章节: 0", ignore_marker, it.book_name, it.book_id)
         };
 
         UpdateEntry {
@@ -271,7 +291,7 @@ pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  |  上下选择，Enter 下载，n 切换无更新，b 或右下角返回"),
+        Span::raw("  |  上下选择，Enter 下载，i 忽略/取消忽略，n 切换无更新，b 或右下角返回"),
     ]);
     let header =
         Paragraph::new(header_line).block(Block::default().borders(Borders::ALL).title("更新检测"));

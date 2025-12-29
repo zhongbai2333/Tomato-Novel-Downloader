@@ -98,6 +98,12 @@ pub struct Config {
     #[serde(default = "default_media_max_dimension_px")]
     pub media_max_dimension_px: u32,
 
+    // 更新检查与文件管理配置
+    #[serde(default)]
+    pub ignored_update_books: Vec<String>,
+    #[serde(default = "default_true")]
+    pub allow_overwrite_files: bool,
+
     #[serde(skip)]
     folder_path: Option<PathBuf>,
     #[serde(skip)]
@@ -154,6 +160,8 @@ impl Default for Config {
             first_line_indent_em: default_first_line_indent_em(),
             media_limit_per_chapter: default_media_limit_per_chapter(),
             media_max_dimension_px: default_media_max_dimension_px(),
+            ignored_update_books: Vec::new(),
+            allow_overwrite_files: default_true(),
             folder_path: None,
             last_status_was_new: false,
             last_status_claimed: false,
@@ -166,7 +174,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 36] = [
+        static FIELDS: [FieldMeta; 38] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -311,6 +319,14 @@ impl ConfigSpec for Config {
                 name: "media_max_dimension_px",
                 description: "图片最长边像素上限，>0 时缩放并转成 JPEG",
             },
+            FieldMeta {
+                name: "ignored_update_books",
+                description: "忽略更新检查的书籍ID列表（以空格或逗号分隔）",
+            },
+            FieldMeta {
+                name: "allow_overwrite_files",
+                description: "是否允许覆盖已存在的文件",
+            },
         ];
         &FIELDS
     }
@@ -427,6 +443,35 @@ impl Config {
 
         self.last_status_was_new = is_new_this_session;
         self.last_status_claimed = false;
+    }
+
+    /// 检查某本书是否在忽略更新列表中
+    pub fn is_book_update_ignored(&self, book_id: &str) -> bool {
+        self.ignored_update_books.contains(&book_id.to_string())
+    }
+
+    /// 添加书籍到忽略更新列表
+    pub fn add_ignored_book(&mut self, book_id: &str) {
+        let id = book_id.to_string();
+        if !self.ignored_update_books.contains(&id) {
+            self.ignored_update_books.push(id);
+        }
+    }
+
+    /// 从忽略更新列表中移除书籍
+    pub fn remove_ignored_book(&mut self, book_id: &str) {
+        self.ignored_update_books.retain(|id| id != book_id);
+    }
+
+    /// 切换书籍的忽略更新状态
+    pub fn toggle_ignored_book(&mut self, book_id: &str) -> bool {
+        if self.is_book_update_ignored(book_id) {
+            self.remove_ignored_book(book_id);
+            false
+        } else {
+            self.add_ignored_book(book_id);
+            true
+        }
     }
 }
 
