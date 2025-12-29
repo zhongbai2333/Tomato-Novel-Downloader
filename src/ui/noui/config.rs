@@ -25,6 +25,7 @@ enum ConfigField {
     NovelFormat,
     BulkFiles,
     AutoClearDump,
+    AllowOverwriteFiles,
     EnableAudiobook,
     AudiobookVoice,
     AudiobookRate,
@@ -86,6 +87,11 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
         ConfigOption {
             name: "是否自动清理缓存文件",
             field: ConfigField::AutoClearDump,
+            ty: ConfigValueType::Bool,
+        },
+        ConfigOption {
+            name: "是否允许覆盖已存在的文件",
+            field: ConfigField::AllowOverwriteFiles,
             ty: ConfigValueType::Bool,
         },
         ConfigOption {
@@ -309,6 +315,7 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::NovelFormat => config.novel_format.clone(),
         ConfigField::BulkFiles => config.bulk_files.to_string(),
         ConfigField::AutoClearDump => config.auto_clear_dump.to_string(),
+        ConfigField::AllowOverwriteFiles => config.allow_overwrite_files.to_string(),
         ConfigField::EnableAudiobook => config.enable_audiobook.to_string(),
         ConfigField::AudiobookVoice => config.audiobook_voice.clone(),
         ConfigField::AudiobookRate => config.audiobook_rate.clone(),
@@ -384,6 +391,7 @@ fn set_bool(config: &mut Config, field: ConfigField, v: bool) -> Result<()> {
     match field {
         ConfigField::BulkFiles => config.bulk_files = v,
         ConfigField::AutoClearDump => config.auto_clear_dump = v,
+        ConfigField::AllowOverwriteFiles => config.allow_overwrite_files = v,
         ConfigField::EnableAudiobook => config.enable_audiobook = v,
         ConfigField::UseOfficialApi => config.use_official_api = v,
         ConfigField::EnableSegmentComments => {

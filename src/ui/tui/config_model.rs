@@ -18,6 +18,7 @@ pub(in crate::ui) enum ConfigField {
     BulkFiles,
     AutoClearDump,
     AutoOpenDownloadedFiles,
+    AllowOverwriteFiles,
     OldCli,
     FirstLineIndentEm,
     EnableSegmentComments,
@@ -91,6 +92,10 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                 ConfigEntry {
                     title: "下载完成后自动打开",
                     field: ConfigField::AutoOpenDownloadedFiles,
+                },
+                ConfigEntry {
+                    title: "允许覆盖已存在文件",
+                    field: ConfigField::AllowOverwriteFiles,
                 },
                 ConfigEntry {
                     title: "旧版 CLI UI",
@@ -250,6 +255,7 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::BulkFiles => app.config.bulk_files.to_string(),
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files.to_string(),
+        ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files.to_string(),
         ConfigField::OldCli => app.config.old_cli.to_string(),
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments.to_string(),
         ConfigField::UseOfficialApi => app.config.use_official_api.to_string(),
@@ -291,6 +297,7 @@ pub(in crate::ui) fn cfg_field_is_bool(field: ConfigField) -> bool {
         ConfigField::BulkFiles
             | ConfigField::AutoClearDump
             | ConfigField::AutoOpenDownloadedFiles
+            | ConfigField::AllowOverwriteFiles
             | ConfigField::OldCli
             | ConfigField::EnableSegmentComments
             | ConfigField::UseOfficialApi
@@ -309,6 +316,7 @@ fn cfg_field_current_bool(app: &App, field: ConfigField) -> Option<bool> {
         ConfigField::BulkFiles => app.config.bulk_files,
         ConfigField::AutoClearDump => app.config.auto_clear_dump,
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files,
+        ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files,
         ConfigField::OldCli => app.config.old_cli,
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments,
         ConfigField::UseOfficialApi => app.config.use_official_api,
@@ -399,6 +407,10 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
         ConfigField::AutoOpenDownloadedFiles => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
             app.config.auto_open_downloaded_files = val;
+        }
+        ConfigField::AllowOverwriteFiles => {
+            let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
+            app.config.allow_overwrite_files = val;
         }
         ConfigField::OldCli => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
