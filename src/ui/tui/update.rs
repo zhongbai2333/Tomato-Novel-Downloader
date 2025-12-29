@@ -14,16 +14,29 @@ pub(super) fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
             KeyCode::Char('i') => {
                 // 切换当前选中书籍的忽略更新状态
                 if let Some(entry) = current_update_entry(app) {
-                    let was_ignored = app.config.is_book_update_ignored(&entry.book_id);
-                    app.config.toggle_ignored_book(&entry.book_id);
+                    // 加载BookManager来切换忽略状态
+                    let mut manager = match crate::book_parser::book_manager::BookManager::new(
+                        app.config.clone(),
+                        &entry.book_id,
+                        &entry.book_name,
+                    ) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            app.status = format!("加载书籍状态失败: {}", e);
+                            return Ok(());
+                        }
+                    };
                     
-                    // 保存配置
-                    if let Err(e) = crate::base_system::config::write_with_comments(&app.config, std::path::Path::new("config.yml")) {
-                        app.status = format!("保存配置失败: {}", e);
-                    } else if was_ignored {
-                        app.status = format!("已将《{}》从忽略列表移除", entry.book_name);
-                    } else {
+                    // 加载现有状态
+                    manager.load_existing_status(&entry.book_id, &entry.book_name);
+                    
+                    // 切换忽略状态并保存
+                    let new_state = manager.toggle_ignore_updates();
+                    
+                    if new_state {
                         app.status = format!("已将《{}》添加到忽略列表", entry.book_name);
+                    } else {
+                        app.status = format!("已将《{}》从忽略列表移除", entry.book_name);
                     }
                     
                     // 重新扫描更新
