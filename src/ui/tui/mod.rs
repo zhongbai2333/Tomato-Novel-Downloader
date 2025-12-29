@@ -166,6 +166,7 @@ impl BookDetail {
 pub(super) struct PendingDownload {
     plan: DownloadPlan,
     downloaded_count: usize,
+    custom_book_name: Option<String>,
 }
 
 pub(super) struct App {
