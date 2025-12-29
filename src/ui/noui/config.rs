@@ -96,7 +96,7 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             ty: ConfigValueType::Bool,
         },
         ConfigOption {
-            name: "优先书名字段(book_name/original_book_name/book_short_name)",
+            name: "优先书名字段(默认书名/原始书名/短书名)",
             field: ConfigField::PreferredBookNameField,
             ty: ConfigValueType::String,
         },
@@ -322,7 +322,9 @@ fn config_value_display(config: &Config, field: ConfigField) -> String {
         ConfigField::BulkFiles => config.bulk_files.to_string(),
         ConfigField::AutoClearDump => config.auto_clear_dump.to_string(),
         ConfigField::AllowOverwriteFiles => config.allow_overwrite_files.to_string(),
-        ConfigField::PreferredBookNameField => config.preferred_book_name_field.clone(),
+        ConfigField::PreferredBookNameField => {
+            book_name_field_to_chinese(&config.preferred_book_name_field).to_string()
+        }
         ConfigField::EnableAudiobook => config.enable_audiobook.to_string(),
         ConfigField::AudiobookVoice => config.audiobook_voice.clone(),
         ConfigField::AudiobookRate => config.audiobook_rate.clone(),
@@ -559,11 +561,19 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
             config.audiobook_format = lower;
         }
         ConfigField::PreferredBookNameField => {
-            let lower = v.trim().to_ascii_lowercase();
-            if lower != "book_name" && lower != "original_book_name" && lower != "book_short_name" {
-                return Err(anyhow!("优先书名字段仅支持 book_name/original_book_name/book_short_name"));
-            }
-            config.preferred_book_name_field = lower;
+            // 尝试从中文转换，如果失败则尝试直接使用英文
+            let field_name = if let Some(english) = chinese_to_book_name_field(v.trim()) {
+                english
+            } else {
+                // 如果不是中文，检查是否是有效的英文字段名
+                let lower = v.trim().to_ascii_lowercase();
+                if lower == "book_name" || lower == "original_book_name" || lower == "book_short_name" {
+                    lower
+                } else {
+                    return Err(anyhow!("优先书名字段仅支持：默认书名、原始书名、短书名"));
+                }
+            };
+            config.preferred_book_name_field = field_name;
         }
         _ => return Err(anyhow!("该字段不是 string")),
     }
@@ -577,4 +587,24 @@ fn set_list(config: &mut Config, field: ConfigField, v: Vec<String>) -> Result<(
         _ => return Err(anyhow!("该字段不是 list")),
     }
     Ok(())
+}
+
+/// 将书名字段的英文名转换为中文显示名
+fn book_name_field_to_chinese(field: &str) -> &'static str {
+    match field {
+        "book_name" => "默认书名",
+        "original_book_name" => "原始书名",
+        "book_short_name" => "短书名",
+        _ => "默认书名",
+    }
+}
+
+/// 将中文显示名转换为书名字段的英文名
+fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
+    match chinese {
+        "默认书名" => Some("book_name".to_string()),
+        "原始书名" => Some("original_book_name".to_string()),
+        "短书名" => Some("book_short_name".to_string()),
+        _ => None,
+    }
 }
