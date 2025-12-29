@@ -248,7 +248,7 @@ pub(super) fn show_update_menu(app: &mut App) -> Result<()> {
 
 fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
     let save_dir = config.default_save_dir();
-    let scan = novel_updates::scan_novel_updates(&save_dir, Some(config))?;
+    let scan = novel_updates::scan_novel_updates(&save_dir)?;
 
     let to_entry = |it: novel_updates::NovelUpdateRow| {
         let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };

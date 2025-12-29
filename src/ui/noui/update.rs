@@ -99,8 +99,8 @@ fn select_from_list(list: &[UpdateEntry], title: &str) -> Result<Option<String>>
     }
 }
 
-fn scan_updates(config: &Config, save_dir: &Path) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
-    let scan = novel_updates::scan_novel_updates(save_dir, Some(config))?;
+fn scan_updates(_config: &Config, save_dir: &Path) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
+    let scan = novel_updates::scan_novel_updates(save_dir)?;
 
     let to_entry = |it: novel_updates::NovelUpdateRow| {
         let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };

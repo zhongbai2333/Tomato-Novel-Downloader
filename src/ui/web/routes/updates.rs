@@ -23,8 +23,8 @@ pub(crate) async fn api_updates(State(state): State<AppState>) -> Result<Json<Va
     }
 }
 
-fn scan_updates(save_dir: &Path, config: &crate::base_system::context::Config) -> Result<Value> {
-    let scan = novel_updates::scan_novel_updates(save_dir, Some(config))?;
+fn scan_updates(save_dir: &Path, _config: &crate::base_system::context::Config) -> Result<Value> {
+    let scan = novel_updates::scan_novel_updates(save_dir)?;
 
     let to_row = |it: novel_updates::NovelUpdateRow| {
         json!({

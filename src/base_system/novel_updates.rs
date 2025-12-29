@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tomato_novel_official_api::DirectoryClient;
 
-use crate::base_system::context::Config;
 
 #[derive(Debug, Clone)]
 pub struct NovelUpdateRow {
@@ -32,7 +31,7 @@ pub struct NovelUpdateScanResult {
 /// 扫描保存目录下的书籍文件夹（形如 `<book_id>_<book_name>`），并对比远端目录。
 ///
 /// 备注："新章节" 以本地已知章节条目数（包含失败/空内容条目）为基准，避免把失败章误报成新章。
-pub fn scan_novel_updates(save_dir: &Path, _config: Option<&Config>) -> Result<NovelUpdateScanResult> {
+pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
     if !save_dir.exists() {
         return Ok(NovelUpdateScanResult::default());
     }
