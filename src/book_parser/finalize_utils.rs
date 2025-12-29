@@ -199,15 +199,15 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
 
     let suffix = if fmt == "epub" { "epub" } else { "txt" };
     let output_path = dir.join(format!("{}.{}", safe_book, suffix));
-    
+
     // 检查文件是否已存在且不允许覆盖
     if !manager.config.allow_overwrite_files && output_path.exists() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::AlreadyExists,
-            format!("文件已存在且配置禁止覆盖: {}", output_path.display())
+            format!("文件已存在且配置禁止覆盖: {}", output_path.display()),
         ));
     }
-    
+
     Ok(output_path)
 }
 

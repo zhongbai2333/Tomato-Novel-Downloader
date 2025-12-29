@@ -108,10 +108,10 @@ pub(super) fn draw_about(frame: &mut ratatui::Frame, app: &mut App) {
         if rep.is_dismissed {
             text.push_str("提示: 已设置忽略该版本提醒（仍可手动检查）\n");
         }
-        if let Some(url) = rep.latest.html_url.as_deref() {
-            if !url.trim().is_empty() {
-                text.push_str(&format!("Release: {}\n", url));
-            }
+        if let Some(url) = rep.latest.html_url.as_deref()
+            && !url.trim().is_empty()
+        {
+            text.push_str(&format!("Release: {}\n", url));
         }
         if let Some(body) = rep.latest.body.as_deref() {
             let body = body.trim();
@@ -161,7 +161,7 @@ fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, line) in body.lines().enumerate() {
         if i >= max_lines {
-            out.push_str("…");
+            out.push('…');
             break;
         }
         let line = line.trim_end();
@@ -174,7 +174,7 @@ fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
         out.push_str(line);
         if out.len() >= max_chars {
             out.truncate(max_chars);
-            out.push_str("…");
+            out.push('…');
             break;
         }
     }

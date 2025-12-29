@@ -318,7 +318,6 @@ impl BookManager {
         self.ignore_updates
     }
 
-    #[allow(dead_code)]
     pub fn book_folder(&self) -> &Path {
         &self.status_folder
     }

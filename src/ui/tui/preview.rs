@@ -259,15 +259,12 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
                 &plan.book_id,
                 plan.meta.book_name.as_deref(),
             );
-            let downloaded = crate::base_system::novel_updates::read_downloaded_ok_count(
-                &folder,
-                &plan.book_id,
-            )
-            .unwrap_or(0);
+            let downloaded =
+                crate::base_system::novel_updates::read_downloaded_ok_count(&folder, &plan.book_id)
+                    .unwrap_or(0);
             PendingDownload {
                 plan,
                 downloaded_count: downloaded,
-                custom_book_name: None,
             }
         });
         let _ = tx.send(WorkerMsg::PreviewReady(Box::new(result)));

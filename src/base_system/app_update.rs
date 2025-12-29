@@ -111,7 +111,8 @@ fn fetch_latest_release_blocking(client: &reqwest::blocking::Client) -> Result<R
         .error_for_status()
         .context("latest release status")?;
 
-    resp.json::<ReleaseInfo>().context("parse latest release json")
+    resp.json::<ReleaseInfo>()
+        .context("parse latest release json")
 }
 
 pub fn check_update_report_blocking(current_version: &str) -> Result<UpdateCheckReport> {
@@ -170,7 +171,10 @@ pub async fn fetch_latest_release_async() -> Result<LatestRelease> {
         .error_for_status()
         .context("latest release status")?;
 
-    let info = resp.json::<ReleaseInfo>().await.context("parse latest release json")?;
+    let info = resp
+        .json::<ReleaseInfo>()
+        .await
+        .context("parse latest release json")?;
     let tag_name = info.tag_name.unwrap_or_default();
     if tag_name.trim().is_empty() {
         return Err(anyhow!("latest release missing tag_name"));

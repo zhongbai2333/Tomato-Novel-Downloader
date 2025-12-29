@@ -201,19 +201,6 @@ impl LogSystem {
 
         Ok(Self { runtime })
     }
-
-    pub fn add_exit_hook<F>(&self, func: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        if let Ok(mut hooks) = self.runtime.exit_hooks.lock() {
-            hooks.push(Box::new(func));
-        }
-    }
-
-    pub fn safe_exit(&self) {
-        self.runtime.safe_exit();
-    }
 }
 
 impl Drop for LogSystem {

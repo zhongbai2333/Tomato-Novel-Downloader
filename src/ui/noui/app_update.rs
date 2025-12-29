@@ -43,10 +43,10 @@ pub(super) fn check_update_menu() -> Result<()> {
         println!("状态: 已是最新版本");
     }
 
-    if let Some(url) = report.latest.html_url.as_deref() {
-        if !url.trim().is_empty() {
-            println!("Release: {}", url);
-        }
+    if let Some(url) = report.latest.html_url.as_deref()
+        && !url.trim().is_empty()
+    {
+        println!("Release: {}", url);
     }
 
     if let Some(body) = report.latest.body.as_deref() {
@@ -77,7 +77,7 @@ fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
     let mut out = String::new();
     for (i, line) in body.lines().enumerate() {
         if i >= max_lines {
-            out.push_str("…");
+            out.push('…');
             break;
         }
         let line = line.trim_end();
@@ -90,7 +90,7 @@ fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
         out.push_str(line);
         if out.len() >= max_chars {
             out.truncate(max_chars);
-            out.push_str("…");
+            out.push('…');
             break;
         }
     }

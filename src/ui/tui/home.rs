@@ -160,29 +160,30 @@ pub(super) fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<
                 }
                 if pos_in(menu_area, me.column, me.row) {
                     app.focus = Focus::Menu;
-                    if let Some(idx) =
-                        super::list_index_from_mouse_row(menu_area, me.row, &app.menu_state, MENU_ITEMS.len())
-                    {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        menu_area,
+                        me.row,
+                        &app.menu_state,
+                        MENU_ITEMS.len(),
+                    ) {
                         app.menu_state.select(Some(idx));
                         super::trigger_menu_action(app)?;
                     }
                     return Ok(());
                 }
                 if pos_in(results_area, me.column, me.row) {
-                    if !app.results.is_empty() {
-                        if let Some(idx) =
-                            super::list_index_from_mouse_row(
-                                results_area,
-                                me.row,
-                                &app.list_state,
-                                app.results.len(),
-                            )
-                        {
-                            app.list_state.select(Some(idx));
-                            app.focus = Focus::Results;
-                            let hint = book_meta_from_item(&app.results[idx]);
-                            super::start_preview_task(app, app.results[idx].book_id.clone(), hint)?;
-                        }
+                    if !app.results.is_empty()
+                        && let Some(idx) = super::list_index_from_mouse_row(
+                            results_area,
+                            me.row,
+                            &app.list_state,
+                            app.results.len(),
+                        )
+                    {
+                        app.list_state.select(Some(idx));
+                        app.focus = Focus::Results;
+                        let hint = book_meta_from_item(&app.results[idx]);
+                        super::start_preview_task(app, app.results[idx].book_id.clone(), hint)?;
                     }
                     return Ok(());
                 }
@@ -192,27 +193,28 @@ pub(super) fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<
             }
             MouseEventKind::Moved => {
                 if pos_in(menu_area, me.column, me.row) {
-                    if let Some(idx) =
-                        super::list_index_from_mouse_row(menu_area, me.row, &app.menu_state, MENU_ITEMS.len())
-                    {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        menu_area,
+                        me.row,
+                        &app.menu_state,
+                        MENU_ITEMS.len(),
+                    ) {
                         app.menu_state.select(Some(idx));
                         app.focus = Focus::Menu;
                     }
                     return Ok(());
                 }
                 if pos_in(results_area, me.column, me.row) {
-                    if !app.results.is_empty() {
-                        if let Some(idx) =
-                            super::list_index_from_mouse_row(
-                                results_area,
-                                me.row,
-                                &app.list_state,
-                                app.results.len(),
-                            )
-                        {
-                            app.list_state.select(Some(idx));
-                            app.focus = Focus::Results;
-                        }
+                    if !app.results.is_empty()
+                        && let Some(idx) = super::list_index_from_mouse_row(
+                            results_area,
+                            me.row,
+                            &app.list_state,
+                            app.results.len(),
+                        )
+                    {
+                        app.list_state.select(Some(idx));
+                        app.focus = Focus::Results;
                     }
                     return Ok(());
                 }

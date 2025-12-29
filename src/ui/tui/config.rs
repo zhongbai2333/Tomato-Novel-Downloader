@@ -270,20 +270,19 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
 
             // Scroll entries.
-            if pos_in(entry_area, me.column, me.row) {
-                if let Some(entries) = super::current_cfg_entries(app)
-                    && !entries.is_empty()
-                {
-                    let cur = app.cfg_entry_state.selected().unwrap_or(0);
-                    let next = if up {
-                        cur.saturating_sub(1)
-                    } else {
-                        (cur + 1).min(entries.len().saturating_sub(1))
-                    };
-                    app.cfg_entry_state.select(Some(next));
-                    app.cfg_focus = ConfigFocus::Entry;
-                    return Ok(());
-                }
+            if pos_in(entry_area, me.column, me.row)
+                && let Some(entries) = super::current_cfg_entries(app)
+                && !entries.is_empty()
+            {
+                let cur = app.cfg_entry_state.selected().unwrap_or(0);
+                let next = if up {
+                    cur.saturating_sub(1)
+                } else {
+                    (cur + 1).min(entries.len().saturating_sub(1))
+                };
+                app.cfg_entry_state.select(Some(next));
+                app.cfg_focus = ConfigFocus::Entry;
+                return Ok(());
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -338,18 +337,18 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
 
             if pos_in(cat_area, me.column, me.row) {
-                if !app.cfg_categories.is_empty() {
-                    if let Some(idx) = super::list_index_from_mouse_row(
+                if !app.cfg_categories.is_empty()
+                    && let Some(idx) = super::list_index_from_mouse_row(
                         cat_area,
                         me.row,
                         &app.cfg_cat_state,
                         app.cfg_categories.len(),
-                    ) {
-                        app.cfg_cat_state.select(Some(idx));
-                        super::ensure_entry_selection(app);
-                        app.cfg_focus = ConfigFocus::Category;
-                        app.cfg_cat_hover = Some(idx);
-                    }
+                    )
+                {
+                    app.cfg_cat_state.select(Some(idx));
+                    super::ensure_entry_selection(app);
+                    app.cfg_focus = ConfigFocus::Category;
+                    app.cfg_cat_hover = Some(idx);
                 }
                 return Ok(());
             }
@@ -364,17 +363,17 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
 
             if pos_in(entry_area, me.column, me.row) {
-                if let Some(entries) = super::current_cfg_entries(app) {
-                    if let Some(idx) = super::list_index_from_mouse_row(
+                if let Some(entries) = super::current_cfg_entries(app)
+                    && let Some(idx) = super::list_index_from_mouse_row(
                         entry_area,
                         me.row,
                         &app.cfg_entry_state,
                         entries.len(),
-                    ) {
-                        app.cfg_entry_state.select(Some(idx));
-                        app.cfg_focus = ConfigFocus::Entry;
-                        super::start_cfg_edit(app);
-                    }
+                    )
+                {
+                    app.cfg_entry_state.select(Some(idx));
+                    app.cfg_focus = ConfigFocus::Entry;
+                    super::start_cfg_edit(app);
                 }
                 return Ok(());
             }
@@ -434,16 +433,16 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
 
             if pos_in(entry_area, me.column, me.row) {
-                if let Some(entries) = super::current_cfg_entries(app) {
-                    if let Some(idx) = super::list_index_from_mouse_row(
+                if let Some(entries) = super::current_cfg_entries(app)
+                    && let Some(idx) = super::list_index_from_mouse_row(
                         entry_area,
                         me.row,
                         &app.cfg_entry_state,
                         entries.len(),
-                    ) {
-                        app.cfg_entry_state.select(Some(idx));
-                        app.cfg_focus = ConfigFocus::Entry;
-                    }
+                    )
+                {
+                    app.cfg_entry_state.select(Some(idx));
+                    app.cfg_focus = ConfigFocus::Entry;
                 }
                 return Ok(());
             }
@@ -532,7 +531,7 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
         .title("分类 (左右/Tab 切换)");
     frame.render_widget(cat_block.clone(), body[0]);
     let cat_inner = cat_block.inner(body[0]);
-    let need_cat_scrollbar = app.cfg_categories.len() > 0
+    let need_cat_scrollbar = !app.cfg_categories.is_empty()
         && cat_inner.height > 0
         && app.cfg_categories.len() > cat_inner.height as usize;
     let (cat_area, cat_sb) = if need_cat_scrollbar && cat_inner.width > 0 {
@@ -611,7 +610,9 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
         .title("配置项 (上下选择, 回车编辑/保存)");
     frame.render_widget(entry_block.clone(), body[1]);
     let entry_inner = entry_block.inner(body[1]);
-    let entry_len = super::current_cfg_entries(app).map(|e| e.len()).unwrap_or(0);
+    let entry_len = super::current_cfg_entries(app)
+        .map(|e| e.len())
+        .unwrap_or(0);
     let need_entry_scrollbar =
         entry_len > 0 && entry_inner.height > 0 && entry_len > entry_inner.height as usize;
     let (entry_area, entry_sb) = if need_entry_scrollbar && entry_inner.width > 0 {

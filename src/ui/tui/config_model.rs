@@ -427,7 +427,10 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
             } else {
                 // 如果不是中文，检查是否是有效的英文字段名
                 let lower = raw.to_ascii_lowercase();
-                if lower == "book_name" || lower == "original_book_name" || lower == "book_short_name" {
+                if lower == "book_name"
+                    || lower == "original_book_name"
+                    || lower == "book_short_name"
+                {
                     lower
                 } else {
                     app.status = "请输入：默认书名、原始书名 或 短书名".to_string();

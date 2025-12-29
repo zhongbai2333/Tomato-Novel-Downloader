@@ -342,16 +342,19 @@ impl Config {
     }
 
     /// 根据用户配置的首选字段选择书名
-    pub fn pick_preferred_book_name(&self, book_meta: &crate::download::downloader::BookMeta) -> Option<String> {
+    pub fn pick_preferred_book_name(
+        &self,
+        book_meta: &crate::download::downloader::BookMeta,
+    ) -> Option<String> {
         match self.preferred_book_name_field.as_str() {
-            "original_book_name" => {
-                book_meta.original_book_name.clone()
-                    .or_else(|| book_meta.book_name.clone())
-            }
-            "book_short_name" => {
-                book_meta.book_short_name.clone()
-                    .or_else(|| book_meta.book_name.clone())
-            }
+            "original_book_name" => book_meta
+                .original_book_name
+                .clone()
+                .or_else(|| book_meta.book_name.clone()),
+            "book_short_name" => book_meta
+                .book_short_name
+                .clone()
+                .or_else(|| book_meta.book_name.clone()),
             _ => book_meta.book_name.clone(), // 默认使用 book_name
         }
     }
@@ -382,16 +385,6 @@ impl Config {
             self.last_status_was_new = false;
             self.last_status_claimed = false;
         }
-    }
-
-    pub fn pending_unclaimed_status_folders(&self, exclude: Option<&Path>) -> Vec<PathBuf> {
-        let exclude = exclude.map(PathBuf::from);
-        self.status_registry
-            .iter()
-            .filter(|entry| entry.is_new && !entry.claimed)
-            .filter(|entry| exclude.as_ref() != Some(&entry.path))
-            .map(|entry| entry.path.clone())
-            .collect()
     }
 
     pub fn status_folder_was_created_this_session(&self, path: &Path) -> bool {

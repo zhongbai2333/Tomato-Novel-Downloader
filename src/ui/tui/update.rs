@@ -26,19 +26,19 @@ pub(super) fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
                             return Ok(());
                         }
                     };
-                    
+
                     // 加载现有状态
                     manager.load_existing_status(&entry.book_id, &entry.book_name);
-                    
+
                     // 切换忽略状态并保存
                     let new_state = manager.toggle_ignore_updates();
-                    
+
                     if new_state {
                         app.status = format!("已将《{}》添加到忽略列表", entry.book_name);
                     } else {
                         app.status = format!("已将《{}》从忽略列表移除", entry.book_name);
                     }
-                    
+
                     // 重新扫描更新
                     show_update_menu(app)?;
                 }
@@ -137,14 +137,12 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
                     } else {
                         &app.update_entries
                     };
-                    if let Some(idx) =
-                        super::list_index_from_mouse_row(
-                            list_area,
-                            me.row,
-                            &app.update_state,
-                            list.len(),
-                        )
-                    {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        list_area,
+                        me.row,
+                        &app.update_state,
+                        list.len(),
+                    ) {
                         app.update_state.select(Some(idx));
                         if let Some(entry) = current_update_entry(app) {
                             let hint = BookMeta {
@@ -163,14 +161,12 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
                     } else {
                         &app.update_entries
                     };
-                    if let Some(idx) =
-                        super::list_index_from_mouse_row(
-                            list_area,
-                            me.row,
-                            &app.update_state,
-                            list.len(),
-                        )
-                    {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        list_area,
+                        me.row,
+                        &app.update_state,
+                        list.len(),
+                    ) {
                         app.update_state.select(Some(idx));
                     }
                 }
@@ -258,11 +254,20 @@ fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>
                 ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
             )
         } else if it.new_count > 0 {
-            format!("{}《{}》({}) — 新章节: {}", ignore_marker, it.book_name, it.book_id, it.new_count)
+            format!(
+                "{}《{}》({}) — 新章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.new_count
+            )
         } else if it.local_failed > 0 {
-            format!("{}《{}》({}) — 失败章节: {}", ignore_marker, it.book_name, it.book_id, it.local_failed)
+            format!(
+                "{}《{}》({}) — 失败章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.local_failed
+            )
         } else {
-            format!("{}《{}》({}) — 新章节: 0", ignore_marker, it.book_name, it.book_id)
+            format!(
+                "{}《{}》({}) — 新章节: 0",
+                ignore_marker, it.book_name, it.book_id
+            )
         };
 
         UpdateEntry {
@@ -331,7 +336,7 @@ pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(list_block.clone(), layout[1]);
     let inner = list_block.inner(layout[1]);
 
-    let need_scrollbar = list.len() > 0 && inner.height > 0 && list.len() > inner.height as usize;
+    let need_scrollbar = !list.is_empty() && inner.height > 0 && list.len() > inner.height as usize;
     let (list_area, sb_area) = if need_scrollbar && inner.width > 0 {
         let list_w = inner.width.saturating_sub(1).max(1);
         (

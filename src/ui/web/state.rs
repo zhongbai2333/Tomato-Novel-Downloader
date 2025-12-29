@@ -115,15 +115,6 @@ impl JobStore {
         v
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn get_handle(&self, id: u64) -> Option<JobHandle> {
-        let g = self.inner.lock().unwrap();
-        g.get(&id).map(|e| JobHandle {
-            id,
-            cancel: e.cancel.clone(),
-        })
-    }
-
     pub(crate) fn set_running(&self, id: u64) {
         self.update(id, |j| {
             j.state = JobState::Running;

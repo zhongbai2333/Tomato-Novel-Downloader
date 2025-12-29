@@ -108,26 +108,6 @@ impl EpubGenerator {
             .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
     }
 
-    #[allow(dead_code)]
-    pub fn peek_next_aux_file_name(&self) -> String {
-        format!("aux_{:05}.xhtml", self.file_counter)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_aux_file_name_after_next_chapter(&self) -> String {
-        format!("aux_{:05}.xhtml", self.file_counter + 1)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_chapter_file_name(&self) -> String {
-        format!("chapter_{:05}.xhtml", self.file_counter)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_chapter_file_name_after_next_aux(&self) -> String {
-        format!("chapter_{:05}.xhtml", self.file_counter + 1)
-    }
-
     pub fn add_aux_page(&mut self, title: &str, content: &str, include_in_spine: bool) -> String {
         let file_name = format!("aux_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;

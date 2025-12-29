@@ -1,5 +1,5 @@
-pub(crate) mod auth;
 pub(crate) mod app_update;
+pub(crate) mod auth;
 pub(crate) mod download;
 pub(crate) mod index;
 pub(crate) mod jobs;

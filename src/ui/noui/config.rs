@@ -567,7 +567,10 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
             } else {
                 // 如果不是中文，检查是否是有效的英文字段名
                 let lower = v.trim().to_ascii_lowercase();
-                if lower == "book_name" || lower == "original_book_name" || lower == "book_short_name" {
+                if lower == "book_name"
+                    || lower == "original_book_name"
+                    || lower == "book_short_name"
+                {
                     lower
                 } else {
                     return Err(anyhow!("优先书名字段仅支持：默认书名、原始书名、短书名"));

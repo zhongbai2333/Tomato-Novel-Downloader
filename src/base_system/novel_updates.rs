@@ -7,14 +7,12 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use tomato_novel_official_api::DirectoryClient;
 
-
 #[derive(Debug, Clone)]
 pub struct NovelUpdateRow {
     pub book_id: String,
     pub book_name: String,
     pub folder: PathBuf,
     pub local_total: usize,
-    pub local_ok: usize,
     pub local_failed: usize,
     pub remote_total: usize,
     pub new_count: usize,
@@ -59,7 +57,7 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
             _ => continue,
         };
 
-        let (local_total, local_ok, local_failed) =
+        let (local_total, _local_ok, local_failed) =
             read_downloaded_counts(&path, &book_id).unwrap_or((0, 0, 0));
 
         let chapter_list = match client.fetch_directory(&book_id) {
@@ -82,7 +80,6 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
             book_name,
             folder: path,
             local_total,
-            local_ok,
             local_failed,
             remote_total,
             new_count,
@@ -103,7 +100,10 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
     // Stable-ish order: most actionable first.
     updates.sort_by(|a, b| b.new_count.cmp(&a.new_count));
 
-    Ok(NovelUpdateScanResult { updates, no_updates })
+    Ok(NovelUpdateScanResult {
+        updates,
+        no_updates,
+    })
 }
 
 /// 读取某本书本地状态文件中 "downloaded" 的统计信息：
@@ -149,24 +149,6 @@ pub fn read_downloaded_counts(folder: &Path, book_id: &str) -> Option<(usize, us
     }
     let failed = total.saturating_sub(ok);
     Some((total, ok, failed))
-}
-
-/// 仅统计条目数（包含失败/空内容的条目）。
-pub fn read_downloaded_total_count(folder: &Path, book_id: &str) -> Option<usize> {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return None;
-    };
-
-    let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
-    Some(downloaded.len())
 }
 
 /// 仅统计成功下载的章节数（content/text 非空）。

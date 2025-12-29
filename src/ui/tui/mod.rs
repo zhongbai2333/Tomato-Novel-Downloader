@@ -166,7 +166,6 @@ impl BookDetail {
 pub(super) struct PendingDownload {
     plan: DownloadPlan,
     downloaded_count: usize,
-    custom_book_name: Option<String>,
 }
 
 pub(super) struct App {
@@ -492,9 +491,8 @@ fn run_loop(
 pub(super) fn start_app_update_check(app: &mut App) {
     let tx = app.worker_tx.clone();
     thread::spawn(move || {
-        let result = crate::base_system::app_update::check_update_report_blocking(
-            env!("CARGO_PKG_VERSION"),
-        );
+        let result =
+            crate::base_system::app_update::check_update_report_blocking(env!("CARGO_PKG_VERSION"));
         let _ = tx.send(WorkerMsg::AppUpdateChecked(result));
     });
 }

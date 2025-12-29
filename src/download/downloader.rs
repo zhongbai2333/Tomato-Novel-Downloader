@@ -763,8 +763,7 @@ pub enum SavePhase {
 }
 
 struct CliBars {
-    #[allow(dead_code)]
-    mp: MultiProgress,
+    _mp: MultiProgress,
     download_bar: ProgressBar,
     save_bar: ProgressBar,
 }
@@ -1217,7 +1216,7 @@ pub fn prepare_download_plan(
         } else {
             merge_meta(merged, search_metadata(book_id).unwrap_or_default())
         };
-    
+
     // 应用用户配置的书名字段偏好
     if let Some(preferred_name) = config.pick_preferred_book_name(&completed_meta) {
         completed_meta.book_name = Some(preferred_name);
@@ -1343,7 +1342,7 @@ pub(crate) fn make_reporter(
         save_bar.set_prefix("正文保存");
 
         Some(CliBars {
-            mp,
+            _mp: mp,
             download_bar,
             save_bar,
         })
@@ -1672,10 +1671,14 @@ fn merge_meta_prefer_hint_name(dir_meta: BookMeta, hint_meta: BookMeta) -> BookM
         read_count_text: dir_meta.read_count_text.or(hint_meta.read_count_text),
         book_short_name: dir_meta.book_short_name.or(hint_meta.book_short_name),
         original_book_name: dir_meta.original_book_name.or(hint_meta.original_book_name),
-        first_chapter_title: dir_meta.first_chapter_title.or(hint_meta.first_chapter_title),
+        first_chapter_title: dir_meta
+            .first_chapter_title
+            .or(hint_meta.first_chapter_title),
         last_chapter_title: dir_meta.last_chapter_title.or(hint_meta.last_chapter_title),
         category: dir_meta.category.or(hint_meta.category),
-        cover_primary_color: dir_meta.cover_primary_color.or(hint_meta.cover_primary_color),
+        cover_primary_color: dir_meta
+            .cover_primary_color
+            .or(hint_meta.cover_primary_color),
     }
 }
 

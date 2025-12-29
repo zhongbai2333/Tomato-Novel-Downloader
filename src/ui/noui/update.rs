@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use anyhow::Result;
 use crate::base_system::novel_updates;
+use anyhow::Result;
 
 use crate::base_system::context::Config;
 
@@ -106,7 +106,10 @@ fn scan_updates(_config: &Config, save_dir: &Path) -> Result<(Vec<UpdateEntry>, 
         let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
         UpdateEntry {
             book_id: it.book_id.clone(),
-            label: format!("{}《{}》({}) — 新章节：{}", ignore_marker, it.book_name, it.book_id, it.new_count),
+            label: format!(
+                "{}《{}》({}) — 新章节：{}",
+                ignore_marker, it.book_name, it.book_id, it.new_count
+            ),
         }
     };
 

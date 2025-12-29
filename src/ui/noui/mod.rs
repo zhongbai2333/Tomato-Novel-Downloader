@@ -13,9 +13,9 @@ use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
 
 use crate::base_system::context::Config;
 
+mod app_update;
 mod config;
 mod download;
-mod app_update;
 mod update;
 
 fn show_config_menu(config: &mut Config) -> Result<()> {
