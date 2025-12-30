@@ -19,7 +19,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/api/login", post(routes::auth::api_login))
         .route("/api/status", get(routes::status::api_status))
         .route("/api/app_update", get(routes::app_update::api_app_update))
-        .route("/api/self_update", post(routes::app_update::api_self_update))
+        .route(
+            "/api/self_update",
+            post(routes::app_update::api_self_update),
+        )
         .route(
             "/api/config",
             get(routes::auth::get_config).post(routes::auth::set_config),
