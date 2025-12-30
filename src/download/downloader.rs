@@ -1280,8 +1280,6 @@ fn rename_old_folder_if_needed(
     new_book_name: &str,
     meta: &BookMeta,
 ) -> Result<()> {
-    let save_dir = config.default_save_dir();
-    
     // 获取可能的旧书名（其他书名字段）
     let possible_old_names = vec![
         meta.book_name.as_deref(),
@@ -1378,7 +1376,13 @@ pub(crate) fn init_manager_from_plan(config: &Config, plan: &DownloadPlan) -> Re
         .unwrap_or_else(|| plan.book_id.clone());
     
     // 检查并重命名旧文件夹（如果书名偏好设置发生变更）
-    let _ = rename_old_folder_if_needed(config, &plan.book_id, &book_name, meta);
+    if let Err(e) = rename_old_folder_if_needed(config, &plan.book_id, &book_name, meta) {
+        debug!(
+            target: "download",
+            error = ?e,
+            "重命名旧文件夹失败，将继续使用新文件夹"
+        );
+    }
     
     let mut manager = BookManager::new(config.clone(), &plan.book_id, &book_name)?;
     manager.book_id = plan.book_id.clone();
