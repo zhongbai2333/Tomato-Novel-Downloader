@@ -1212,7 +1212,7 @@ pub fn prepare_download_plan(
     }
 
     // 如果需要封面，按实际书名（已应用用户偏好）构建目标路径后重新获取并下载封面。
-    if dir.meta.cover_url.is_some() {
+    if completed_meta.cover_url.is_some() {
         let cover_dir =
             book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
         if let Ok(with_cover) =
