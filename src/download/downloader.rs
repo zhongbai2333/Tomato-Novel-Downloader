@@ -1286,64 +1286,62 @@ fn rename_old_folder_if_needed(
         meta.original_book_name.as_deref(),
         meta.book_short_name.as_deref(),
     ];
-    
+
     let new_folder = book_paths::book_folder_path(config, book_id, Some(new_book_name));
-    
+
     // 如果新文件夹已存在，不需要重命名
     if new_folder.exists() {
         return Ok(());
     }
-    
+
     // 检查是否存在使用旧书名的文件夹
-    for old_name in possible_old_names {
-        if let Some(old_name_str) = old_name {
-            if old_name_str == new_book_name {
-                continue; // 跳过相同的名字
-            }
-            
-            let old_folder = book_paths::book_folder_path(config, book_id, Some(old_name_str));
-            
-            if old_folder.exists() && old_folder != new_folder {
-                info!(
+    for old_name_str in possible_old_names.into_iter().flatten() {
+        if old_name_str == new_book_name {
+            continue; // 跳过相同的名字
+        }
+
+        let old_folder = book_paths::book_folder_path(config, book_id, Some(old_name_str));
+
+        if old_folder.exists() && old_folder != new_folder {
+            info!(
+                target: "download",
+                old = %old_folder.display(),
+                new = %new_folder.display(),
+                "检测到书名偏好变更，重命名文件夹"
+            );
+
+            // 重命名文件夹
+            if let Err(e) = std::fs::rename(&old_folder, &new_folder) {
+                debug!(
                     target: "download",
-                    old = %old_folder.display(),
-                    new = %new_folder.display(),
-                    "检测到书名偏好变更，重命名文件夹"
+                    error = ?e,
+                    "重命名文件夹失败，将使用新文件夹"
                 );
-                
-                // 重命名文件夹
-                if let Err(e) = std::fs::rename(&old_folder, &new_folder) {
-                    debug!(
-                        target: "download",
-                        error = ?e,
-                        "重命名文件夹失败，将使用新文件夹"
-                    );
-                } else {
-                    // 成功重命名后，还需要重命名文件夹内的封面文件
-                    rename_cover_files_if_needed(&new_folder, old_name_str, new_book_name);
-                    return Ok(());
-                }
+            } else {
+                // 成功重命名后，还需要重命名文件夹内的封面文件
+                rename_cover_files_if_needed(&new_folder, old_name_str, new_book_name);
+                return Ok(());
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// 重命名文件夹内的封面文件（如果存在）
 fn rename_cover_files_if_needed(folder: &Path, old_book_name: &str, new_book_name: &str) {
     use crate::base_system::context::safe_fs_name;
-    
+
     let old_safe_name = safe_fs_name(old_book_name, "_", 120);
     let new_safe_name = safe_fs_name(new_book_name, "_", 120);
-    
+
     if old_safe_name == new_safe_name {
         return;
     }
-    
+
     // 可能的封面扩展名
     let extensions = ["jpg", "jpeg", "png", "webp"];
-    
+
     for ext in &extensions {
         let old_cover = folder.join(format!("{}.{}", old_safe_name, ext));
         if old_cover.exists() {
@@ -1374,7 +1372,7 @@ pub(crate) fn init_manager_from_plan(config: &Config, plan: &DownloadPlan) -> Re
         .book_name
         .clone()
         .unwrap_or_else(|| plan.book_id.clone());
-    
+
     // 检查并重命名旧文件夹（如果书名偏好设置发生变更）
     if let Err(e) = rename_old_folder_if_needed(config, &plan.book_id, &book_name, meta) {
         debug!(
@@ -1383,7 +1381,7 @@ pub(crate) fn init_manager_from_plan(config: &Config, plan: &DownloadPlan) -> Re
             "重命名旧文件夹失败，将继续使用新文件夹"
         );
     }
-    
+
     let mut manager = BookManager::new(config.clone(), &plan.book_id, &book_name)?;
     manager.book_id = plan.book_id.clone();
     manager.book_name = book_name;
