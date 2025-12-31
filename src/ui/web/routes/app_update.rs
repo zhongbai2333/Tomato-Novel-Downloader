@@ -17,6 +17,15 @@ pub(crate) async fn api_app_update() -> Result<Json<Value>, StatusCode> {
     let current_tag = format!("v{VERSION}");
     let has_update = latest.tag_name != current_tag;
 
+    // WebUI 的自动检查：如果版本号相同但检测到热更新（SHA 不同），则强制更新。
+    // 为确保客户端能收到本次响应，先返回，再在后台线程触发检查/更新。
+    if !has_update {
+        thread::spawn(|| {
+            thread::sleep(Duration::from_millis(600));
+            let _ = crate::base_system::self_update::check_hotfix_and_apply(VERSION);
+        });
+    }
+
     Ok(Json(json!({
         "current": VERSION,
         "current_tag": current_tag,

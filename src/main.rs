@@ -71,6 +71,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // 启动时强制热更新（仅当 SHA256 不同且 tag 相同）。
+    // 例外：cargo run/开发态运行时跳过。
+    let _ = base_system::self_update::check_hotfix_and_apply(VERSION);
+
     prewarm_state::mark_prewarm_start();
     thread::spawn(|| {
         match prewarm_iid() {

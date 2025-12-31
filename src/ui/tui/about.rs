@@ -163,7 +163,9 @@ fn dismiss_app_update(app: &mut App) -> Result<()> {
 fn request_self_update(app: &mut App) -> Result<()> {
     app.status = "即将执行自更新（退出 TUI 后开始）…".to_string();
     app.self_update_requested = true;
-    app.self_update_auto_yes = false;
+    // TUI 内已有明确的“执行自更新”按钮，点击即视为确认。
+    // 因此不再在 self_update 内二次询问。
+    app.self_update_auto_yes = true;
     app.should_quit = true;
     Ok(())
 }
