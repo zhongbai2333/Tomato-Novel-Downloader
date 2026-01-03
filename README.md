@@ -6,7 +6,10 @@
 
 我对其进行重构 + 优化，添加更多功能，包括：EPUB 下载支持、更好的断点续传、更好的错误管理、书本搜索、Web UI 等特性。
 
-本项目~~完全~~基于第三方API，~~未~~使用官方API
+本项目支持两种构建模式：
+
+- 默认模式（`official-api`）：保留 Official-API 能力（搜索/目录/段评等），同时也兼容第三方正文模式。
+- No-Official-API 模式（`no-official-api`）：**不依赖 Official-API crate**；目录/书信息走网页解析；**正文强制使用第三方 API 地址池**。
 
 为了保证第三方API安全，部分第三方接口相关代码并不开源，包括地址和token，敬请谅解，谢谢！
 
@@ -75,6 +78,52 @@ Web UI 提供的功能（纯 HTML，无需额外前端构建）：
 - 配置页面：可在线修改部分下载输出相关配置（会写回 `config.yml`）
 
 注意：Web UI 主要面向自建/局域网使用；如果要暴露到公网，建议放在反向代理/HTTPS 后面，并务必开启密码锁。
+
+---
+
+## 构建模式（Cargo Features）
+
+本项目提供两个互斥的 feature：`official-api` 与 `no-official-api`（两者不能同时启用）。
+
+### 默认模式：official-api（默认启用）
+
+- 构建（默认就会启用）：
+
+```sh
+cargo build --release
+```
+
+- 行为：
+  - 搜索功能可用（TUI / Web UI / 老 CLI 的搜索入口）。
+  - 段评（EPUB 段评页/资源抓取）可用（取决于配置项）。
+  - 正文获取可通过配置在“官方/第三方”之间切换（`use_official_api`）。
+
+### No-Official-API 模式：no-official-api（Issue #187）
+
+- 构建：
+
+```sh
+cargo build --release --no-default-features --features no-official-api
+```
+
+- 行为差异（重点）：
+  - **不依赖** `tomato-novel-official-api` crate，可在缺少 Official-API 环境时编译。
+  - 目录与书本信息：使用网页解析（`FanqieWebNetwork`）。
+  - **正文获取：强制第三方模式**（忽略/不使用 `use_official_api=true` 的官方分支）。
+  - 搜索功能：不可用（会返回提示/报错）。
+  - 段评：不可用（会被强制关闭）。
+
+- 配置要求：必须提供第三方地址池 `api_endpoints`，否则无法下载正文：
+
+```yaml
+# config.yml
+# no-official-api 构建下，正文强制走第三方；该字段会被忽略
+use_official_api: false
+
+# 必填：第三方 API 地址池（至少 1 个）
+api_endpoints:
+    - "https://example.com"  # 你的第三方服务地址
+```
 
 ---
 
