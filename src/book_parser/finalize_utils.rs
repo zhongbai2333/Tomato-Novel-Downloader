@@ -20,9 +20,6 @@ use tracing::{debug, error, info, warn};
 
 use crossterm::event::EnableMouseCapture;
 use crossterm::terminal::enable_raw_mode;
-
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STD;
 use image::GenericImageView;
 use regex::Regex;
 use sha1::{Digest, Sha1};
@@ -32,10 +29,11 @@ use super::book_manager::BookManager;
 use super::epub_generator::EpubGenerator;
 use crate::base_system::context::safe_fs_name;
 use crate::book_parser::segment_utils;
-use tomato_novel_official_api::{
-    CommentDownloadOptions, DirectoryClient, ReviewClient, call_operation,
-};
 
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::{CommentDownloadOptions, DirectoryClient, ReviewClient};
+
+#[cfg(feature = "official-api")]
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SegmentCommentsParaCache {
     count: u64,
@@ -43,6 +41,7 @@ struct SegmentCommentsParaCache {
     detail: Option<tomato_novel_official_api::ReviewResponse>,
 }
 
+#[cfg(feature = "official-api")]
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SegmentCommentsChapterCache {
     #[allow(dead_code)]
@@ -55,6 +54,7 @@ struct SegmentCommentsChapterCache {
     paras: BTreeMap<String, SegmentCommentsParaCache>,
 }
 
+#[cfg(feature = "official-api")]
 fn load_segment_comments_cache(
     manager: &BookManager,
     chapter_id: &str,
@@ -552,6 +552,7 @@ fn extract_para_counts_from_stats(stats: &Value) -> serde_json::Map<String, Valu
     out
 }
 
+#[cfg(feature = "official-api")]
 fn prefetch_comment_media(
     cfg: &crate::base_system::context::Config,
     per_para: &[(i32, tomato_novel_official_api::ReviewResponse)],
@@ -625,6 +626,7 @@ fn prefetch_comment_media(
     }
 }
 
+#[cfg(feature = "official-api")]
 #[allow(clippy::too_many_arguments)]
 fn render_segment_comment_page(
     chapter_title: &str,
@@ -855,12 +857,19 @@ fn finalize_epub(
     );
     let _ = epub_gen.add_aux_page("简介", &intro_html, true);
 
+    #[cfg(feature = "official-api")]
     let enable_segment_comments = manager.config.enable_segment_comments
         && manager.config.novel_format.eq_ignore_ascii_case("epub");
+    #[cfg(not(feature = "official-api"))]
+    let enable_segment_comments = false;
 
+    #[cfg(feature = "official-api")]
     let mut item_versions = directory_raw
         .map(extract_item_version_map)
         .unwrap_or_default();
+
+    #[cfg(not(feature = "official-api"))]
+    let item_versions: HashMap<String, String> = HashMap::new();
 
     info!(
         target: "segment",
@@ -870,8 +879,10 @@ fn finalize_epub(
 
     // If we don't have versions (common when directory came from a third-party mirror),
     // lazily fetch the official directory once to obtain item_version mapping.
+    #[cfg(feature = "official-api")]
     let mut official_dir_fetched = false;
 
+    #[cfg(feature = "official-api")]
     let review_options = CommentDownloadOptions {
         enable_comments: enable_segment_comments,
         download_avatars: false,
@@ -881,6 +892,8 @@ fn finalize_epub(
         media_timeout_secs: 8,
         media_retries: 2,
     };
+
+    #[cfg(feature = "official-api")]
     let review_client = if enable_segment_comments {
         match ReviewClient::new(review_options.clone()) {
             Ok(c) => {
@@ -907,7 +920,10 @@ fn finalize_epub(
         title: String,
         raw_xhtml: String,
         seg_counts: serde_json::Map<String, Value>,
+        #[cfg(feature = "official-api")]
         per_para: Vec<(i32, tomato_novel_official_api::ReviewResponse)>,
+        #[cfg(not(feature = "official-api"))]
+        per_para: Vec<(i32, serde_json::Value)>,
     }
 
     let chapter_count = chapters.len();
@@ -940,8 +956,12 @@ fn finalize_epub(
 
         // Default chapter output: keep original XHTML (to preserve paragraphs for segment indexing).
         let mut seg_counts = serde_json::Map::new();
+        #[cfg(feature = "official-api")]
         let mut per_para: Vec<(i32, tomato_novel_official_api::ReviewResponse)> = Vec::new();
+        #[cfg(not(feature = "official-api"))]
+        let per_para: Vec<(i32, serde_json::Value)> = Vec::new();
 
+        #[cfg(feature = "official-api")]
         if enable_segment_comments && let Some(client) = review_client.as_ref() {
             let mut did_network_fetch = false;
 
@@ -1409,6 +1429,7 @@ fn finalize_epub(
         // Determine chapter file name: intro consumes aux_00000, so chapter starts at 1.
         let chapter_file = format!("chapter_{:05}.xhtml", 1 + idx);
 
+        #[cfg(feature = "official-api")]
         if !b.per_para.is_empty() {
             prefetch_comment_media(&manager.config, &b.per_para, &images_dir);
 
@@ -1726,25 +1747,12 @@ fn fetch_and_normalize_image(
         }
     }
 
-    let payload = serde_json::json!({
-        "url": url,
-        "timeout_ms": 10000u64,
-    });
-    let value = match call_operation("media_fetch", &payload) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-
-    let b64 = value
-        .get("body_b64")
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("data").and_then(|v| v.as_str()));
-    let Some(b64) = b64 else {
-        return Ok(None);
-    };
-    let bytes = match BASE64_STD.decode(b64) {
-        Ok(b) => b,
-        Err(_) => return Ok(None),
+    let bytes = match crate::third_party::media_fetch::fetch_bytes(
+        url,
+        std::time::Duration::from_millis(10_000),
+    ) {
+        Some(b) => b,
+        None => return Ok(None),
     };
 
     let (mime, ext) = sniff_mime_ext(&bytes);

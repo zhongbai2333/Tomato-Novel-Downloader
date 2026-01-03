@@ -16,6 +16,9 @@ use crate::base_system::json_extract;
 use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
+#[cfg(not(feature = "official-api"))]
+use crate::network_parser::network::{FanqieWebConfig, FanqieWebNetwork};
+use crate::third_party::content_client::ThirdPartyContentClient;
 use crossbeam_channel as channel;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,12 +28,24 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tomato_novel_official_api::ReviewResponse;
-use tomato_novel_official_api::{
-    ChapterRef, DirectoryClient, DirectoryMeta, FanqieClient, SearchClient,
-};
-use tomato_novel_official_api::{CommentDownloadOptions, ReviewClient};
 
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::{
+    CommentDownloadOptions, DirectoryClient, DirectoryMeta, FanqieClient, ReviewClient,
+    ReviewResponse, SearchClient,
+};
+
+#[cfg(feature = "official-api")]
+pub use tomato_novel_official_api::ChapterRef;
+
+#[cfg(not(feature = "official-api"))]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChapterRef {
+    pub id: String,
+    pub title: String,
+}
+
+#[cfg(feature = "official-api")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SegmentCommentsParaCache {
     count: u64,
@@ -38,6 +53,7 @@ struct SegmentCommentsParaCache {
     detail: Option<ReviewResponse>,
 }
 
+#[cfg(feature = "official-api")]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SegmentCommentsChapterCache {
     #[allow(dead_code)]
@@ -50,13 +66,20 @@ struct SegmentCommentsChapterCache {
     paras: std::collections::BTreeMap<String, SegmentCommentsParaCache>,
 }
 
+#[cfg(feature = "official-api")]
 #[derive(Debug, Clone, Copy)]
 enum SegmentEvent {
     Saved,
 }
 
+#[cfg(feature = "official-api")]
 fn segment_enabled(cfg: &Config) -> bool {
     cfg.enable_segment_comments && cfg.novel_format.eq_ignore_ascii_case("epub")
+}
+
+#[cfg(not(feature = "official-api"))]
+fn segment_enabled(_cfg: &Config) -> bool {
+    false
 }
 
 fn count_segment_comment_cache_files(seg_dir: &Path) -> usize {
@@ -75,12 +98,14 @@ fn count_segment_comment_cache_files(seg_dir: &Path) -> usize {
         .count()
 }
 
+#[cfg(feature = "official-api")]
 pub(crate) struct SegmentCommentPool {
     tx: Option<channel::Sender<String>>,
     rx_evt: channel::Receiver<SegmentEvent>,
     handles: Vec<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(feature = "official-api")]
 impl SegmentCommentPool {
     fn new(
         cfg: Config,
@@ -246,6 +271,28 @@ impl SegmentCommentPool {
     }
 }
 
+#[cfg(not(feature = "official-api"))]
+pub(crate) struct SegmentCommentPool;
+
+#[cfg(not(feature = "official-api"))]
+impl SegmentCommentPool {
+    fn new(
+        _cfg: Config,
+        _book_id: String,
+        _status_dir: PathBuf,
+        _item_versions: HashMap<String, String>,
+        _cancel: Option<Arc<AtomicBool>>,
+    ) -> Option<Self> {
+        None
+    }
+
+    fn submit(&self, _chapter_id: &str) {}
+
+    fn drain_progress(&self, _progress: &mut ProgressReporter) {}
+
+    fn shutdown(&mut self, _progress: &mut ProgressReporter) {}
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension(format!(
         "{}part",
@@ -395,6 +442,7 @@ fn extract_para_counts_from_stats(stats: &Value) -> serde_json::Map<String, Valu
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "official-api")]
 fn fetch_segment_comments_for_chapter(
     client: &ReviewClient,
     _cfg: &Config,
@@ -541,38 +589,13 @@ fn ms_from_connect_timeout_secs(v: f64) -> Option<u64> {
     if ms <= 0 { None } else { Some(ms as u64) }
 }
 
-fn derive_registerkey_and_batchfull(endpoint: &str) -> (String, String) {
-    let base = normalize_base(endpoint);
-
-    // allow passing full urls too
-    if base.contains("/reading/crypt/registerkey") {
-        let host = base
-            .split("/reading/crypt/registerkey")
-            .next()
-            .unwrap_or(&base);
-        let rk = format!("{}/reading/crypt/registerkey", host);
-        let bf = ensure_trailing_query_base(&format!("{}/reading/reader/batch_full/v", host));
-        return (rk, bf);
-    }
-
-    if base.contains("/reading/reader/batch_full") {
-        let host = base.split("/reading/reader/").next().unwrap_or(&base);
-        let rk = format!("{}/reading/crypt/registerkey", host);
-        let bf = ensure_trailing_query_base(&base);
-        return (rk, bf);
-    }
-
-    let rk = format!("{}/reading/crypt/registerkey", base);
-    let bf = ensure_trailing_query_base(&format!("{}/reading/reader/batch_full/v", base));
-    (rk, bf)
-}
-
-fn third_party_client_for_endpoint(cfg: &Config, endpoint: &str) -> Result<FanqieClient> {
-    let (rk, bf) = derive_registerkey_and_batchfull(endpoint);
+fn third_party_client_for_endpoint(
+    cfg: &Config,
+    endpoint: &str,
+) -> Result<ThirdPartyContentClient> {
     let timeout_ms = Some(cfg.request_timeout.saturating_mul(1000).max(100));
     let connect_timeout_ms = ms_from_connect_timeout_secs(cfg.min_connect_timeout);
-    FanqieClient::new_with_base_urls_and_timeouts(rk, bf, timeout_ms, connect_timeout_ms)
-        .map_err(|e| anyhow!(e.to_string()))
+    ThirdPartyContentClient::new(endpoint, timeout_ms, connect_timeout_ms)
 }
 
 fn has_any_content_for_group(value: &Value, group: &[ChapterRef], cfg: &Config) -> bool {
@@ -700,6 +723,7 @@ pub struct BookMeta {
     pub cover_primary_color: Option<String>,
 }
 
+#[cfg(feature = "official-api")]
 impl From<DirectoryMeta> for BookMeta {
     fn from(value: DirectoryMeta) -> Self {
         Self {
@@ -851,12 +875,14 @@ impl ProgressReporter {
     }
 }
 
+#[cfg(feature = "official-api")]
 pub struct ChapterDownloader {
     _book_id: String,
     client: FanqieClient,
     config: Config,
 }
 
+#[cfg(feature = "official-api")]
 impl ChapterDownloader {
     pub fn new(book_id: &str, config: Config, client: FanqieClient) -> Self {
         Self {
@@ -1176,6 +1202,7 @@ impl ChapterDownloader {
 }
 
 /// 预先拉取目录与元数据，便于 UI 展示预览/范围选择。
+#[cfg(feature = "official-api")]
 pub fn prepare_download_plan(
     config: &Config,
     book_id: &str,
@@ -1227,6 +1254,104 @@ pub fn prepare_download_plan(
         meta: completed_meta,
         chapters: dir.chapters,
         _raw: dir.raw,
+    })
+}
+
+#[cfg(not(feature = "official-api"))]
+fn parse_chapter_ref_from_value(v: &Value) -> Option<ChapterRef> {
+    let maps = json_extract::collect_maps(v);
+    let id = maps.iter().find_map(|m| {
+        json_extract::pick_string(
+            m,
+            &[
+                "item_id",
+                "itemId",
+                "chapter_id",
+                "chapterId",
+                "catalog_id",
+                "catalogId",
+                "id",
+            ],
+        )
+    })?;
+    let title = maps
+        .iter()
+        .find_map(|m| {
+            json_extract::pick_string(
+                m,
+                &[
+                    "title",
+                    "chapter_title",
+                    "chapterTitle",
+                    "name",
+                    "chapter_name",
+                ],
+            )
+        })
+        .unwrap_or_else(|| id.clone());
+    Some(ChapterRef { id, title })
+}
+
+/// no-official-api：使用 FanqieWebNetwork 拉目录 + 拉书本信息。
+#[cfg(not(feature = "official-api"))]
+pub fn prepare_download_plan(
+    config: &Config,
+    book_id: &str,
+    meta_hint: BookMeta,
+) -> Result<DownloadPlan> {
+    info!(target: "download", book_id, "准备下载计划（no-official）");
+
+    let mut web_cfg = FanqieWebConfig::default();
+    web_cfg.request_timeout = Duration::from_secs(config.request_timeout.max(1));
+    web_cfg.max_retries = config.max_retries.max(1) as usize;
+    let web = FanqieWebNetwork::new(web_cfg).context("init FanqieWebNetwork")?;
+
+    let chapter_values = web
+        .fetch_chapter_list(book_id)
+        .ok_or_else(|| anyhow!("获取章节列表失败"))?;
+    if chapter_values.is_empty() {
+        return Err(anyhow!("目录为空"));
+    }
+
+    let mut chapters: Vec<ChapterRef> = chapter_values
+        .iter()
+        .filter_map(parse_chapter_ref_from_value)
+        .collect();
+    // 保底：如果解析失败导致为空，至少让用户得到一个明确错误
+    if chapters.is_empty() {
+        return Err(anyhow!("解析章节列表失败（未能提取 item_id/title）"));
+    }
+
+    let (book_name, author, description, tags_opt, chapter_count) = web.get_book_info(book_id);
+    let web_meta = BookMeta {
+        book_name,
+        author,
+        description,
+        tags: tags_opt.unwrap_or_default(),
+        chapter_count,
+        ..BookMeta::default()
+    };
+
+    // 对齐官方逻辑：优先保持用户“看到的书名”（hint），其余字段尽量用 web 拉到的
+    let mut completed_meta = merge_meta_prefer_hint_name(web_meta, meta_hint);
+    if let Some(preferred_name) = config.pick_preferred_book_name(&completed_meta) {
+        completed_meta.book_name = Some(preferred_name);
+    }
+
+    // no-official：目前不做封面下载（cover_url 往往缺失），避免额外请求与逻辑分叉
+
+    let raw = serde_json::json!({
+        "book_id": book_id,
+        "chapters": chapter_values,
+        "source": "fanqie_web",
+    });
+
+    // 章节顺序：web 接口一般已经是正确顺序；保险起见保持原顺序即可
+    Ok(DownloadPlan {
+        book_id: book_id.to_string(),
+        meta: completed_meta,
+        chapters: std::mem::take(&mut chapters),
+        _raw: raw,
     })
 }
 
@@ -1533,6 +1658,7 @@ pub(crate) fn download_chapters_into_manager(
     }
 
     // 官方 API 模式：速度/冷却基本固定，网络参数意义不大，保留原逻辑。
+    #[cfg(feature = "official-api")]
     let result = if config.use_official_api {
         let client = FanqieClient::new().context("init FanqieClient")?;
         let downloader = ChapterDownloader::new(book_id, config.clone(), client);
@@ -1548,6 +1674,126 @@ pub(crate) fn download_chapters_into_manager(
         // 第三方 API 模式：地址池 + 预热剔除 + 并发抓取
         if config.api_endpoints.is_empty() {
             return Err(anyhow!("use_official_api=false 时，api_endpoints 不能为空"));
+        }
+
+        let probe_chapter_id = pending_chapters
+            .first()
+            .map(|c| c.id.as_str())
+            .unwrap_or("");
+        if probe_chapter_id.is_empty() {
+            return Err(anyhow!("章节列表为空，无法预热第三方 API"));
+        }
+
+        let mut valid = validate_endpoints(config, probe_chapter_id);
+        if valid.is_empty() {
+            // 防御：避免探测逻辑误伤导致无法启动（后续请求阶段仍会自动剔除无效 endpoint）
+            valid = config
+                .api_endpoints
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+        if valid.is_empty() {
+            return Err(anyhow!("第三方 API 地址池为空"));
+        }
+
+        info!(target: "download", endpoints = valid.len(), "第三方 API 地址池预热完成");
+
+        let endpoints = Arc::new(std::sync::Mutex::new(valid));
+        let picker = Arc::new(AtomicUsize::new(0));
+        let worker_count = config.max_workers.max(1);
+        let epub_mode = config.novel_format.eq_ignore_ascii_case("epub");
+
+        let (tx_jobs, rx_jobs) = channel::unbounded::<Vec<ChapterRef>>();
+        let (tx_res, rx_res) = channel::unbounded::<Result<(Vec<ChapterRef>, Value)>>();
+
+        for group in pending_chapters.chunks(25) {
+            tx_jobs.send(group.to_vec()).ok();
+        }
+        drop(tx_jobs);
+
+        for _ in 0..worker_count {
+            let rx = rx_jobs.clone();
+            let tx = tx_res.clone();
+            let cfg = config.clone();
+            let endpoints = endpoints.clone();
+            let picker = picker.clone();
+            let cancel = cancel.cloned();
+            std::thread::spawn(move || {
+                for group in rx.iter() {
+                    if cancel
+                        .as_ref()
+                        .map(|c| c.load(Ordering::Relaxed))
+                        .unwrap_or(false)
+                    {
+                        let _ = tx.send(Err(anyhow!("用户停止下载")));
+                        return;
+                    }
+                    let value =
+                        fetch_group_third_party(&cfg, &endpoints, &picker, &group, epub_mode);
+                    let _ = tx.send(value.map(|v| (group, v)));
+                }
+            });
+        }
+        drop(tx_res);
+
+        let mut result = DownloadResult::default();
+        for res in rx_res.iter() {
+            if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
+                return Err(anyhow!("用户停止下载"));
+            }
+
+            let (group, value) = res?;
+
+            let parsed = ContentParser::extract_api_content(&value, config);
+            for ch in &group {
+                match parsed.get(&ch.id) {
+                    Some((content, title)) if !content.is_empty() => {
+                        let cleaned = if epub_mode {
+                            extract_body_fragment(content)
+                        } else {
+                            content.clone()
+                        };
+                        manager.save_chapter(&ch.id, title, &cleaned);
+                        manager.append_downloaded_chapter(&ch.id, title, &cleaned);
+                        result.success += 1;
+                        if let Some(pool) = seg_pool.as_ref() {
+                            pool.submit(&ch.id);
+                        }
+                    }
+                    _ => {
+                        manager.save_error_chapter(&ch.id, &ch.title);
+                        result.failed += 1;
+                    }
+                }
+                reporter.inc_saved();
+            }
+            reporter.inc_group();
+            if let Some(pool) = seg_pool.as_ref() {
+                pool.drain_progress(reporter);
+            }
+
+            // 每组完成后立即落盘一次状态，保证断点续传。
+            manager.save_download_status();
+        }
+
+        info!(
+            target: "download",
+            "第三方下载完成：{} ({} 章)",
+            book_name,
+            pending_chapters.len()
+        );
+        Ok(result)
+    };
+
+    #[cfg(not(feature = "official-api"))]
+    let result = {
+        // no-official-api 构建：强制使用第三方 API 拉取正文
+        if config.api_endpoints.is_empty() {
+            return Err(anyhow!(
+                "no-official-api 构建必须配置 api_endpoints（用于第三方正文拉取）"
+            ));
         }
 
         let probe_chapter_id = pending_chapters
@@ -1785,6 +2031,7 @@ fn merge_meta_prefer_hint_name(dir_meta: BookMeta, hint_meta: BookMeta) -> BookM
     }
 }
 
+#[cfg(feature = "official-api")]
 fn search_metadata(book_id: &str) -> Option<BookMeta> {
     let client = SearchClient::new().ok()?;
     let resp = client.search_books(book_id).ok()?;
@@ -1858,6 +2105,11 @@ fn search_metadata(book_id: &str) -> Option<BookMeta> {
         category,
         cover_primary_color,
     })
+}
+
+#[cfg(not(feature = "official-api"))]
+fn search_metadata(_book_id: &str) -> Option<BookMeta> {
+    None
 }
 
 fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<ChapterRef> {

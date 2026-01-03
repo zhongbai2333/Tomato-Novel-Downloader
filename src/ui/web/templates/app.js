@@ -95,6 +95,28 @@ function fmtTime(ms) {
   return new Date(x).toLocaleString();
 }
 
+function parseBookId(input) {
+  const trimmed = (input ?? '').toString().trim();
+  if (!trimmed) return '';
+
+  // plain digits
+  if (/^[0-9]+$/.test(trimmed)) return trimmed;
+
+  // extract first URL if user pasted extra text around it
+  const urlMatch = trimmed.match(/https?:\/\/\S+/i);
+  const target = urlMatch ? urlMatch[0] : trimmed;
+
+  // querystring: book_id=123 / bookId=123
+  const qs = target.match(/(?:^|[?&#])(?:book_id|bookId)=([0-9]+)/i);
+  if (qs && qs[1]) return qs[1];
+
+  // path: /page/123
+  const page = target.match(/\/page\/([0-9]+)/i);
+  if (page && page[1]) return page[1];
+
+  return '';
+}
+
 const DISMISS_KEY = 'tnd.dismissed_release_tag';
 
 function getDismissedTag() {
@@ -360,6 +382,23 @@ function wire() {
   document.getElementById('searchForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const q = document.getElementById('q').value.trim();
+    const hint = document.getElementById('searchHint');
+    if (hint) hint.textContent = '';
+
+    const bookId = parseBookId(q);
+    if (bookId) {
+      try {
+        await startDownload(bookId);
+        if (hint) hint.textContent = `已创建下载任务：${bookId}`;
+        const out = document.getElementById('searchResults');
+        if (out) out.innerHTML = '<tr><td colspan="4" class="k">已加入任务队列，可在“任务”页查看进度。</td></tr>';
+      } catch (err) {
+        if (hint) hint.textContent = '创建任务失败';
+        alert(err);
+      }
+      return;
+    }
+
     try { await doSearch(q); } catch (err) { alert(err); }
   });
 

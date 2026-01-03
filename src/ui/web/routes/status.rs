@@ -7,11 +7,15 @@ use crate::ui::web::state::AppState;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) async fn api_status(State(state): State<AppState>) -> Json<Value> {
+    let bind_addrs: Vec<String> = state.bind_addrs.iter().map(|a| a.to_string()).collect();
+    let bind_addr = bind_addrs.join(", ");
+
     Json(json!({
         "version": VERSION,
         "prewarm_in_progress": crate::prewarm_state::is_prewarm_in_progress(),
         "save_dir": state.library_root.to_string_lossy(),
-        "bind_addr": state.bind.to_string(),
+        "bind_addr": bind_addr,
+        "bind_addrs": bind_addrs,
         "locked": state.auth.is_some(),
         "config": {
             "old_cli": state.config_view.old_cli,

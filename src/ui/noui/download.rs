@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use tomato_novel_official_api::{ChapterRef, SearchClient};
+
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::SearchClient;
 
 use crate::base_system::context::Config;
 use crate::download::downloader as dl;
+use crate::download::downloader::ChapterRef;
 
+#[cfg(feature = "official-api")]
 pub(super) fn search_and_pick(keyword: &str) -> Result<Option<String>> {
     let client = SearchClient::new().context("init SearchClient")?;
     let resp = client
@@ -46,6 +50,17 @@ pub(super) fn search_and_pick(keyword: &str) -> Result<Option<String>> {
     }
 
     println!("输入无效，已取消\n");
+    Ok(None)
+}
+
+#[cfg(not(feature = "official-api"))]
+pub(super) fn search_and_pick(_keyword: &str) -> Result<Option<String>> {
+    println!(
+        "当前构建未启用 official-api feature，搜索功能不可用。\n\
+你可以：\n\
+1) 直接输入 book_id 下载；或\n\
+2) 使用默认构建/启用 official-api 后再搜索。\n"
+    );
     Ok(None)
 }
 

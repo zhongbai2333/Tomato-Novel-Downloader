@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+
+#[cfg(feature = "official-api")]
 use tomato_novel_official_api::DirectoryClient;
+
+#[cfg(not(feature = "official-api"))]
+use crate::network_parser::network::{FanqieWebConfig, FanqieWebNetwork};
 
 #[derive(Debug, Clone)]
 pub struct NovelUpdateRow {
@@ -36,7 +41,13 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
 
     let dir_reader =
         fs::read_dir(save_dir).with_context(|| format!("read dir {}", save_dir.display()))?;
+
+    #[cfg(feature = "official-api")]
     let client = DirectoryClient::new().context("init DirectoryClient")?;
+
+    #[cfg(not(feature = "official-api"))]
+    let client =
+        FanqieWebNetwork::new(FanqieWebConfig::default()).context("init FanqieWebNetwork")?;
 
     let mut updates = Vec::new();
     let mut no_updates = Vec::new();
@@ -60,14 +71,29 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
         let (local_total, _local_ok, local_failed) =
             read_downloaded_counts(&path, &book_id).unwrap_or((0, 0, 0));
 
-        let chapter_list = match client.fetch_directory(&book_id) {
-            Ok(d) => d.chapters,
-            Err(_) => Vec::new(),
+        #[cfg(feature = "official-api")]
+        let remote_total = {
+            let chapter_list = match client.fetch_directory(&book_id) {
+                Ok(d) => d.chapters,
+                Err(_) => Vec::new(),
+            };
+            if chapter_list.is_empty() {
+                continue;
+            }
+            chapter_list.len()
         };
-        if chapter_list.is_empty() {
-            continue;
-        }
-        let remote_total = chapter_list.len();
+
+        #[cfg(not(feature = "official-api"))]
+        let remote_total = {
+            let chapter_list = match client.fetch_chapter_list(&book_id) {
+                Some(list) => list,
+                None => Vec::new(),
+            };
+            if chapter_list.is_empty() {
+                continue;
+            }
+            chapter_list.len()
+        };
 
         let new_count = remote_total.saturating_sub(local_total);
         let has_update = new_count > 0 || local_failed > 0;

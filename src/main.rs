@@ -16,14 +16,23 @@ use std::thread;
 mod base_system;
 mod book_parser;
 mod download;
+mod network_parser;
 mod prewarm_state;
+mod third_party;
 mod ui;
 
 use base_system::config::load_or_create;
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
-use tomato_novel_official_api::prewarm_iid;
 use tracing::{info, warn};
+
+#[cfg(all(feature = "official-api", feature = "no-official-api"))]
+compile_error!(
+    "features 'official-api' and 'no-official-api' are mutually exclusive; use exactly one"
+);
+
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::prewarm_iid;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -77,9 +86,17 @@ fn main() -> Result<()> {
 
     prewarm_state::mark_prewarm_start();
     thread::spawn(|| {
-        match prewarm_iid() {
-            Ok(_) => info!(target: "startup", "IID 预热完成"),
-            Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+        #[cfg(feature = "official-api")]
+        {
+            match prewarm_iid() {
+                Ok(_) => info!(target: "startup", "IID 预热完成"),
+                Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+            }
+        }
+
+        #[cfg(not(feature = "official-api"))]
+        {
+            info!(target: "startup", "no-official-api 构建：跳过 IID 预热");
         }
         prewarm_state::mark_prewarm_done();
     });

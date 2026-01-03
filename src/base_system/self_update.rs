@@ -37,7 +37,7 @@ pub enum SelfUpdateOutcome {
 /// - 仅当最新 release tag 与当前版本相同
 /// - 且 release 资产提供 SHA256
 /// - 且本地可执行文件 SHA256 与期望不一致
-/// 才会强制下载并重启。
+///   才会强制下载并重启。
 ///
 /// 例外：当检测到是 `cargo run`（开发态）运行时，不执行强制热更新。
 pub fn check_hotfix_and_apply(current_version: &str) -> Result<SelfUpdateOutcome> {

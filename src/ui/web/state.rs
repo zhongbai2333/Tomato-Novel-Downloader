@@ -20,7 +20,7 @@ pub(crate) struct ConfigView {
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) bind: SocketAddr,
+    pub(crate) bind_addrs: Arc<Vec<SocketAddr>>,
     pub(crate) config_view: Arc<ConfigView>,
     pub(crate) config: Arc<Mutex<Config>>, // allow runtime updates via Web UI
     pub(crate) library_root: Arc<PathBuf>,

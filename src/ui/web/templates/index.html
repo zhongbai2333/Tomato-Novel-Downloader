@@ -40,7 +40,7 @@
           </div>
           <div id="appUpdateBody" class="small prewrap"></div>
         </div>
-        <p class="tip">局域网访问：设置 <code>TOMATO_WEB_ADDR=0.0.0.0:18423</code> 然后运行 <code>--server</code>。</p>
+        <p class="tip">局域网访问：设置 <code>TOMATO_WEB_ADDR=0.0.0.0:18423</code>（IPv6：<code>[::]:18423</code>；同时监听 IPv4+IPv6：<code>0.0.0.0:18423,[::]:18423</code>）然后运行 <code>--server</code>。</p>
       </section>
 
       <section id="config" class="card">
@@ -83,7 +83,7 @@
       <section id="search" class="card">
         <h2>搜索书籍</h2>
         <form id="searchForm" class="form">
-          <input id="q" name="q" placeholder="输入关键词…" autocomplete="off" />
+          <input id="q" name="q" placeholder="输入关键词或 Book ID/链接…" autocomplete="off" />
           <button type="submit">搜索</button>
         </form>
         <div id="searchHint" class="k"></div>

@@ -30,6 +30,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
+#[cfg(feature = "official-api")]
 use tomato_novel_official_api::SearchClient;
 use tracing::{info, warn};
 
@@ -541,6 +542,7 @@ fn handle_event_preview(app: &mut App, event: Event) -> Result<()> {
     preview::handle_event_preview(app, event)
 }
 
+#[cfg(feature = "official-api")]
 fn search_books(query: &str) -> Result<Vec<SearchItem>> {
     let client = SearchClient::new().context("init SearchClient")?;
     let resp = client.search_books(query).context("search_books")?;
@@ -563,6 +565,11 @@ fn search_books(query: &str) -> Result<Vec<SearchItem>> {
         });
     }
     Ok(results)
+}
+
+#[cfg(not(feature = "official-api"))]
+fn search_books(_query: &str) -> Result<Vec<SearchItem>> {
+    anyhow::bail!("当前构建未启用 official-api feature，搜索功能不可用")
 }
 
 fn detail_from_search(raw: &Value) -> BookDetail {

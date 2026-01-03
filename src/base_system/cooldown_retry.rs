@@ -3,15 +3,27 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use std::time::Duration;
+
+#[cfg(feature = "official-api")]
 use tomato_novel_official_api::FanqieClient;
 
 pub fn fetch_with_cooldown_retry(
-    client: &FanqieClient,
+    #[cfg(feature = "official-api")] client: &FanqieClient,
     ids: &str,
     epub_mode: bool,
 ) -> Result<Value> {
+    #[cfg(not(feature = "official-api"))]
+    {
+        let _ = ids;
+        let _ = epub_mode;
+        return Err(anyhow!("no-official-api 构建不支持官方 API cooldown 拉取"));
+    }
+
+    #[cfg(feature = "official-api")]
     let mut delay = Duration::from_millis(1100);
+    #[cfg(feature = "official-api")]
     for attempt in 0..6 {
+        #[cfg(feature = "official-api")]
         match client.get_contents(ids, epub_mode) {
             Ok(v) => return Ok(v),
             Err(e) => {
