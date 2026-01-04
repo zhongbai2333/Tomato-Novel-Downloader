@@ -457,12 +457,18 @@ impl Config {
 pub fn safe_fs_name(name: &str, replacement: &str, max_len: usize) -> String {
     let mut cleaned: String = name
         .chars()
-        .map(|ch| match ch {
-            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => {
-                replacement.chars().next().unwrap_or('_')
-            }
-            c if (c as u32) < 32 => replacement.chars().next().unwrap_or('_'),
-            _ => ch,
+        .flat_map(|ch| match ch {
+            // Convert forbidden Windows filename characters to Chinese equivalents
+            ':' => vec!['：'],  // English colon to Chinese colon
+            '"' => vec!['"'],  // English quotes to Chinese left double quote
+            '<' => vec!['《'],  // Less than to Chinese left angle quote
+            '>' => vec!['》'],  // Greater than to Chinese right angle quote
+            '/' | '\\' => vec!['、'],  // Slashes to Chinese comma
+            '|' => vec!['｜'],  // Pipe to fullwidth pipe
+            '?' => vec!['？'],  // Question mark to Chinese question mark
+            '*' => vec!['＊'],  // Asterisk to fullwidth asterisk
+            c if (c as u32) < 32 => vec![replacement.chars().next().unwrap_or('_')],
+            _ => vec![ch],
         })
         .collect();
 
