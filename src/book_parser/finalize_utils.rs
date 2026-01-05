@@ -79,8 +79,10 @@ fn unescape_basic_entities(s: &str) -> std::borrow::Cow<'_, str> {
         || s.contains("&lt;")
         || s.contains("&gt;")
         || s.contains("&quot;")
+        || s.contains("&#34;")
         || s.contains("&#39;")
         || s.contains("&#x27;")
+        || s.contains("&#x22;")
         || s.contains("&nbsp;"))
     {
         return std::borrow::Cow::Borrowed(s);
@@ -89,6 +91,8 @@ fn unescape_basic_entities(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(
         s.replace("&nbsp;", " ")
             .replace("&quot;", "\"")
+            .replace("&#34;", "\"")
+            .replace("&#x22;", "\"")
             .replace("&#39;", "'")
             .replace("&#x27;", "'")
             .replace("&lt;", "<")
