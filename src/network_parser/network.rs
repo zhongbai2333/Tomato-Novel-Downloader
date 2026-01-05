@@ -109,10 +109,7 @@ impl FanqieWebNetwork {
         headers
     }
 
-    pub(crate) fn get_book_info(
-        &self,
-        book_id: &str,
-    ) -> BookInfoParts {
+    pub(crate) fn get_book_info(&self, book_id: &str) -> BookInfoParts {
         let book_info_url = format!("https://fanqienovel.com/page/{book_id}");
 
         // 发送请求
@@ -366,30 +363,30 @@ impl ContentParser {
     fn parse_book_info(html: &str, _book_id: &str) -> BookInfo {
         // 1) 优先解析 __NEXT_DATA__
         if let Some(json_text) = extract_next_data_json(html)
-            && let Ok(value) = serde_json::from_str::<Value>(&json_text) {
-                let book_name =
-                    find_string_by_key(&value, ["bookName", "book_name", "title", "name"]);
-                let author = find_string_by_key(&value, ["author", "authorName", "author_name"]);
-                let description =
-                    find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
-                let chapter_count = find_usize_by_key(&value, ["chapterCount", "chapter_count"]);
-                let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"]);
+            && let Ok(value) = serde_json::from_str::<Value>(&json_text)
+        {
+            let book_name = find_string_by_key(&value, ["bookName", "book_name", "title", "name"]);
+            let author = find_string_by_key(&value, ["author", "authorName", "author_name"]);
+            let description =
+                find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
+            let chapter_count = find_usize_by_key(&value, ["chapterCount", "chapter_count"]);
+            let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"]);
 
-                if book_name.is_some()
-                    || author.is_some()
-                    || description.is_some()
-                    || chapter_count.is_some()
-                    || tags.is_some()
-                {
-                    return BookInfo {
-                        book_name,
-                        author,
-                        description,
-                        tags,
-                        chapter_count,
-                    };
-                }
+            if book_name.is_some()
+                || author.is_some()
+                || description.is_some()
+                || chapter_count.is_some()
+                || tags.is_some()
+            {
+                return BookInfo {
+                    book_name,
+                    author,
+                    description,
+                    tags,
+                    chapter_count,
+                };
             }
+        }
 
         // 2) 正则兜底（在 HTML 内直接找 JSON 字段）
         let book_name = regex_json_string_field(html, "bookName")
@@ -451,9 +448,10 @@ fn find_first_string_for_key(value: &Value, target: &str) -> Option<String> {
     match value {
         Value::Object(map) => {
             if let Some(v) = map.get(target)
-                && let Some(s) = v.as_str() {
-                    return Some(s.to_string());
-                }
+                && let Some(s) = v.as_str()
+            {
+                return Some(s.to_string());
+            }
             for v in map.values() {
                 if let Some(found) = find_first_string_for_key(v, target) {
                     return Some(found);
@@ -476,9 +474,10 @@ fn find_first_usize_for_key(value: &Value, target: &str) -> Option<usize> {
                     return Some(n as usize);
                 }
                 if let Some(s) = v.as_str()
-                    && let Ok(n) = s.parse::<usize>() {
-                        return Some(n);
-                    }
+                    && let Ok(n) = s.parse::<usize>()
+                {
+                    return Some(n);
+                }
             }
             for v in map.values() {
                 if let Some(found) = find_first_usize_for_key(v, target) {
@@ -496,15 +495,16 @@ fn find_first_string_array_for_key(value: &Value, target: &str) -> Option<Vec<St
     match value {
         Value::Object(map) => {
             if let Some(v) = map.get(target)
-                && let Some(arr) = v.as_array() {
-                    let out: Vec<String> = arr
-                        .iter()
-                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                        .collect();
-                    if !out.is_empty() {
-                        return Some(out);
-                    }
+                && let Some(arr) = v.as_array()
+            {
+                let out: Vec<String> = arr
+                    .iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !out.is_empty() {
+                    return Some(out);
                 }
+            }
             for v in map.values() {
                 if let Some(found) = find_first_string_array_for_key(v, target) {
                     return Some(found);
