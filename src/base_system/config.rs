@@ -165,7 +165,7 @@ fn merge_values(default: &mut Value, user: Value) {
 
 fn resolve_path<T: ConfigSpec>(path: Option<&Path>, base_dir: Option<&Path>) -> PathBuf {
     if let Some(p) = path {
-        PathBuf::from(p)
+        p.to_path_buf()
     } else if let Some(base) = base_dir {
         base.join(T::FILE_NAME)
     } else {
