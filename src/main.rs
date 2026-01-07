@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let data_dir = cli.data_dir.as_ref().map(|s| std::path::Path::new(s));
+    let data_dir = cli.data_dir.as_ref().map(std::path::Path::new);
     let _log = init_logging(cli.debug, data_dir)?;
 
     if cli.self_update {
@@ -152,5 +152,9 @@ fn init_logging(debug: bool, base_dir: Option<&std::path::Path>) -> Result<LogSy
         console: false,
         broadcast_to_ui: true,
     };
-    LogSystem::init_with_base(opts, base_dir).map_err(|e| anyhow!(e))
+    if let Some(base_dir) = base_dir {
+        LogSystem::init_with_base(opts, Some(base_dir)).map_err(|e| anyhow!(e))
+    } else {
+        LogSystem::init(opts).map_err(|e| anyhow!(e))
+    }
 }
