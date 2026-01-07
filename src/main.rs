@@ -106,11 +106,7 @@ fn main() -> Result<()> {
         prewarm_state::mark_prewarm_done();
     });
 
-    let mut config = if let Some(dir) = data_dir {
-        load_or_create_with_base::<Config>(None, Some(dir)).map_err(|e| anyhow!(e.to_string()))?
-    } else {
-        load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?
-    };
+    let mut config = load_config_from_data_dir(data_dir)?;
 
     if cli.server {
         let password = cli
@@ -129,11 +125,7 @@ fn main() -> Result<()> {
             ui::tui::TuiExit::Quit => return Ok(()),
             ui::tui::TuiExit::SwitchToOldCli => {
                 // 模拟“重启”：重新从磁盘加载配置，然后进入 noui
-                config = if let Some(dir) = data_dir {
-                    load_or_create_with_base::<Config>(None, Some(dir)).map_err(|e| anyhow!(e.to_string()))?
-                } else {
-                    load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?
-                };
+                config = load_config_from_data_dir(data_dir)?;
                 config.old_cli = true;
             }
             ui::tui::TuiExit::SelfUpdate { auto_yes } => {
@@ -141,6 +133,14 @@ fn main() -> Result<()> {
                 return Ok(());
             }
         }
+    }
+}
+
+fn load_config_from_data_dir(data_dir: Option<&std::path::Path>) -> Result<Config> {
+    if let Some(dir) = data_dir {
+        load_or_create_with_base::<Config>(None, Some(dir)).map_err(|e| anyhow!(e.to_string()))
+    } else {
+        load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))
     }
 }
 
