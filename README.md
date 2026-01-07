@@ -68,6 +68,22 @@
     TOMATO_WEB_PASSWORD=你的密码
     ```
 
+- 数据目录（用于 Docker 部署或集中管理配置/日志）：
+
+    通过 `--data-dir` 参数指定数据目录，程序会将 `config.yml` 和 `logs` 文件夹放在该目录下：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --server --data-dir /data
+    ```
+
+    Docker 使用示例：
+
+    ```sh
+    docker run -v /host/data:/data my-tomato-image --server --data-dir /data
+    ```
+
+    这样可以方便地挂载数据目录，实现配置和日志的持久化。
+
 Web UI 提供的功能（纯 HTML，无需额外前端构建）：
 
 - 搜索书籍并创建下载任务
