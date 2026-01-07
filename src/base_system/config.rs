@@ -34,7 +34,14 @@ pub trait ConfigSpec: Serialize + DeserializeOwned + Default {
 }
 
 pub fn load_or_create<T: ConfigSpec>(config_path: Option<&Path>) -> Result<T, ConfigError> {
-    let path = resolve_path::<T>(config_path);
+    load_or_create_with_base::<T>(config_path, None)
+}
+
+pub fn load_or_create_with_base<T: ConfigSpec>(
+    config_path: Option<&Path>,
+    base_dir: Option<&Path>,
+) -> Result<T, ConfigError> {
+    let path = resolve_path::<T>(config_path, base_dir);
     ensure_parent(&path)?;
 
     if !path.exists() {
@@ -146,9 +153,14 @@ fn merge_values(default: &mut Value, user: Value) {
     }
 }
 
-fn resolve_path<T: ConfigSpec>(path: Option<&Path>) -> PathBuf {
-    path.map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(T::FILE_NAME))
+fn resolve_path<T: ConfigSpec>(path: Option<&Path>, base_dir: Option<&Path>) -> PathBuf {
+    if let Some(p) = path {
+        PathBuf::from(p)
+    } else if let Some(base) = base_dir {
+        base.join(T::FILE_NAME)
+    } else {
+        PathBuf::from(T::FILE_NAME)
+    }
 }
 
 fn ensure_parent(path: &Path) -> Result<(), ConfigError> {

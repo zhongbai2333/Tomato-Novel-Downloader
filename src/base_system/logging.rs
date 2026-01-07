@@ -110,7 +110,15 @@ pub struct LogSystem {
 
 impl LogSystem {
     pub fn init(options: LogOptions) -> Result<Self, LogError> {
-        let logs_dir = PathBuf::from("logs");
+        Self::init_with_base(options, None)
+    }
+
+    pub fn init_with_base(options: LogOptions, base_dir: Option<&Path>) -> Result<Self, LogError> {
+        let logs_dir = if let Some(base) = base_dir {
+            base.join("logs")
+        } else {
+            PathBuf::from("logs")
+        };
         fs::create_dir_all(&logs_dir)?;
         let latest_log = logs_dir.join("latest.log");
 
