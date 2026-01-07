@@ -113,6 +113,11 @@ impl LogSystem {
         Self::init_with_base(options, None)
     }
 
+    /// Initialize the logging system, optionally using a base directory.
+    ///
+    /// # Arguments
+    /// * `options` - Logging configuration options
+    /// * `base_dir` - If provided, creates logs in base_dir/logs, otherwise uses ./logs
     pub fn init_with_base(options: LogOptions, base_dir: Option<&Path>) -> Result<Self, LogError> {
         let logs_dir = if let Some(base) = base_dir {
             base.join("logs")

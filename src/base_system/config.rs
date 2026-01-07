@@ -37,6 +37,16 @@ pub fn load_or_create<T: ConfigSpec>(config_path: Option<&Path>) -> Result<T, Co
     load_or_create_with_base::<T>(config_path, None)
 }
 
+/// Load or create a config file, optionally using a base directory.
+///
+/// # Arguments
+/// * `config_path` - If provided, uses this exact path (base_dir is ignored)
+/// * `base_dir` - If provided and config_path is None, creates config in base_dir
+///
+/// # Path resolution
+/// - If config_path is Some: uses the exact path provided
+/// - If config_path is None and base_dir is Some: uses base_dir/FILE_NAME
+/// - If both are None: uses current directory/FILE_NAME
 pub fn load_or_create_with_base<T: ConfigSpec>(
     config_path: Option<&Path>,
     base_dir: Option<&Path>,
