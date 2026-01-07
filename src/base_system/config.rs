@@ -34,7 +34,24 @@ pub trait ConfigSpec: Serialize + DeserializeOwned + Default {
 }
 
 pub fn load_or_create<T: ConfigSpec>(config_path: Option<&Path>) -> Result<T, ConfigError> {
-    let path = resolve_path::<T>(config_path);
+    load_or_create_with_base::<T>(config_path, None)
+}
+
+/// Load or create a config file, optionally using a base directory.
+///
+/// # Arguments
+/// * `config_path` - If provided, uses this exact path (base_dir is ignored)
+/// * `base_dir` - If provided and config_path is None, creates config in base_dir
+///
+/// # Path resolution
+/// - If config_path is Some: uses the exact path provided
+/// - If config_path is None and base_dir is Some: uses base_dir/FILE_NAME
+/// - If both are None: uses current directory/FILE_NAME
+pub fn load_or_create_with_base<T: ConfigSpec>(
+    config_path: Option<&Path>,
+    base_dir: Option<&Path>,
+) -> Result<T, ConfigError> {
+    let path = resolve_path::<T>(config_path, base_dir);
     ensure_parent(&path)?;
 
     if !path.exists() {
@@ -146,9 +163,14 @@ fn merge_values(default: &mut Value, user: Value) {
     }
 }
 
-fn resolve_path<T: ConfigSpec>(path: Option<&Path>) -> PathBuf {
-    path.map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(T::FILE_NAME))
+fn resolve_path<T: ConfigSpec>(path: Option<&Path>, base_dir: Option<&Path>) -> PathBuf {
+    if let Some(p) = path {
+        p.to_path_buf()
+    } else if let Some(base) = base_dir {
+        base.join(T::FILE_NAME)
+    } else {
+        PathBuf::from(T::FILE_NAME)
+    }
 }
 
 fn ensure_parent(path: &Path) -> Result<(), ConfigError> {

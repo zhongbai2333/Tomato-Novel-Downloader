@@ -21,7 +21,7 @@ mod prewarm_state;
 mod third_party;
 mod ui;
 
-use base_system::config::load_or_create;
+use base_system::config::{load_or_create, load_or_create_with_base};
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
 use tracing::{info, warn};
@@ -63,6 +63,10 @@ struct Cli {
     /// 自更新时自动确认（等价于提示输入 Y）
     #[arg(long, default_value_t = false)]
     self_update_yes: bool,
+
+    /// 数据目录路径（用于存放 config.yml 和 logs 等文件，方便 Docker 挂载）
+    #[arg(long)]
+    data_dir: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -73,7 +77,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let _log = init_logging(cli.debug)?;
+    let data_dir = cli.data_dir.as_ref().map(std::path::Path::new);
+    let _log = init_logging(cli.debug, data_dir)?;
 
     if cli.self_update {
         let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
@@ -101,7 +106,7 @@ fn main() -> Result<()> {
         prewarm_state::mark_prewarm_done();
     });
 
-    let mut config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
+    let mut config = load_config_from_data_dir(data_dir)?;
 
     if cli.server {
         let password = cli
@@ -120,7 +125,7 @@ fn main() -> Result<()> {
             ui::tui::TuiExit::Quit => return Ok(()),
             ui::tui::TuiExit::SwitchToOldCli => {
                 // 模拟“重启”：重新从磁盘加载配置，然后进入 noui
-                config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
+                config = load_config_from_data_dir(data_dir)?;
                 config.old_cli = true;
             }
             ui::tui::TuiExit::SelfUpdate { auto_yes } => {
@@ -131,7 +136,15 @@ fn main() -> Result<()> {
     }
 }
 
-fn init_logging(debug: bool) -> Result<LogSystem> {
+fn load_config_from_data_dir(data_dir: Option<&std::path::Path>) -> Result<Config> {
+    if let Some(dir) = data_dir {
+        load_or_create_with_base::<Config>(None, Some(dir)).map_err(|e| anyhow!(e.to_string()))
+    } else {
+        load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+fn init_logging(debug: bool, base_dir: Option<&std::path::Path>) -> Result<LogSystem> {
     let opts = LogOptions {
         debug,
         use_color: true,
@@ -139,5 +152,9 @@ fn init_logging(debug: bool) -> Result<LogSystem> {
         console: false,
         broadcast_to_ui: true,
     };
-    LogSystem::init(opts).map_err(|e| anyhow!(e))
+    if let Some(base_dir) = base_dir {
+        LogSystem::init_with_base(opts, Some(base_dir)).map_err(|e| anyhow!(e))
+    } else {
+        LogSystem::init(opts).map_err(|e| anyhow!(e))
+    }
 }
