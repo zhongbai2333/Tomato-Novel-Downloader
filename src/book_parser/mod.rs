@@ -2,10 +2,13 @@
 //!
 //! 负责将章节内容转换为 txt/epub，并进行媒体处理、有声书生成等后处理。
 
-#[cfg(feature = "tts")]
+#[cfg(feature = "tts-native")]
+pub mod edge_tts;
+
+#[cfg(any(feature = "tts", feature = "tts-native"))]
 pub mod audio_generator;
 
-#[cfg(not(feature = "tts"))]
+#[cfg(not(any(feature = "tts", feature = "tts-native")))]
 pub mod audio_generator {
 	use std::sync::Arc;
 

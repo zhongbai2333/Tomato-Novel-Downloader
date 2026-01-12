@@ -145,7 +145,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (musl)
-        run: cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features official-api
+        run: cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features official-api,tts-native,clipboard
 
       - name: Bundle artifacts
         shell: bash
@@ -312,7 +312,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (android arm64)
-        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api
+        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api,tts-native
 
       - name: Bundle artifacts
         shell: bash
