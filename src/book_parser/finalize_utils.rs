@@ -820,12 +820,13 @@ fn finalize_epub(
     directory_raw: Option<&Value>,
     mut reporter: Option<&mut crate::download::downloader::ProgressReporter>,
 ) -> anyhow::Result<()> {
+    let description_meta = description_to_plain_text(&manager.description);
     let mut epub_gen = EpubGenerator::new(
         &manager.book_id,
         &manager.book_name,
         &manager.author,
         &manager.tags,
-        &manager.description,
+        &description_meta,
         &manager.config,
     )?;
 
@@ -851,15 +852,27 @@ fn finalize_epub(
     // Track resources already added to epub (avoid duplicate add_resource)
     let mut resources_added: HashSet<String> = HashSet::new();
 
-    // 简单的介绍页
+    // 简单的介绍页（修复：保留/重建简介的段落与换行）
+    let intro_desc_html = render_description_xhtml_fragment(&manager.description);
     let intro_html = format!(
-        "<p>书名：{}</p><p>作者：{}</p><p>标签：{}</p><p>简介：{}</p>",
+        "<p>书名：{}</p><p>作者：{}</p><p>标签：{}</p><p>简介：</p>{}",
         escape_html(&manager.book_name),
         escape_html(&manager.author),
         escape_html(&manager.tags),
-        escape_html(&manager.description)
+        intro_desc_html
     );
-    let _ = epub_gen.add_aux_page("简介", &intro_html, true);
+    let _ = epub_gen.add_aux_page_named("aux_00000.xhtml".to_string(), "简介", &intro_html, true);
+
+    // #201: 分卷标题（尽可能从 directory_raw 解析；没有则跳过）
+    let volume_title_by_chapter_id: HashMap<String, String> = directory_raw
+        .map(extract_volume_title_by_chapter_id)
+        .unwrap_or_default();
+    let volume_order = compute_volume_order(chapters, &volume_title_by_chapter_id);
+    let volume_count = volume_order.len();
+    let mut volume_file_by_title: HashMap<String, String> = HashMap::new();
+    for (i, t) in volume_order.iter().enumerate() {
+        volume_file_by_title.insert(t.clone(), format!("aux_{:05}.xhtml", 1 + i));
+    }
 
     #[cfg(feature = "official-api")]
     let enable_segment_comments = manager.config.enable_segment_comments
@@ -914,10 +927,11 @@ fn finalize_epub(
     };
 
     // Pre-scan + build data for segment comments; comment pages must be appended at the end.
-    // We will compute deterministic EPUB file names based on EpubGenerator's counter rules:
-    // - first aux page (intro) is aux_00000.xhtml
-    // - then chapters are chapter_00001.xhtml .. chapter_{N:05}.xhtml
-    // - then segment comment pages will start from aux_{(1+N):05}.xhtml
+    // Deterministic EPUB file names (required for segment-link injection):
+    // - intro: aux_00000.xhtml
+    // - volume pages (optional): aux_00001.xhtml .. aux_{V:05}.xhtml
+    // - chapters: chapter_00001.xhtml .. chapter_{N:05}.xhtml
+    // - segment comment pages: aux_{(1+V+N):05}.xhtml ...
     #[derive(Debug)]
     struct ChapterBuild {
         chapter_id: String,
@@ -931,7 +945,7 @@ fn finalize_epub(
     }
 
     let chapter_count = chapters.len();
-    let base_comment_aux_index = 1 + chapter_count; // 1 intro page already consumed
+    let base_comment_aux_index = 1 + volume_count + chapter_count; // 1 intro page already consumed
     let mut builds: Vec<ChapterBuild> = Vec::with_capacity(chapter_count);
 
     for (ch_idx, ch) in chapters.iter().enumerate() {
@@ -1463,7 +1477,24 @@ fn finalize_epub(
         }
     }
 
-    for b in &builds {
+    // Insert volume title pages +正文 chapters in order.
+    // IMPORTANT: chapter file names must remain stable for segment links.
+    // Volume pages use aux_* file names and must not affect chapter_{idx} naming.
+    let mut inserted_volumes: HashSet<String> = HashSet::new();
+    for (idx, b) in builds.iter().enumerate() {
+        if let Some(vol) = volume_title_by_chapter_id.get(&b.chapter_id) {
+            let vol_trim = vol.trim();
+            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string()) {
+                if let Some(file) = volume_file_by_title.get(vol_trim) {
+                    let body = format!(
+                        "<p class=\"no-indent\">{}</p>",
+                        escape_html(vol_trim)
+                    );
+                    let _ = epub_gen.add_aux_page_named(file.clone(), vol_trim, &body, true);
+                }
+            }
+        }
+
         let comment_file = comment_page_for_chapter
             .get(&b.chapter_id)
             .map(|s| s.as_str())
@@ -1474,16 +1505,149 @@ fn finalize_epub(
         } else {
             clean_epub_body(&b.raw_xhtml)
         };
-        epub_gen.add_chapter(&b.title, &chapter_out);
+        epub_gen.add_chapter_named(
+            format!("chapter_{:05}.xhtml", 1 + idx),
+            &b.title,
+            &chapter_out,
+        );
     }
 
     // Finally, append all段评 pages at the end (in spine), to maximize reader compatibility.
-    for (title, html) in comment_pages {
-        let _ = epub_gen.add_aux_page(&title, &html, true);
+    for (i, (title, html)) in comment_pages.into_iter().enumerate() {
+        let file = format!("aux_{:05}.xhtml", base_comment_aux_index + i);
+        let _ = epub_gen.add_aux_page_named(file, &title, &html, true);
     }
 
     epub_gen.generate(path, &manager.config)?;
     Ok(())
+}
+
+fn compute_volume_order(
+    chapters: &[Value],
+    volume_title_by_chapter_id: &HashMap<String, String>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for ch in chapters {
+        let Some(id) = ch.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(title) = volume_title_by_chapter_id.get(id) else {
+            continue;
+        };
+        let t = title.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+fn extract_volume_title_by_chapter_id(directory_raw: &Value) -> HashMap<String, String> {
+    fn pick_string_or_number(v: Option<&Value>) -> Option<String> {
+        match v {
+            Some(Value::String(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    fn pick_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        let candidates = [
+            "volume_title",
+            "volume_name",
+            "catalog_name",
+            "catalog_title",
+            "section_title",
+            "section_name",
+            "group_title",
+            "group_name",
+            "title",
+            "name",
+        ];
+        for k in candidates {
+            if let Some(Value::String(s)) = obj.get(k) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn pick_children(obj: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
+        let keys = [
+            "children",
+            "child_list",
+            "sub_items",
+            "sub_item_list",
+            "item_list",
+            "items",
+            "chapter_list",
+            "chapter_ids",
+        ];
+        for k in keys {
+            let Some(arr) = obj.get(k).and_then(Value::as_array) else {
+                continue;
+            };
+            let mut ids = Vec::new();
+            for v in arr {
+                if let Some(id) = pick_string_or_number(Some(v)) {
+                    ids.push(id);
+                } else if let Some(o) = v.as_object() {
+                    // Sometimes children are objects with item_id.
+                    let id = pick_string_or_number(
+                        o.get("item_id")
+                            .or_else(|| o.get("catalog_id"))
+                            .or_else(|| o.get("id")),
+                    );
+                    if let Some(id) = id {
+                        ids.push(id);
+                    }
+                }
+            }
+            if !ids.is_empty() {
+                return Some(ids);
+            }
+        }
+        None
+    }
+
+    fn visit(v: &Value, out: &mut HashMap<String, String>) {
+        match v {
+            Value::Array(arr) => {
+                for it in arr {
+                    visit(it, out);
+                }
+            }
+            Value::Object(obj) => {
+                if let (Some(title), Some(children)) = (pick_title(obj), pick_children(obj)) {
+                    for id in children {
+                        out.entry(id).or_insert_with(|| title.clone());
+                    }
+                }
+                for (_k, vv) in obj {
+                    visit(vv, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = HashMap::new();
+    visit(directory_raw, &mut out);
+    out
 }
 
 fn embed_inline_images_chapter_named(
@@ -1863,4 +2027,141 @@ fn escape_html(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn looks_like_html(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+
+    // Fast-path: most real HTML descriptions include <p> or <br>.
+    let lower = t.to_ascii_lowercase();
+    lower.contains("<p")
+        || lower.contains("</p")
+        || lower.contains("<br")
+        || lower.contains("<div")
+        || lower.contains("<span")
+        || lower.contains("<a ")
+        || lower.contains("<img")
+}
+
+fn strip_script_and_style_blocks(html: &str) -> String {
+    // Very small, non-HTML-parser sanitizer: remove <script>...</script> and <style>...</style>.
+    // This is to avoid invalid XHTML or unexpected behavior in readers.
+    fn remove_tag_block(input: &str, tag: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let lower = input.to_ascii_lowercase();
+        let open_pat = format!("<{}", tag);
+        let close_pat = format!("</{}>", tag);
+
+        let mut i = 0;
+        while i < input.len() {
+            if lower[i..].starts_with(&open_pat) {
+                if let Some(close_pos) = lower[i..].find(&close_pat) {
+                    i += close_pos + close_pat.len();
+                    continue;
+                } else {
+                    break;
+                }
+            }
+
+            let ch = input[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+
+        out
+    }
+
+    let without_script = remove_tag_block(html, "script");
+    remove_tag_block(&without_script, "style")
+}
+
+fn normalize_html_to_xhtml_fragment(html: &str) -> String {
+    // Minimal normalization to make common HTML fragments valid in XHTML (EPUB 2/3 readers).
+    let mut s = strip_script_and_style_blocks(html);
+
+    // Normalize line endings.
+    s = s.replace("\r\n", "\n").replace('\r', "\n");
+
+    // <br> must be self-closed.
+    s = s.replace("<br>", "<br/>")
+        .replace("<br />", "<br/>")
+        .replace("<BR>", "<br/>")
+        .replace("<BR />", "<br/>");
+
+    // Some sources wrap content with <article>...</article><footer>...</footer>.
+    // For descriptions, we only keep the main body.
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("<article") {
+        if let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>")) {
+            if let Some(gt) = lower[a_start..].find('>') {
+                let body_start = a_start + gt + 1;
+                let body_end = a_end;
+                if body_start <= body_end && body_end <= s.len() {
+                    s = s[body_start..body_end].to_string();
+                }
+            }
+        }
+    }
+
+    s.trim().to_string()
+}
+
+fn render_description_xhtml_fragment(description: &str) -> String {
+    let raw = description.trim();
+    if raw.is_empty() {
+        return "<p></p>".to_string();
+    }
+
+    if looks_like_html(raw) {
+        let normalized = normalize_html_to_xhtml_fragment(raw);
+        if normalized.is_empty() {
+            return "<p></p>".to_string();
+        }
+        return normalized;
+    }
+
+    // Plain-text: preserve line breaks as empty <p></p> and normal paragraphs.
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::new();
+    for line in normalized.split('\n') {
+        // Keep leading whitespace; only drop trailing newline/CR artifacts.
+        let trimmed_end = line.trim_end();
+        if trimmed_end.trim().is_empty() {
+            out.push_str("<p></p>");
+        } else {
+            out.push_str("<p>");
+            out.push_str(&escape_html(trimmed_end));
+            out.push_str("</p>");
+        }
+    }
+    out
+}
+
+fn description_to_plain_text(description: &str) -> String {
+    let raw = description.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    if !looks_like_html(raw) {
+        return raw.to_string();
+    }
+
+    // Simple tag stripper for metadata; keep the intro page for rich formatting.
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ => {
+                if !in_tag {
+                    out.push(ch);
+                }
+            }
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }

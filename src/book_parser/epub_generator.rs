@@ -13,6 +13,7 @@ pub struct EpubGenerator {
     book: EpubBuilder<ZipLibrary>,
     chapters: Vec<(String, String)>,
     style: String,
+    #[allow(dead_code)]
     file_counter: usize,
     title: String,
 }
@@ -95,9 +96,14 @@ impl EpubGenerator {
         })
     }
 
+    #[allow(dead_code)]
     pub fn add_chapter(&mut self, title: &str, content: &str) {
         let file_name = format!("chapter_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
+        self.add_chapter_named(file_name, title, content);
+    }
+
+    pub fn add_chapter_named(&mut self, file_name: String, title: &str, content: &str) {
         let cleaned = if content.trim().is_empty() {
             "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
                 .to_string()
@@ -105,12 +111,23 @@ impl EpubGenerator {
             content.to_string()
         };
         self.chapters
-            .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
+            .push((file_name, wrap_chapter_html(title, &cleaned)));
     }
 
+    #[allow(dead_code)]
     pub fn add_aux_page(&mut self, title: &str, content: &str, include_in_spine: bool) -> String {
         let file_name = format!("aux_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
+        self.add_aux_page_named(file_name, title, content, include_in_spine)
+    }
+
+    pub fn add_aux_page_named(
+        &mut self,
+        file_name: String,
+        title: &str,
+        content: &str,
+        include_in_spine: bool,
+    ) -> String {
         let cleaned = if content.trim().is_empty() {
             format!(
                 "<h3>{}</h3><p class='no-indent'>（空页面）</p>",
@@ -123,7 +140,6 @@ impl EpubGenerator {
             self.chapters
                 .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
         }
-
         file_name
     }
 
