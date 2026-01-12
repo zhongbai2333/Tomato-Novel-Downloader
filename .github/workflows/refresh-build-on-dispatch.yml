@@ -103,6 +103,90 @@ jobs:
           name: linux-build
           path: dist
 
+  build-linux-musl:
+    name: 构建 Linux musl AMD64 可执行文件
+    needs: fetch_and_clean
+    runs-on: ubuntu-latest
+    env:
+      BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_TAG }}
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Link Official-API for path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (musl target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}-musl
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary (musl)
+        run: cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features official-api,tts-native,clipboard
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Linux_musl_amd64-${BUILD_TAG}"
+          cp target/x86_64-unknown-linux-musl/release/tomato-novel-downloader "dist/${out}"
+
+      - name: Upload Linux musl Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-musl-build
+          path: dist
+
   build-linux-arm64:
     name: 构建 Linux ARM64 可执行文件
     needs: fetch_and_clean
@@ -176,6 +260,108 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-build
+          path: dist
+
+  build-android-arm64:
+    name: 构建 Android ARM64 可执行文件
+    needs: fetch_and_clean
+    runs-on: ubuntu-latest
+    env:
+      BUILD_TAG: ${{ needs.fetch_and_clean.outputs.tag }}
+    steps:
+      - name: Checkout 代码 (按最新 Tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_TAG }}
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Link Official-API for path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
+
+      - name: Compute Cargo.lock hash
+        id: cargo-lock-hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f Cargo.lock ]; then
+            echo "hash=missing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            PYTHON=python3
+          else
+            PYTHON=python
+          fi
+          HASH=$($PYTHON -c "import hashlib, pathlib; print(hashlib.sha256(pathlib.Path('Cargo.lock').read_bytes()).hexdigest())")
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust (android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
+          sdkmanager "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+
+      - name: Configure Android linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "$TOOLCHAIN" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android21-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android21-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-cargo-${{ steps.cargo-lock-hash.outputs.hash }}-android-arm64
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build release binary (android arm64)
+        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api,tts-native,clipboard
+
+      - name: Bundle artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          out="TomatoNovelDownloader-Android_arm64-${BUILD_TAG}"
+          cp target/aarch64-linux-android/release/tomato-novel-downloader "dist/${out}"
+
+      - name: Upload Android arm64 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-build
           path: dist
 
   build-windows:
@@ -332,7 +518,9 @@ jobs:
     needs:
       - fetch_and_clean
       - build-linux
+      - build-linux-musl
       - build-linux-arm64
+      - build-android-arm64
       - build-windows
       - build-macos
     runs-on: ubuntu-latest
@@ -358,7 +546,9 @@ jobs:
           tag_name: ${{ needs.fetch_and_clean.outputs.tag }}
           files: |
             release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
+            release-artifacts/linux-musl-build/TomatoNovelDownloader-Linux_musl_amd64-*
             release-artifacts/linux-arm64-build/TomatoNovelDownloader-Linux_arm64-*
+            release-artifacts/android-arm64-build/TomatoNovelDownloader-Android_arm64-*
             release-artifacts/windows-build/TomatoNovelDownloader-Win64-*.exe
             release-artifacts/macos-build/TomatoNovelDownloader-macOS_arm64-*
         env:

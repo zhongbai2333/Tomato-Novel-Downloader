@@ -170,6 +170,14 @@ api_endpoints:
     **仅限安卓设备（Termux）**可以运行。
     但由于 **TUI/CLI 界面对小屏幕不太友好**，手机端更推荐使用 **Web UI 模式（--server）**：在 Termux 里启动服务，然后用手机浏览器操作（或让同一局域网的其它设备访问）。
 
+    Release 里提供 Android arm64 构建产物：`TomatoNovelDownloader-Android_arm64-[当前版本号]`，可直接在 Termux 中运行。
+
+    另外：如果你希望在 TUI 中使用 `Ctrl+V` 从系统剪贴板粘贴，需要安装 Termux API：
+
+    - 安装 App：Termux:API
+    - 安装命令：`pkg install termux-api`
+    - 验证：`termux-clipboard-get` 可正常输出内容
+
     为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
 
     下载termux(链接:(<https://github.com/termux/termux-app/releases>) 并安装，然后运行部署脚本：
