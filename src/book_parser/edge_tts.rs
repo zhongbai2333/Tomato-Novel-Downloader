@@ -7,10 +7,10 @@ use std::net::TcpStream;
 
 use anyhow::{Context, Result, anyhow};
 use sha2::{Digest, Sha256};
+use tungstenite::Message;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::http::header;
 use tungstenite::stream::MaybeTlsStream;
-use tungstenite::Message;
 
 // 关键常量来自公开的 Edge ReadAloud WebSocket 接口。
 // 这些值与 msedge-tts 的实现保持一致，以提升兼容性。
@@ -68,7 +68,9 @@ impl EdgeTtsClient {
             }
 
             let message = self.websocket.read().context("read websocket")?;
-            if let Some(payload) = process_message(message, &mut turn_start, &mut response, &mut turn_end)? {
+            if let Some(payload) =
+                process_message(message, &mut turn_start, &mut response, &mut turn_end)?
+            {
                 audio_bytes.extend_from_slice(&payload);
             }
         }
@@ -138,10 +140,7 @@ fn build_config_message(config: &SpeechConfig) -> Message {
 
     let msg = format!(
         "X-Timestamp:{}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{}{}{}",
-        ts,
-        SPEECH_CONFIG_HEAD,
-        config.audio_format,
-        SPEECH_CONFIG_TAIL
+        ts, SPEECH_CONFIG_HEAD, config.audio_format, SPEECH_CONFIG_TAIL
     );
 
     Message::Text(msg)

@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 # 默认构建：启用 Official-API（保持现有行为）。
-default = ["official-api", "tts", "clipboard"]
+default = ["official-api", "tts", "clipboard", "clipboard-arboard"]
 
 # 依赖 Tomato-Novel-Official-API 的实现。
 official-api = ["dep:tomato-novel-official-api"]
@@ -19,8 +19,13 @@ tts = ["dep:msedge-tts"]
 # 有声书（TTS - Native）：不依赖 msedge-tts（避免 native-tls/curl/openssl 等原生依赖），适合 musl/android。
 tts-native = ["dep:tungstenite", "dep:uuid"]
 
-# TUI 粘贴板：默认启用；在不支持的平台可关闭。
-clipboard = ["dep:arboard"]
+# TUI 粘贴板：默认启用。
+# - Android：默认使用 Termux `termux-clipboard-get`（不依赖原生库）。
+# - Desktop：通过 `clipboard-arboard` 启用 arboard 后端。
+clipboard = []
+
+# Desktop 剪贴板后端（arboard）。Android 下不启用。
+clipboard-arboard = ["dep:arboard"]
 
 [dependencies]
 anyhow = "1.0"
@@ -40,7 +45,6 @@ regex = "1.11"
 ratatui = "0.27"
 crossterm = "0.27"
 indicatif = "0.17"
-arboard = { version = "3.4", optional = true }
 base64 = "0.22"
 sha1 = "0.10"
 sha2 = "0.10"
@@ -62,6 +66,9 @@ axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-core = "0.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3.4", optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

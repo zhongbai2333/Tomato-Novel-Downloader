@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+#[cfg(feature = "tts-native")]
+use super::edge_tts::{EdgeTtsClient, SpeechConfig as EdgeSpeechConfig};
 use crossbeam_channel as channel;
 use indicatif::{ProgressBar, ProgressStyle};
 #[cfg(feature = "tts")]
 use msedge_tts::tts::SpeechConfig as MsSpeechConfig;
 #[cfg(feature = "tts")]
 use msedge_tts::tts::client::{MSEdgeTTSClient, connect};
-#[cfg(feature = "tts-native")]
-use super::edge_tts::{EdgeTtsClient, SpeechConfig as EdgeSpeechConfig};
 use regex::Regex;
 use serde_json::Value;
 use tracing::{error, info, warn};
@@ -402,7 +402,7 @@ pub fn generate_audiobook(
                 Some(b) => b,
                 None => {
                     errors.fetch_add(1, Ordering::Relaxed);
-                    pb.println("[TTS] connect failed".to_string());
+                    pb.println("[TTS] connect failed");
                     // Drain jobs so progress won't hang.
                     while rx
                         .recv_timeout(std::time::Duration::from_millis(200))

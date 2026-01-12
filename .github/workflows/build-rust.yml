@@ -312,7 +312,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (android arm64)
-        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api,tts-native
+        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api,tts-native,clipboard
 
       - name: Bundle artifacts
         shell: bash

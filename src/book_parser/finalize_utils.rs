@@ -1542,8 +1542,8 @@ fn finalize_epub(
     for (idx, b) in builds.iter().enumerate() {
         if let Some(vol) = volume_title_by_chapter_id.get(&b.chapter_id) {
             let vol_trim = vol.trim();
-            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string()) {
-                if let Some(file) = volume_file_by_title.get(vol_trim) {
+            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string())
+                && let Some(file) = volume_file_by_title.get(vol_trim) {
                     info!(
                         target: "volume",
                         title = %vol_trim,
@@ -1552,13 +1552,9 @@ fn finalize_epub(
                         before_chapter_index = idx,
                         "inserting volume title page"
                     );
-                    let body = format!(
-                        "<p class=\"no-indent\">{}</p>",
-                        escape_html(vol_trim)
-                    );
+                    let body = format!("<p class=\"no-indent\">{}</p>", escape_html(vol_trim));
                     let _ = epub_gen.add_aux_page_named(file.clone(), vol_trim, &body, true);
                 }
-            }
         }
 
         let comment_file = comment_page_for_chapter
@@ -1716,18 +1712,16 @@ fn extract_volume_to_chapter_ids(
                 let is_chapter = looks_like_chapter_obj(obj).is_some();
 
                 // Case 0: 章节对象自带卷名（官方目录里常见 item_data_list: { item_id, title, volume_name, ... }）
-                if let Some(vol) = pick_volume_title(obj) {
-                    if let Some(id) = looks_like_chapter_obj(obj) {
+                if let Some(vol) = pick_volume_title(obj)
+                    && let Some(id) = looks_like_chapter_obj(obj) {
                         push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
                     }
-                }
 
                 // Case 1: 该节点本身就是章节对象（叶子）
-                if let Some(vol) = current_volume {
-                    if let Some(id) = looks_like_chapter_obj(obj) {
+                if let Some(vol) = current_volume
+                    && let Some(id) = looks_like_chapter_obj(obj) {
                         push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
                     }
-                }
 
                 // Case 2: 该节点像“卷/分组”节点：有标题 + 含子列表。
                 // 这里不强依赖特定字段名，只要 title 存在就作为潜在卷标题向下传递。
@@ -1758,7 +1752,9 @@ fn extract_volume_to_chapter_ids(
                     if let Some(arr) = obj.get(k).and_then(Value::as_array) {
                         for child in arr {
                             // child could be id or object
-                            if let (Some(vol), Some(id)) = (next_volume, pick_string_or_number(Some(child))) {
+                            if let (Some(vol), Some(id)) =
+                                (next_volume, pick_string_or_number(Some(child)))
+                            {
                                 push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
                             } else {
                                 visit(child, next_volume, known_chapter_ids, idx_by_title, out);
@@ -1784,7 +1780,10 @@ fn extract_volume_to_chapter_ids(
 
     // Fast path: 官方目录经常在 item_data_list 里为每章提供 volume_name。
     // 这种布局不依赖递归推断，且顺序稳定。
-    if let Some(items) = directory_raw.get("item_data_list").and_then(Value::as_array) {
+    if let Some(items) = directory_raw
+        .get("item_data_list")
+        .and_then(Value::as_array)
+    {
         let mut current: Option<String> = None;
         for it in items {
             let Some(obj) = it.as_object() else {
@@ -2251,7 +2250,8 @@ fn normalize_html_to_xhtml_fragment(html: &str) -> String {
     s = s.replace("\r\n", "\n").replace('\r', "\n");
 
     // <br> must be self-closed.
-    s = s.replace("<br>", "<br/>")
+    s = s
+        .replace("<br>", "<br/>")
         .replace("<br />", "<br/>")
         .replace("<BR>", "<br/>")
         .replace("<BR />", "<br/>");
@@ -2259,17 +2259,15 @@ fn normalize_html_to_xhtml_fragment(html: &str) -> String {
     // Some sources wrap content with <article>...</article><footer>...</footer>.
     // For descriptions, we only keep the main body.
     let lower = s.to_ascii_lowercase();
-    if lower.contains("<article") {
-        if let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>")) {
-            if let Some(gt) = lower[a_start..].find('>') {
+    if lower.contains("<article")
+        && let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>"))
+            && let Some(gt) = lower[a_start..].find('>') {
                 let body_start = a_start + gt + 1;
                 let body_end = a_end;
                 if body_start <= body_end && body_end <= s.len() {
                     s = s[body_start..body_end].to_string();
                 }
             }
-        }
-    }
 
     s.trim().to_string()
 }

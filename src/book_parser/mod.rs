@@ -10,24 +10,24 @@ pub mod audio_generator;
 
 #[cfg(not(any(feature = "tts", feature = "tts-native")))]
 pub mod audio_generator {
-	use std::sync::Arc;
+    use std::sync::Arc;
 
-	use indicatif::ProgressBar;
-	use serde_json::Value;
+    use indicatif::ProgressBar;
+    use serde_json::Value;
 
-	use super::book_manager::BookManager;
-	use crate::download::downloader::ProgressReporter;
+    use super::book_manager::BookManager;
+    use crate::download::downloader::ProgressReporter;
 
-	pub fn generate_audiobook(
-		_manager: &BookManager,
-		_chapters: &[Value],
-		_bar: Option<&ProgressBar>,
-		_quiet: bool,
-		_progress: Option<&mut ProgressReporter>,
-		_cancel: Option<&Arc<std::sync::atomic::AtomicBool>>,
-	) -> bool {
-		true
-	}
+    pub fn generate_audiobook(
+        _manager: &BookManager,
+        _chapters: &[Value],
+        _bar: Option<&ProgressBar>,
+        _quiet: bool,
+        _progress: Option<&mut ProgressReporter>,
+        _cancel: Option<&Arc<std::sync::atomic::AtomicBool>>,
+    ) -> bool {
+        true
+    }
 }
 pub mod book_manager;
 pub mod epub_generator;
