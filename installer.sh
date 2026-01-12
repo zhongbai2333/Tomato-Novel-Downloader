@@ -170,10 +170,8 @@ case "$PLATFORM" in
     Darwin)
         if [[ "$ARCH" == "arm64" ]]; then
             BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
-        elif [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
-            BINARY_NAME="TomatoNovelDownloader-macOS_amd64-v${VERSION}"
         else
-            log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64 / x86_64。"
+            log_error "不支持的 macOS 架构 [${ARCH}]！当前仅支持 Apple Silicon（arm64）。"
             exit 1
         fi
         ;;
