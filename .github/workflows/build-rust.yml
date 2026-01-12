@@ -470,7 +470,9 @@ jobs:
 
   build-macos-amd64:
     name: Build (macos-amd64)
-    runs-on: macos-latest
+    # Use an Intel runner to avoid cross-compiling (host aarch64 -> target x86_64),
+    # which breaks crates that rely on system OpenSSL discovery.
+    runs-on: macos-13
     steps:
       - name: Checkout A Repository
         uses: actions/checkout@v4
@@ -510,6 +512,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin
+
+      - name: Install OpenSSL (for native-tls/curl)
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew update
+          brew install openssl@3 pkg-config
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Cache cargo artifacts
         uses: actions/cache@v4

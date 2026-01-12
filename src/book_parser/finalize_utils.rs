@@ -1612,6 +1612,27 @@ fn extract_volume_to_chapter_ids(
         }
     }
 
+    fn pick_volume_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        // A title that is meant to group chapters (volume/section/group), not a chapter title.
+        let candidates = [
+            "volume_title",
+            "volume_name",
+            "section_title",
+            "section_name",
+            "group_title",
+            "group_name",
+        ];
+        for k in candidates {
+            if let Some(Value::String(s)) = obj.get(k) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
     fn pick_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
         let candidates = [
             "volume_title",
@@ -1692,6 +1713,15 @@ fn extract_volume_to_chapter_ids(
                 }
             }
             Value::Object(obj) => {
+                let is_chapter = looks_like_chapter_obj(obj).is_some();
+
+                // Case 0: 章节对象自带卷名（官方目录里常见 item_data_list: { item_id, title, volume_name, ... }）
+                if let Some(vol) = pick_volume_title(obj) {
+                    if let Some(id) = looks_like_chapter_obj(obj) {
+                        push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
+                    }
+                }
+
                 // Case 1: 该节点本身就是章节对象（叶子）
                 if let Some(vol) = current_volume {
                     if let Some(id) = looks_like_chapter_obj(obj) {
@@ -1701,7 +1731,12 @@ fn extract_volume_to_chapter_ids(
 
                 // Case 2: 该节点像“卷/分组”节点：有标题 + 含子列表。
                 // 这里不强依赖特定字段名，只要 title 存在就作为潜在卷标题向下传递。
-                let title_here = pick_title(obj);
+                // IMPORTANT: 对于章节对象，不要把其 title/catalog_title 当成卷标题。
+                let title_here = if is_chapter {
+                    pick_volume_title(obj)
+                } else {
+                    pick_title(obj)
+                };
                 let next_volume = title_here.as_deref().or(current_volume);
 
                 // Common child containers; preserve array order.
@@ -1746,6 +1781,30 @@ fn extract_volume_to_chapter_ids(
 
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut idx_by_title: HashMap<String, usize> = HashMap::new();
+
+    // Fast path: 官方目录经常在 item_data_list 里为每章提供 volume_name。
+    // 这种布局不依赖递归推断，且顺序稳定。
+    if let Some(items) = directory_raw.get("item_data_list").and_then(Value::as_array) {
+        let mut current: Option<String> = None;
+        for it in items {
+            let Some(obj) = it.as_object() else {
+                continue;
+            };
+            if let Some(vol) = pick_volume_title(obj) {
+                current = Some(vol);
+            }
+            let Some(id) = looks_like_chapter_obj(obj) else {
+                continue;
+            };
+            if let Some(vol) = current.as_deref() {
+                push_chapter(vol, &id, known_chapter_ids, &mut idx_by_title, &mut out);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
     visit(
         directory_raw,
         None,
