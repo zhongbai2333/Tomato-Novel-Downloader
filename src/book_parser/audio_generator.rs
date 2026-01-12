@@ -9,13 +9,12 @@ use std::thread;
 
 use crossbeam_channel as channel;
 use indicatif::{ProgressBar, ProgressStyle};
-use msedge_tts::tts::SpeechConfig;
-use msedge_tts::tts::client::connect;
 use regex::Regex;
 use serde_json::Value;
 use tracing::{error, info, warn};
 
 use super::book_manager::BookManager;
+use super::edge_tts::{EdgeTtsClient, SpeechConfig};
 use crate::base_system::context::safe_fs_name;
 use crate::download::downloader::{ProgressReporter, SavePhase};
 
@@ -55,7 +54,7 @@ fn parse_pitch_hz_i32(input: &str) -> i32 {
         return 0;
     }
 
-    // msedge-tts uses prosody pitch in Hz (integer).
+    // Edge TTS uses prosody pitch in Hz (integer).
     // Accept forms like: +2Hz, -10hz, 0Hz, 12
     let s2 = lower.strip_suffix("hz").unwrap_or(&lower).trim();
     if let Ok(v) = s2.parse::<i32>() {
@@ -123,7 +122,7 @@ fn write_atomic(path: &Path, tmp_path: &Path, bytes: &[u8]) -> std::io::Result<(
     Ok(())
 }
 
-/// 将已下载章节内容转换为音频文件（使用 msedge-tts）。
+/// 将已下载章节内容转换为音频文件（使用 Edge TTS / Read Aloud）。
 ///
 /// - 输出目录：`{默认保存目录}/{书名}_audio/`
 /// - 文件命名：`0001-章节标题.mp3|wav`
@@ -268,7 +267,7 @@ pub fn generate_audiobook(
     );
 
     // Fail-fast probe: if we cannot connect at all, skip spawning workers.
-    if let Err(e) = connect() {
+    if let Err(e) = EdgeTtsClient::connect() {
         error!(target: "book_manager", "[TTS] 无法连接到语音服务：{e}");
         return false;
     }
@@ -308,7 +307,7 @@ pub fn generate_audiobook(
         let done_tx = done_tx.clone();
         let cancel = cancel.map(Arc::clone);
         workers.push(thread::spawn(move || {
-            let mut tts = match connect() {
+            let mut tts = match EdgeTtsClient::connect() {
                 Ok(c) => c,
                 Err(e) => {
                     errors.fetch_add(1, Ordering::Relaxed);
