@@ -2,15 +2,21 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(feature = "tts")]
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
+#[cfg(feature = "tts-native")]
+use super::edge_tts::{EdgeTtsClient, SpeechConfig as EdgeSpeechConfig};
 use crossbeam_channel as channel;
 use indicatif::{ProgressBar, ProgressStyle};
-use msedge_tts::tts::SpeechConfig;
-use msedge_tts::tts::client::connect;
+#[cfg(feature = "tts")]
+use msedge_tts::tts::SpeechConfig as MsSpeechConfig;
+#[cfg(feature = "tts")]
+use msedge_tts::tts::client::{MSEdgeTTSClient, connect};
 use regex::Regex;
 use serde_json::Value;
 use tracing::{error, info, warn};
@@ -25,6 +31,15 @@ struct ChapterJob {
     text: String,
     out_path: PathBuf,
     tmp_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct AudiobookSpeechConfig {
+    voice_name: String,
+    audio_format: String,
+    pitch: i32,
+    rate: i32,
+    volume: i32,
 }
 
 fn parse_percent_i32(input: &str) -> i32 {
@@ -55,7 +70,7 @@ fn parse_pitch_hz_i32(input: &str) -> i32 {
         return 0;
     }
 
-    // msedge-tts uses prosody pitch in Hz (integer).
+    // Edge TTS uses prosody pitch in Hz (integer).
     // Accept forms like: +2Hz, -10hz, 0Hz, 12
     let s2 = lower.strip_suffix("hz").unwrap_or(&lower).trim();
     if let Ok(v) = s2.parse::<i32>() {
@@ -123,7 +138,7 @@ fn write_atomic(path: &Path, tmp_path: &Path, bytes: &[u8]) -> std::io::Result<(
     Ok(())
 }
 
-/// 将已下载章节内容转换为音频文件（使用 msedge-tts）。
+/// 将已下载章节内容转换为音频文件（使用 Edge TTS / Read Aloud）。
 ///
 /// - 输出目录：`{默认保存目录}/{书名}_audio/`
 /// - 文件命名：`0001-章节标题.mp3|wav`
@@ -191,13 +206,37 @@ pub fn generate_audiobook(
         }
     }
 
-    let config = Arc::new(SpeechConfig {
+    let config = Arc::new(AudiobookSpeechConfig {
         voice_name: voice,
         audio_format: audio_format.to_string(),
         pitch,
         rate,
         volume,
     });
+
+    #[cfg(feature = "tts")]
+    fn make_ms_config(cfg: &Arc<AudiobookSpeechConfig>) -> MsSpeechConfig {
+        let cfg = cfg.as_ref();
+        MsSpeechConfig {
+            voice_name: cfg.voice_name.clone(),
+            audio_format: cfg.audio_format.clone(),
+            pitch: cfg.pitch,
+            rate: cfg.rate,
+            volume: cfg.volume,
+        }
+    }
+
+    #[cfg(feature = "tts-native")]
+    fn make_edge_config(cfg: &Arc<AudiobookSpeechConfig>) -> EdgeSpeechConfig {
+        let cfg = cfg.as_ref();
+        EdgeSpeechConfig {
+            voice_name: cfg.voice_name.clone(),
+            audio_format: cfg.audio_format.clone(),
+            pitch: cfg.pitch,
+            rate: cfg.rate,
+            volume: cfg.volume,
+        }
+    }
 
     let mut jobs = Vec::new();
     for (index, chapter) in (chapters.iter()).enumerate() {
@@ -268,9 +307,30 @@ pub fn generate_audiobook(
     );
 
     // Fail-fast probe: if we cannot connect at all, skip spawning workers.
-    if let Err(e) = connect() {
-        error!(target: "book_manager", "[TTS] 无法连接到语音服务：{e}");
-        return false;
+    {
+        let mut ok = false;
+        #[cfg(feature = "tts")]
+        {
+            if connect().is_ok() {
+                ok = true;
+            }
+        }
+        #[cfg(all(not(feature = "tts"), feature = "tts-native"))]
+        {
+            if EdgeTtsClient::connect().is_ok() {
+                ok = true;
+            }
+        }
+        #[cfg(all(feature = "tts", feature = "tts-native"))]
+        {
+            if !ok && EdgeTtsClient::connect().is_ok() {
+                ok = true;
+            }
+        }
+        if !ok {
+            error!(target: "book_manager", "[TTS] 无法连接到语音服务（msedge-tts / native 均失败）");
+            return false;
+        }
     }
 
     let (pb, owns_bar) = if let Some(existing) = bar {
@@ -308,11 +368,41 @@ pub fn generate_audiobook(
         let done_tx = done_tx.clone();
         let cancel = cancel.map(Arc::clone);
         workers.push(thread::spawn(move || {
-            let mut tts = match connect() {
-                Ok(c) => c,
-                Err(e) => {
+            enum Backend {
+                #[cfg(feature = "tts")]
+                Ms(MSEdgeTTSClient<TcpStream>),
+                #[cfg(feature = "tts-native")]
+                Edge(EdgeTtsClient),
+            }
+
+            let mut backend = None;
+
+            #[cfg(feature = "tts")]
+            {
+                if let Ok(c) = connect() {
+                    backend = Some(Backend::Ms(c));
+                }
+            }
+            #[cfg(all(feature = "tts-native", not(feature = "tts")))]
+            {
+                if let Ok(c) = EdgeTtsClient::connect() {
+                    backend = Some(Backend::Edge(c));
+                }
+            }
+            #[cfg(all(feature = "tts", feature = "tts-native"))]
+            {
+                if backend.is_none() {
+                    if let Ok(c) = EdgeTtsClient::connect() {
+                        backend = Some(Backend::Edge(c));
+                    }
+                }
+            }
+
+            let mut backend = match backend {
+                Some(b) => b,
+                None => {
                     errors.fetch_add(1, Ordering::Relaxed);
-                    pb.println(format!("[TTS] connect failed: {e}"));
+                    pb.println("[TTS] connect failed");
                     // Drain jobs so progress won't hang.
                     while rx
                         .recv_timeout(std::time::Duration::from_millis(200))
@@ -347,12 +437,22 @@ pub fn generate_audiobook(
                     Err(channel::RecvTimeoutError::Timeout) => continue,
                     Err(channel::RecvTimeoutError::Disconnected) => break,
                 };
-                let r = tts.synthesize(&job.text, &config);
+                let r: std::result::Result<Vec<u8>, String> = match &mut backend {
+                    #[cfg(feature = "tts")]
+                    Backend::Ms(tts) => tts
+                        .synthesize(&job.text, &make_ms_config(&config))
+                        .map(|a| a.audio_bytes)
+                        .map_err(|e| e.to_string()),
+                    #[cfg(feature = "tts-native")]
+                    Backend::Edge(tts) => tts
+                        .synthesize(&job.text, &make_edge_config(&config))
+                        .map(|a| a.audio_bytes)
+                        .map_err(|e| e.to_string()),
+                };
+
                 match r {
-                    Ok(audio) => {
-                        if let Err(e) =
-                            write_atomic(&job.out_path, &job.tmp_path, &audio.audio_bytes)
-                        {
+                    Ok(bytes) => {
+                        if let Err(e) = write_atomic(&job.out_path, &job.tmp_path, &bytes) {
                             errors.fetch_add(1, Ordering::Relaxed);
                             pb.println(format!(
                                 "[TTS] 章节 {}《{}》写入失败：{}",

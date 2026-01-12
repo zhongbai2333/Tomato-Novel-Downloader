@@ -864,10 +864,68 @@ fn finalize_epub(
     let _ = epub_gen.add_aux_page_named("aux_00000.xhtml".to_string(), "简介", &intro_html, true);
 
     // #201: 分卷标题（尽可能从 directory_raw 解析；没有则跳过）
-    let volume_title_by_chapter_id: HashMap<String, String> = directory_raw
-        .map(extract_volume_title_by_chapter_id)
+    let known_chapter_ids: HashSet<String> = chapters
+        .iter()
+        .filter_map(|ch| ch.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    // 递归提取：卷标题 -> 章节 id 列表（同目录 raw 内的顺序）
+    let volumes: Vec<(String, Vec<String>)> = directory_raw
+        .map(|raw| extract_volume_to_chapter_ids(raw, &known_chapter_ids))
         .unwrap_or_default();
-    let volume_order = compute_volume_order(chapters, &volume_title_by_chapter_id);
+
+    if directory_raw.is_some() {
+        if volumes.is_empty() {
+            warn!(
+                target: "volume",
+                known_chapters = known_chapter_ids.len(),
+                "directory_raw present but no volumes extracted (check directory_raw shape / ids mapping)"
+            );
+        } else {
+            let total_ch_refs: usize = volumes.iter().map(|(_, ids)| ids.len()).sum();
+            info!(
+                target: "volume",
+                volumes = volumes.len(),
+                known_chapters = known_chapter_ids.len(),
+                total_chapter_refs = total_ch_refs,
+                "volumes extracted from directory_raw"
+            );
+
+            // Avoid log spam: show only first few volumes.
+            for (i, (t, ids)) in volumes.iter().take(8).enumerate() {
+                info!(
+                    target: "volume",
+                    idx = i,
+                    title = %t,
+                    chapters = ids.len(),
+                    first_chapter_id = %ids.first().map(|s| s.as_str()).unwrap_or(""),
+                    "volume detail"
+                );
+            }
+            if volumes.len() > 8 {
+                info!(target: "volume", more = volumes.len() - 8, "more volumes omitted");
+            }
+        }
+    }
+
+    // 快速查询：chapter_id -> 卷标题
+    let mut volume_title_by_chapter_id: HashMap<String, String> = HashMap::new();
+    let mut volume_order: Vec<String> = Vec::new();
+    for (title, ids) in &volumes {
+        let t = title.trim();
+        if t.is_empty() || ids.is_empty() {
+            continue;
+        }
+        if !volume_order.contains(&t.to_string()) {
+            volume_order.push(t.to_string());
+        }
+        for id in ids {
+            volume_title_by_chapter_id
+                .entry(id.clone())
+                .or_insert_with(|| t.to_string());
+        }
+    }
+
     let volume_count = volume_order.len();
     let mut volume_file_by_title: HashMap<String, String> = HashMap::new();
     for (i, t) in volume_order.iter().enumerate() {
@@ -1484,15 +1542,19 @@ fn finalize_epub(
     for (idx, b) in builds.iter().enumerate() {
         if let Some(vol) = volume_title_by_chapter_id.get(&b.chapter_id) {
             let vol_trim = vol.trim();
-            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string()) {
-                if let Some(file) = volume_file_by_title.get(vol_trim) {
-                    let body = format!(
-                        "<p class=\"no-indent\">{}</p>",
-                        escape_html(vol_trim)
+            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string())
+                && let Some(file) = volume_file_by_title.get(vol_trim) {
+                    info!(
+                        target: "volume",
+                        title = %vol_trim,
+                        file = %file,
+                        before_chapter_id = %b.chapter_id,
+                        before_chapter_index = idx,
+                        "inserting volume title page"
                     );
+                    let body = format!("<p class=\"no-indent\">{}</p>", escape_html(vol_trim));
                     let _ = epub_gen.add_aux_page_named(file.clone(), vol_trim, &body, true);
                 }
-            }
         }
 
         let comment_file = comment_page_for_chapter
@@ -1522,31 +1584,15 @@ fn finalize_epub(
     Ok(())
 }
 
-fn compute_volume_order(
-    chapters: &[Value],
-    volume_title_by_chapter_id: &HashMap<String, String>,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    for ch in chapters {
-        let Some(id) = ch.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(title) = volume_title_by_chapter_id.get(id) else {
-            continue;
-        };
-        let t = title.trim();
-        if t.is_empty() {
-            continue;
-        }
-        if seen.insert(t.to_string()) {
-            out.push(t.to_string());
-        }
-    }
-    out
-}
-
-fn extract_volume_title_by_chapter_id(directory_raw: &Value) -> HashMap<String, String> {
+/// #201: 从 `directory_raw` 递归提取“卷标题 -> 章节 id 列表”。
+///
+/// 目标：兼容不同来源（官方/第三方）的目录结构；仅收集 `known_chapter_ids` 中存在的章节，避免把中间节点/目录 id 当成章节。
+///
+/// 输出顺序：尽量保持 `directory_raw` 中出现的卷顺序，以及卷内章节顺序。
+fn extract_volume_to_chapter_ids(
+    directory_raw: &Value,
+    known_chapter_ids: &HashSet<String>,
+) -> Vec<(String, Vec<String>)> {
     fn pick_string_or_number(v: Option<&Value>) -> Option<String> {
         match v {
             Some(Value::String(s)) => {
@@ -1560,6 +1606,27 @@ fn extract_volume_title_by_chapter_id(directory_raw: &Value) -> HashMap<String, 
             Some(Value::Number(n)) => Some(n.to_string()),
             _ => None,
         }
+    }
+
+    fn pick_volume_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        // A title that is meant to group chapters (volume/section/group), not a chapter title.
+        let candidates = [
+            "volume_title",
+            "volume_name",
+            "section_title",
+            "section_name",
+            "group_title",
+            "group_name",
+        ];
+        for k in candidates {
+            if let Some(Value::String(s)) = obj.get(k) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
     }
 
     fn pick_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
@@ -1586,67 +1653,164 @@ fn extract_volume_title_by_chapter_id(directory_raw: &Value) -> HashMap<String, 
         None
     }
 
-    fn pick_children(obj: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
-        let keys = [
-            "children",
-            "child_list",
-            "sub_items",
-            "sub_item_list",
-            "item_list",
-            "items",
-            "chapter_list",
-            "chapter_ids",
-        ];
-        for k in keys {
-            let Some(arr) = obj.get(k).and_then(Value::as_array) else {
-                continue;
-            };
-            let mut ids = Vec::new();
-            for v in arr {
-                if let Some(id) = pick_string_or_number(Some(v)) {
-                    ids.push(id);
-                } else if let Some(o) = v.as_object() {
-                    // Sometimes children are objects with item_id.
-                    let id = pick_string_or_number(
-                        o.get("item_id")
-                            .or_else(|| o.get("catalog_id"))
-                            .or_else(|| o.get("id")),
-                    );
-                    if let Some(id) = id {
-                        ids.push(id);
-                    }
-                }
-            }
-            if !ids.is_empty() {
-                return Some(ids);
-            }
-        }
-        None
+    fn looks_like_chapter_obj(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        let id = pick_string_or_number(
+            obj.get("chapter_id")
+                .or_else(|| obj.get("item_id"))
+                .or_else(|| obj.get("catalog_id"))
+                .or_else(|| obj.get("id")),
+        )?;
+        Some(id)
     }
 
-    fn visit(v: &Value, out: &mut HashMap<String, String>) {
+    fn push_chapter(
+        title: &str,
+        chapter_id: &str,
+        known_chapter_ids: &HashSet<String>,
+        idx_by_title: &mut HashMap<String, usize>,
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
+        let t = title.trim();
+        if t.is_empty() {
+            return;
+        }
+        if !known_chapter_ids.contains(chapter_id) {
+            return;
+        }
+        let i = if let Some(i) = idx_by_title.get(t) {
+            *i
+        } else {
+            let i = out.len();
+            out.push((t.to_string(), Vec::new()));
+            idx_by_title.insert(t.to_string(), i);
+            i
+        };
+
+        let ids = &mut out[i].1;
+        if ids.last().is_some_and(|last| last == chapter_id) {
+            return;
+        }
+        if !ids.contains(&chapter_id.to_string()) {
+            ids.push(chapter_id.to_string());
+        }
+    }
+
+    fn visit(
+        v: &Value,
+        current_volume: Option<&str>,
+        known_chapter_ids: &HashSet<String>,
+        idx_by_title: &mut HashMap<String, usize>,
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
         match v {
             Value::Array(arr) => {
                 for it in arr {
-                    visit(it, out);
+                    visit(it, current_volume, known_chapter_ids, idx_by_title, out);
                 }
             }
             Value::Object(obj) => {
-                if let (Some(title), Some(children)) = (pick_title(obj), pick_children(obj)) {
-                    for id in children {
-                        out.entry(id).or_insert_with(|| title.clone());
+                let is_chapter = looks_like_chapter_obj(obj).is_some();
+
+                // Case 0: 章节对象自带卷名（官方目录里常见 item_data_list: { item_id, title, volume_name, ... }）
+                if let Some(vol) = pick_volume_title(obj)
+                    && let Some(id) = looks_like_chapter_obj(obj) {
+                        push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
+                    }
+
+                // Case 1: 该节点本身就是章节对象（叶子）
+                if let Some(vol) = current_volume
+                    && let Some(id) = looks_like_chapter_obj(obj) {
+                        push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
+                    }
+
+                // Case 2: 该节点像“卷/分组”节点：有标题 + 含子列表。
+                // 这里不强依赖特定字段名，只要 title 存在就作为潜在卷标题向下传递。
+                // IMPORTANT: 对于章节对象，不要把其 title/catalog_title 当成卷标题。
+                let title_here = if is_chapter {
+                    pick_volume_title(obj)
+                } else {
+                    pick_title(obj)
+                };
+                let next_volume = title_here.as_deref().or(current_volume);
+
+                // Common child containers; preserve array order.
+                let child_keys = [
+                    "catalog_data",
+                    "item_data_list",
+                    "items",
+                    "item_list",
+                    "children",
+                    "child_list",
+                    "sub_items",
+                    "sub_item_list",
+                    "chapter_list",
+                    "chapters",
+                    "chapter_ids",
+                ];
+
+                for k in child_keys {
+                    if let Some(arr) = obj.get(k).and_then(Value::as_array) {
+                        for child in arr {
+                            // child could be id or object
+                            if let (Some(vol), Some(id)) =
+                                (next_volume, pick_string_or_number(Some(child)))
+                            {
+                                push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
+                            } else {
+                                visit(child, next_volume, known_chapter_ids, idx_by_title, out);
+                            }
+                        }
                     }
                 }
-                for (_k, vv) in obj {
-                    visit(vv, out);
+
+                // Also traverse remaining fields to be robust against unknown layouts.
+                for (k, vv) in obj {
+                    if child_keys.contains(&k.as_str()) {
+                        continue;
+                    }
+                    visit(vv, next_volume, known_chapter_ids, idx_by_title, out);
                 }
             }
             _ => {}
         }
     }
 
-    let mut out = HashMap::new();
-    visit(directory_raw, &mut out);
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut idx_by_title: HashMap<String, usize> = HashMap::new();
+
+    // Fast path: 官方目录经常在 item_data_list 里为每章提供 volume_name。
+    // 这种布局不依赖递归推断，且顺序稳定。
+    if let Some(items) = directory_raw
+        .get("item_data_list")
+        .and_then(Value::as_array)
+    {
+        let mut current: Option<String> = None;
+        for it in items {
+            let Some(obj) = it.as_object() else {
+                continue;
+            };
+            if let Some(vol) = pick_volume_title(obj) {
+                current = Some(vol);
+            }
+            let Some(id) = looks_like_chapter_obj(obj) else {
+                continue;
+            };
+            if let Some(vol) = current.as_deref() {
+                push_chapter(vol, &id, known_chapter_ids, &mut idx_by_title, &mut out);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    visit(
+        directory_raw,
+        None,
+        known_chapter_ids,
+        &mut idx_by_title,
+        &mut out,
+    );
     out
 }
 
@@ -2086,7 +2250,8 @@ fn normalize_html_to_xhtml_fragment(html: &str) -> String {
     s = s.replace("\r\n", "\n").replace('\r', "\n");
 
     // <br> must be self-closed.
-    s = s.replace("<br>", "<br/>")
+    s = s
+        .replace("<br>", "<br/>")
         .replace("<br />", "<br/>")
         .replace("<BR>", "<br/>")
         .replace("<BR />", "<br/>");
@@ -2094,17 +2259,15 @@ fn normalize_html_to_xhtml_fragment(html: &str) -> String {
     // Some sources wrap content with <article>...</article><footer>...</footer>.
     // For descriptions, we only keep the main body.
     let lower = s.to_ascii_lowercase();
-    if lower.contains("<article") {
-        if let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>")) {
-            if let Some(gt) = lower[a_start..].find('>') {
+    if lower.contains("<article")
+        && let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>"))
+            && let Some(gt) = lower[a_start..].find('>') {
                 let body_start = a_start + gt + 1;
                 let body_end = a_end;
                 if body_start <= body_end && body_end <= s.len() {
                     s = s[body_start..body_end].to_string();
                 }
             }
-        }
-    }
 
     s.trim().to_string()
 }

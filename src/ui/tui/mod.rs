@@ -35,6 +35,7 @@ use tomato_novel_official_api::SearchClient;
 use tracing::{info, warn};
 
 mod about;
+mod clipboard;
 mod config;
 mod config_model;
 mod cover;

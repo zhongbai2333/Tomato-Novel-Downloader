@@ -183,11 +183,13 @@ fn fetch_latest_release(client: &Client) -> Result<ReleaseInfo> {
         .context("parse latest release json")
 }
 
-fn detect_platform_keyword() -> String {
+fn detect_platform_keyword() -> Result<String> {
     // 对齐 Python 版本：
-    // - Linux:  Linux_amd64 / Linux_arm64
+    // - Linux (glibc): Linux_amd64 / Linux_arm64
+    // - Linux (musl):  Linux_musl_amd64 / Linux_musl_arm64
+    // - Android: Android_arm64 (and others if provided)
     // - Windows: Win64
-    // - macOS:  macOS_amd64 / macOS_arm64
+    // - macOS:  macOS_arm64
     let system = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
@@ -198,10 +200,25 @@ fn detect_platform_keyword() -> String {
     };
 
     match system {
-        "linux" => format!("Linux_{arch_key}"),
-        "windows" => "Win64".to_string(),
-        "macos" => format!("macOS_{arch_key}"),
-        other => other.to_string(),
+        "linux" => {
+            if cfg!(target_env = "musl") {
+                Ok(format!("Linux_musl_{arch_key}"))
+            } else {
+                Ok(format!("Linux_{arch_key}"))
+            }
+        }
+        "android" => Ok(format!("Android_{arch_key}")),
+        "windows" => Ok("Win64".to_string()),
+        "macos" => {
+            if arch_key == "amd64" {
+                Err(anyhow!(
+                    "macOS x86_64 is no longer supported: no release asset will be published"
+                ))
+            } else {
+                Ok("macOS_arm64".to_string())
+            }
+        }
+        other => Ok(other.to_string()),
     }
 }
 
@@ -209,7 +226,7 @@ fn get_latest_release_asset() -> Result<MatchedReleaseAsset> {
     let client = build_http_client()?;
     let latest = fetch_latest_release(&client)?;
 
-    let platform_key = detect_platform_keyword();
+    let platform_key = detect_platform_keyword()?;
     let release_name = latest.name.unwrap_or_else(|| "".to_string());
     let tag_name = latest.tag_name.unwrap_or_else(|| "".to_string());
 
@@ -308,18 +325,20 @@ fn move_or_copy(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-fn canonical_executable_name() -> OsString {
+fn canonical_executable_name() -> Result<OsString> {
     // 统一可执行文件名（去掉版本号信息），对齐发行资产的“平台关键字”。
     // 例如：
-    // - Linux:  TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
+    // - Linux (glibc): TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
+    // - Linux (musl):  TomatoNovelDownloader-Linux_musl_amd64 / TomatoNovelDownloader-Linux_musl_arm64
+    // - Android: TomatoNovelDownloader-Android_arm64
     // - Windows: TomatoNovelDownloader-Win64.exe
-    // - macOS:  TomatoNovelDownloader-macOS_amd64 / TomatoNovelDownloader-macOS_arm64
-    let platform_key = detect_platform_keyword();
+    // - macOS:  TomatoNovelDownloader-macOS_arm64
+    let platform_key = detect_platform_keyword()?;
     let mut name = format!("TomatoNovelDownloader-{platform_key}");
     if cfg!(windows) {
         name.push_str(".exe");
     }
-    OsString::from(name)
+    Ok(OsString::from(name))
 }
 
 fn target_executable_path() -> Result<PathBuf> {
@@ -327,7 +346,7 @@ fn target_executable_path() -> Result<PathBuf> {
     let parent = local_exe
         .parent()
         .ok_or_else(|| anyhow!("cannot determine executable directory"))?;
-    Ok(parent.join(canonical_executable_name()))
+    Ok(parent.join(canonical_executable_name()?))
 }
 
 fn staged_path_next_to_target(target_exe: &Path) -> Result<PathBuf> {
@@ -480,7 +499,7 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
         .ok_or_else(|| anyhow!("invalid exe name"))?;
 
     // 统一目标文件名（去掉版本号信息）。
-    let target_name = canonical_executable_name();
+    let target_name = canonical_executable_name()?;
     let target_name = target_name
         .to_str()
         .ok_or_else(|| anyhow!("invalid target exe name"))?

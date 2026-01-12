@@ -61,10 +61,30 @@ pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                 }
             }
             KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Ok(mut clip) = arboard::Clipboard::new()
-                    && let Ok(text) = clip.get_text()
+                #[cfg(feature = "clipboard")]
                 {
-                    app.input.push_str(&text);
+                    match super::clipboard::get_text() {
+                        Ok(Some(text)) => app.input.push_str(&text),
+                        Ok(None) => {
+                            #[cfg(target_os = "android")]
+                            {
+                                app.status = "Android 剪贴板未就绪：需要 Termux + termux-api（termux-clipboard-get）".to_string();
+                            }
+                            #[cfg(not(target_os = "android"))]
+                            {
+                                app.status = "当前构建未包含剪贴板后端（启用 clipboard-arboard）"
+                                    .to_string();
+                            }
+                        }
+                        Err(e) => {
+                            app.status = format!("读取剪贴板失败：{e}");
+                        }
+                    }
+                }
+
+                #[cfg(not(feature = "clipboard"))]
+                {
+                    app.status = "当前构建未启用剪贴板支持".to_string();
                 }
             }
             KeyCode::Char('p') => {

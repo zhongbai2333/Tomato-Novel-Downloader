@@ -1307,7 +1307,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]
@@ -1779,8 +1779,7 @@ dependencies = [
 [[package]]
 name = "msedge-tts"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be12d72a8929f0986dd075b1a6ce9f6ef6b5c66db91062dce312a0563616e270"
+source = "git+https://github.com/icsboyx/msedge-tts?rev=ed2cc3c87772f66329221975ef6bb8e14c96b641#ed2cc3c87772f66329221975ef6bb8e14c96b641"
 dependencies = [
  "async-io",
  "async-lock",
@@ -2422,7 +2421,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]
@@ -3063,6 +3062,8 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "tungstenite",
+ "uuid",
  "winres",
  "zip",
 ]
@@ -3252,9 +3253,12 @@ dependencies = [
  "log",
  "native-tls",
  "rand 0.8.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 1.0.69",
  "utf-8",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -3505,6 +3509,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.4",
 ]
 
 [[package]]

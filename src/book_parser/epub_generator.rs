@@ -33,7 +33,7 @@ impl EpubGenerator {
         let safe_id = safe_fs_name(identifier, "_", 120);
         book.metadata("identifier", safe_id).ok();
         book.metadata("title", title).ok();
-        book.metadata("language", "zh").ok();
+        book.metadata("language", "zh-CN").ok();
 
         let author = author.trim();
         if !author.is_empty() {
@@ -219,7 +219,7 @@ fn html_escape(input: &str) -> String {
 fn wrap_chapter_html(title: &str, body: &str) -> String {
     let escaped_title = html_escape(title);
     format!(
-        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/#\" lang=\"zh\" xml:lang=\"zh\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
+        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/#\" lang=\"zh-CN\" xml:lang=\"zh-CN\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
         escaped_title, escaped_title, body
     )
 }

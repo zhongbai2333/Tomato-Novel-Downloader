@@ -5,13 +5,27 @@ edition = "2024"
 
 [features]
 # 默认构建：启用 Official-API（保持现有行为）。
-default = ["official-api"]
+default = ["official-api", "tts", "clipboard", "clipboard-arboard"]
 
 # 依赖 Tomato-Novel-Official-API 的实现。
 official-api = ["dep:tomato-novel-official-api"]
 
 # 不依赖 Official-API 的构建：目录/书信息走 web 解析；正文强制第三方模式。
 no-official-api = []
+
+# 有声书（TTS）：默认启用；在 musl/android 等环境可关闭以避免 OpenSSL/curl 等原生依赖。
+tts = ["dep:msedge-tts"]
+
+# 有声书（TTS - Native）：不依赖 msedge-tts（避免 native-tls/curl/openssl 等原生依赖），适合 musl/android。
+tts-native = ["dep:tungstenite", "dep:uuid"]
+
+# TUI 粘贴板：默认启用。
+# - Android：默认使用 Termux `termux-clipboard-get`（不依赖原生库）。
+# - Desktop：通过 `clipboard-arboard` 启用 arboard 后端。
+clipboard = []
+
+# Desktop 剪贴板后端（arboard）。Android 下不启用。
+clipboard-arboard = ["dep:arboard"]
 
 [dependencies]
 anyhow = "1.0"
@@ -31,13 +45,18 @@ regex = "1.11"
 ratatui = "0.27"
 crossterm = "0.27"
 indicatif = "0.17"
-arboard = "3.4"
 base64 = "0.22"
 sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
 tempfile = "3.10"
-msedge-tts = "0.2.4"
+# Fix recent Microsoft-side handshake changes (HTTP 403) by using a fork that updates headers/USER_AGENT.
+# Pin to a known-good commit to avoid future branch drift.
+# If GitHub is unreachable in your network, download the repo and use the `path` override below.
+msedge-tts = { git = "https://github.com/icsboyx/msedge-tts", rev = "ed2cc3c87772f66329221975ef6bb8e14c96b641", optional = true }
+# msedge-tts = { path = "../msedge-tts", optional = true }
+tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
 textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
@@ -47,6 +66,9 @@ axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-core = "0.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3.4", optional = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
