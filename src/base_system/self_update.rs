@@ -185,7 +185,9 @@ fn fetch_latest_release(client: &Client) -> Result<ReleaseInfo> {
 
 fn detect_platform_keyword() -> String {
     // 对齐 Python 版本：
-    // - Linux:  Linux_amd64 / Linux_arm64
+    // - Linux (glibc): Linux_amd64 / Linux_arm64
+    // - Linux (musl):  Linux_musl_amd64 / Linux_musl_arm64
+    // - Android: Android_arm64 (and others if provided)
     // - Windows: Win64
     // - macOS:  macOS_amd64 / macOS_arm64
     let system = std::env::consts::OS;
@@ -198,7 +200,14 @@ fn detect_platform_keyword() -> String {
     };
 
     match system {
-        "linux" => format!("Linux_{arch_key}"),
+        "linux" => {
+            if cfg!(target_env = "musl") {
+                format!("Linux_musl_{arch_key}")
+            } else {
+                format!("Linux_{arch_key}")
+            }
+        }
+        "android" => format!("Android_{arch_key}"),
         "windows" => "Win64".to_string(),
         "macos" => format!("macOS_{arch_key}"),
         other => other.to_string(),
@@ -311,7 +320,9 @@ fn move_or_copy(src: &Path, dst: &Path) -> Result<()> {
 fn canonical_executable_name() -> OsString {
     // 统一可执行文件名（去掉版本号信息），对齐发行资产的“平台关键字”。
     // 例如：
-    // - Linux:  TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
+    // - Linux (glibc): TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
+    // - Linux (musl):  TomatoNovelDownloader-Linux_musl_amd64 / TomatoNovelDownloader-Linux_musl_arm64
+    // - Android: TomatoNovelDownloader-Android_arm64
     // - Windows: TomatoNovelDownloader-Win64.exe
     // - macOS:  TomatoNovelDownloader-macOS_amd64 / TomatoNovelDownloader-macOS_arm64
     let platform_key = detect_platform_keyword();
