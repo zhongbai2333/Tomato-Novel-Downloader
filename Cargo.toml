@@ -5,13 +5,19 @@ edition = "2024"
 
 [features]
 # 默认构建：启用 Official-API（保持现有行为）。
-default = ["official-api"]
+default = ["official-api", "tts", "clipboard"]
 
 # 依赖 Tomato-Novel-Official-API 的实现。
 official-api = ["dep:tomato-novel-official-api"]
 
 # 不依赖 Official-API 的构建：目录/书信息走 web 解析；正文强制第三方模式。
 no-official-api = []
+
+# 有声书（TTS）：默认启用；在 musl/android 等环境可关闭以避免 OpenSSL/curl 等原生依赖。
+tts = ["dep:msedge-tts"]
+
+# TUI 粘贴板：默认启用；在不支持的平台可关闭。
+clipboard = ["dep:arboard"]
 
 [dependencies]
 anyhow = "1.0"
@@ -31,13 +37,13 @@ regex = "1.11"
 ratatui = "0.27"
 crossterm = "0.27"
 indicatif = "0.17"
-arboard = "3.4"
+arboard = { version = "3.4", optional = true }
 base64 = "0.22"
 sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
 tempfile = "3.10"
-msedge-tts = "0.2.4"
+msedge-tts = { version = "0.2.4", optional = true }
 textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

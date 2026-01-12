@@ -145,7 +145,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (musl)
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --release --target x86_64-unknown-linux-musl --no-default-features --features official-api
 
       - name: Bundle artifacts
         shell: bash
@@ -281,7 +281,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          set +o pipefail
           yes | sdkmanager --licenses >/dev/null
+          set -o pipefail
           sdkmanager "ndk;26.1.10909125"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
 
@@ -306,7 +308,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (android arm64)
-        run: cargo build --release --target aarch64-linux-android
+        run: cargo build --release --target aarch64-linux-android --no-default-features --features official-api
 
       - name: Bundle artifacts
         shell: bash

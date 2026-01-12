@@ -61,10 +61,18 @@ pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                 }
             }
             KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Ok(mut clip) = arboard::Clipboard::new()
-                    && let Ok(text) = clip.get_text()
+                #[cfg(feature = "clipboard")]
                 {
-                    app.input.push_str(&text);
+                    if let Ok(mut clip) = arboard::Clipboard::new()
+                        && let Ok(text) = clip.get_text()
+                    {
+                        app.input.push_str(&text);
+                    }
+                }
+
+                #[cfg(not(feature = "clipboard"))]
+                {
+                    app.status = "当前构建未启用剪贴板支持".to_string();
                 }
             }
             KeyCode::Char('p') => {
