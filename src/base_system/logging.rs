@@ -110,7 +110,20 @@ pub struct LogSystem {
 
 impl LogSystem {
     pub fn init(options: LogOptions) -> Result<Self, LogError> {
-        let logs_dir = PathBuf::from("logs");
+        Self::init_with_base(options, None)
+    }
+
+    /// Initialize the logging system, optionally using a base directory.
+    ///
+    /// # Arguments
+    /// * `options` - Logging configuration options
+    /// * `base_dir` - If provided, creates logs in base_dir/logs, otherwise uses ./logs
+    pub fn init_with_base(options: LogOptions, base_dir: Option<&Path>) -> Result<Self, LogError> {
+        let logs_dir = if let Some(base) = base_dir {
+            base.join("logs")
+        } else {
+            PathBuf::from("logs")
+        };
         fs::create_dir_all(&logs_dir)?;
         let latest_log = logs_dir.join("latest.log");
 
@@ -200,19 +213,6 @@ impl LogSystem {
         runtime.install_panic_hook();
 
         Ok(Self { runtime })
-    }
-
-    pub fn add_exit_hook<F>(&self, func: F)
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        if let Ok(mut hooks) = self.runtime.exit_hooks.lock() {
-            hooks.push(Box::new(func));
-        }
-    }
-
-    pub fn safe_exit(&self) {
-        self.runtime.safe_exit();
     }
 }
 

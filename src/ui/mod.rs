@@ -4,3 +4,4 @@
 
 pub mod noui;
 pub mod tui;
+pub mod web;

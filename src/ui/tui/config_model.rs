@@ -18,6 +18,8 @@ pub(in crate::ui) enum ConfigField {
     BulkFiles,
     AutoClearDump,
     AutoOpenDownloadedFiles,
+    AllowOverwriteFiles,
+    PreferredBookNameField,
     OldCli,
     FirstLineIndentEm,
     EnableSegmentComments,
@@ -91,6 +93,14 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                 ConfigEntry {
                     title: "下载完成后自动打开",
                     field: ConfigField::AutoOpenDownloadedFiles,
+                },
+                ConfigEntry {
+                    title: "允许覆盖已存在文件",
+                    field: ConfigField::AllowOverwriteFiles,
+                },
+                ConfigEntry {
+                    title: "优先书名字段(默认书名/原始书名/短书名)",
+                    field: ConfigField::PreferredBookNameField,
                 },
                 ConfigEntry {
                     title: "旧版 CLI UI",
@@ -250,6 +260,10 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::BulkFiles => app.config.bulk_files.to_string(),
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files.to_string(),
+        ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files.to_string(),
+        ConfigField::PreferredBookNameField => {
+            book_name_field_to_chinese(&app.config.preferred_book_name_field).to_string()
+        }
         ConfigField::OldCli => app.config.old_cli.to_string(),
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments.to_string(),
         ConfigField::UseOfficialApi => app.config.use_official_api.to_string(),
@@ -291,6 +305,7 @@ pub(in crate::ui) fn cfg_field_is_bool(field: ConfigField) -> bool {
         ConfigField::BulkFiles
             | ConfigField::AutoClearDump
             | ConfigField::AutoOpenDownloadedFiles
+            | ConfigField::AllowOverwriteFiles
             | ConfigField::OldCli
             | ConfigField::EnableSegmentComments
             | ConfigField::UseOfficialApi
@@ -309,6 +324,7 @@ fn cfg_field_current_bool(app: &App, field: ConfigField) -> Option<bool> {
         ConfigField::BulkFiles => app.config.bulk_files,
         ConfigField::AutoClearDump => app.config.auto_clear_dump,
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files,
+        ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files,
         ConfigField::OldCli => app.config.old_cli,
         ConfigField::EnableSegmentComments => app.config.enable_segment_comments,
         ConfigField::UseOfficialApi => app.config.use_official_api,
@@ -399,6 +415,29 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
         ConfigField::AutoOpenDownloadedFiles => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
             app.config.auto_open_downloaded_files = val;
+        }
+        ConfigField::AllowOverwriteFiles => {
+            let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
+            app.config.allow_overwrite_files = val;
+        }
+        ConfigField::PreferredBookNameField => {
+            // 尝试从中文转换，如果失败则尝试直接使用英文
+            let field_name = if let Some(english) = chinese_to_book_name_field(raw) {
+                english
+            } else {
+                // 如果不是中文，检查是否是有效的英文字段名
+                let lower = raw.to_ascii_lowercase();
+                if lower == "book_name"
+                    || lower == "original_book_name"
+                    || lower == "book_short_name"
+                {
+                    lower
+                } else {
+                    app.status = "请输入：默认书名、原始书名 或 短书名".to_string();
+                    return Ok(());
+                }
+            };
+            app.config.preferred_book_name_field = field_name;
         }
         ConfigField::OldCli => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
@@ -591,4 +630,24 @@ fn parse_string_list(input: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect()
+}
+
+/// 将书名字段的英文名转换为中文显示名
+fn book_name_field_to_chinese(field: &str) -> &'static str {
+    match field {
+        "book_name" => "默认书名",
+        "original_book_name" => "原始书名",
+        "book_short_name" => "短书名",
+        _ => "默认书名",
+    }
+}
+
+/// 将中文显示名转换为书名字段的英文名
+fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
+    match chinese {
+        "默认书名" => Some("book_name".to_string()),
+        "原始书名" => Some("original_book_name".to_string()),
+        "短书名" => Some("book_short_name".to_string()),
+        _ => None,
+    }
 }

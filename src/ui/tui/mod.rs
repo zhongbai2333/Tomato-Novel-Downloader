@@ -2,7 +2,6 @@
 //!
 //! 负责终端初始化（raw mode / mouse capture）、事件循环、页面切换与全局状态管理。
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
@@ -31,7 +30,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
-use tomato_novel_official_api::{DirectoryClient, SearchClient};
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::SearchClient;
 use tracing::{info, warn};
 
 mod about;
@@ -111,6 +111,7 @@ enum WorkerMsg {
     DownloadProgress(ProgressSnapshot),
     PreviewReady(Box<Result<PendingDownload>>),
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
+    AppUpdateChecked(Result<crate::base_system::app_update::UpdateCheckReport>),
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +215,13 @@ pub(super) struct App {
     // about state
     about_btn_state: ListState,
     last_about_buttons: Option<Rect>,
+
+    // app update (program update)
+    app_update_report: Option<crate::base_system::app_update::UpdateCheckReport>,
+
+    // app self update (download & replace binary)
+    self_update_requested: bool,
+    self_update_auto_yes: bool,
 
     // cover state
     cover_lines: Vec<String>,
@@ -341,6 +349,9 @@ impl App {
             last_update_exit_button: None,
             about_btn_state,
             last_about_buttons: None,
+            app_update_report: None,
+            self_update_requested: false,
+            self_update_auto_yes: false,
             cover_lines: Vec::new(),
             cover_title: String::new(),
             _previous_view_cover: View::Home,
@@ -420,6 +431,7 @@ impl App {
 pub enum TuiExit {
     Quit,
     SwitchToOldCli,
+    SelfUpdate { auto_yes: bool },
 }
 
 pub fn run(config: Config) -> Result<TuiExit> {
@@ -457,6 +469,9 @@ fn run_loop(
 ) -> Result<TuiExit> {
     let mut app = App::new(config, worker_tx, worker_rx);
 
+    // 每次启动检查程序更新（异步，不阻塞 UI）。
+    start_app_update_check(&mut app);
+
     loop {
         tick_spinner(&mut app);
         tick_prewarm_spinner(&mut app);
@@ -476,9 +491,22 @@ fn run_loop(
 
     if app.switch_to_old_cli_requested {
         Ok(TuiExit::SwitchToOldCli)
+    } else if app.self_update_requested {
+        Ok(TuiExit::SelfUpdate {
+            auto_yes: app.self_update_auto_yes,
+        })
     } else {
         Ok(TuiExit::Quit)
     }
+}
+
+pub(super) fn start_app_update_check(app: &mut App) {
+    let tx = app.worker_tx.clone();
+    thread::spawn(move || {
+        let result =
+            crate::base_system::app_update::check_update_report_blocking(env!("CARGO_PKG_VERSION"));
+        let _ = tx.send(WorkerMsg::AppUpdateChecked(result));
+    });
 }
 
 fn draw_ui(frame: &mut ratatui::Frame, app: &mut App) {
@@ -514,6 +542,7 @@ fn handle_event_preview(app: &mut App, event: Event) -> Result<()> {
     preview::handle_event_preview(app, event)
 }
 
+#[cfg(feature = "official-api")]
 fn search_books(query: &str) -> Result<Vec<SearchItem>> {
     let client = SearchClient::new().context("init SearchClient")?;
     let resp = client.search_books(query).context("search_books")?;
@@ -536,6 +565,11 @@ fn search_books(query: &str) -> Result<Vec<SearchItem>> {
         });
     }
     Ok(results)
+}
+
+#[cfg(not(feature = "official-api"))]
+fn search_books(_query: &str) -> Result<Vec<SearchItem>> {
+    anyhow::bail!("当前构建未启用 official-api feature，搜索功能不可用")
 }
 
 fn detail_from_search(raw: &Value) -> BookDetail {
@@ -685,7 +719,13 @@ const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 const LOG_HEIGHT: u16 = 7;
 
-const ABOUT_BUTTONS: &[&str] = &["打开Github仓库", "返回"];
+const ABOUT_BUTTONS: &[&str] = &[
+    "打开Github仓库",
+    "检查程序更新",
+    "执行自更新",
+    "不再提醒该版本",
+    "返回",
+];
 
 fn current_category(app: &App) -> Option<(usize, &ConfigCategory)> {
     let idx = app.cfg_cat_state.selected()?;
@@ -1110,6 +1150,26 @@ fn poll_worker(app: &mut App) -> Result<()> {
                 download::apply_download_done(app, book_id, result);
             }
             WorkerMsg::DownloadProgress(snap) => download::apply_download_progress(app, snap),
+            WorkerMsg::AppUpdateChecked(res) => match res {
+                Ok(report) => {
+                    let notify = crate::base_system::app_update::should_notify_startup(&report);
+                    if notify {
+                        app.status = format!(
+                            "发现新版本 {}（当前 {}），在 About 页面可查看/不再提醒",
+                            report.latest.tag_name, report.current_tag
+                        );
+                        app.push_message(format!(
+                            "新版本可用: {} (当前 {})",
+                            report.latest.tag_name, report.current_tag
+                        ));
+                    }
+                    app.app_update_report = Some(report);
+                }
+                Err(err) => {
+                    // 不影响使用：仅记录日志。
+                    warn!(target: "ui", "检查程序更新失败: {err}");
+                }
+            },
         }
     }
     Ok(())
@@ -1133,4 +1193,44 @@ pub(super) fn truncate(text: &str, limit: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+pub(super) fn pos_in(area: Rect, col: u16, row: u16) -> bool {
+    col >= area.x
+        && col < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
+pub(super) fn list_inner_area(area: Rect) -> Rect {
+    Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    }
+}
+
+pub(super) fn list_index_from_mouse_row(
+    list_area: Rect,
+    mouse_row: u16,
+    state: &ListState,
+    items_len: usize,
+) -> Option<usize> {
+    if items_len == 0 {
+        return None;
+    }
+
+    let inner = list_inner_area(list_area);
+    if inner.height == 0 {
+        return None;
+    }
+
+    let rel = mouse_row.checked_sub(inner.y)? as usize;
+    if rel >= inner.height as usize {
+        return None;
+    }
+
+    let idx = state.offset().saturating_add(rel);
+    (idx < items_len).then_some(idx)
 }

@@ -28,6 +28,7 @@ pub struct BookManager {
     pub read_count_text: Option<String>,
     pub category: Option<String>,
     pub downloaded: DownloadedMap,
+    pub ignore_updates: bool,
     has_download_activity: bool,
     status_folder: PathBuf,
     status_file: PathBuf,
@@ -77,6 +78,7 @@ impl BookManager {
             read_count_text: None,
             category: None,
             downloaded: HashMap::new(),
+            ignore_updates: false,
             has_download_activity: false,
             status_folder: target,
             status_file,
@@ -210,6 +212,12 @@ impl BookManager {
             self.description.clone()
         };
 
+        // 加载忽略更新状态
+        self.ignore_updates = data
+            .get("ignore_updates")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // 追加日志比 status.json 更“实时”：合并后可覆盖 status.json 未及时写入的最后几章。
         let _ = self.merge_resume_journal();
 
@@ -286,6 +294,7 @@ impl BookManager {
             "score": self.score,
             "read_count_text": self.read_count_text,
             "category": self.category,
+            "ignore_updates": self.ignore_updates,
             "downloaded": self.downloaded_as_json(),
         });
 
@@ -302,7 +311,13 @@ impl BookManager {
         }
     }
 
-    #[allow(dead_code)]
+    /// 切换忽略更新状态并保存
+    pub fn toggle_ignore_updates(&mut self) -> bool {
+        self.ignore_updates = !self.ignore_updates;
+        self.save_download_status();
+        self.ignore_updates
+    }
+
     pub fn book_folder(&self) -> &Path {
         &self.status_folder
     }

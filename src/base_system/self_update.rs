@@ -33,6 +33,39 @@ pub enum SelfUpdateOutcome {
     UpdateLaunched,
 }
 
+/// 启动/自动检查场景下的“热更新”检查：
+/// - 仅当最新 release tag 与当前版本相同
+/// - 且 release 资产提供 SHA256
+/// - 且本地可执行文件 SHA256 与期望不一致
+///   才会强制下载并重启。
+///
+/// 例外：当检测到是 `cargo run`（开发态）运行时，不执行强制热更新。
+pub fn check_hotfix_and_apply(current_version: &str) -> Result<SelfUpdateOutcome> {
+    if is_cargo_run_like() {
+        info!(target: "self_update", "检测到 cargo run/开发态运行，跳过强制热更新检查");
+        return Ok(SelfUpdateOutcome::UpToDate);
+    }
+
+    let current_tag = format!("v{current_version}");
+    let matched = get_latest_release_asset()?;
+
+    // 热更新仅在版本号相同的情况下才有意义。
+    if matched.tag_name != current_tag {
+        return Ok(SelfUpdateOutcome::UpToDate);
+    }
+
+    if let Some(expected) = matched.sha256.as_deref() {
+        let self_hash = compute_file_sha256(&current_executable_path()?)?;
+        if !eq_hash(&self_hash, expected) {
+            info!(target: "self_update", "检测到热补丁（SHA256 不同），开始更新…");
+            start_update(&matched)?;
+            return Ok(SelfUpdateOutcome::UpdateLaunched);
+        }
+    }
+
+    Ok(SelfUpdateOutcome::UpToDate)
+}
+
 #[derive(Debug, Deserialize)]
 struct ReleaseInfo {
     name: Option<String>,
@@ -104,6 +137,24 @@ pub fn check_for_updates(current_version: &str, auto_yes: bool) -> Result<SelfUp
 
 fn eq_hash(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+fn is_cargo_run_like() -> bool {
+    // 仅用于“启动/自动检查时强制热更新”的保护：避免开发态调试时被自动替换可执行文件。
+    // 由于 cargo run 的运行环境不稳定（不同 OS/终端/IDE 可能差异），这里采用启发式判断：
+    // - 可执行文件路径包含 target/debug 或 target/release
+    // - 或存在 CARGO 环境变量（部分环境会注入）
+    if std::env::var_os("CARGO").is_some() {
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let s = exe.to_string_lossy().to_ascii_lowercase();
+    s.contains("\\target\\debug\\")
+        || s.contains("/target/debug/")
+        || s.contains("\\target\\release\\")
+        || s.contains("/target/release/")
 }
 
 fn github_latest_release_url() -> String {
@@ -237,6 +288,61 @@ fn start_update(matched: &MatchedReleaseAsset) -> Result<()> {
     std::process::exit(0);
 }
 
+fn move_or_copy(src: &Path, dst: &Path) -> Result<()> {
+    // 临时目录与可执行文件目录可能不在同一分区（rename 会失败）。
+    // 这里优先 rename，失败则 copy + remove。
+    match fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(rename_err) => {
+            fs::copy(src, dst).with_context(|| {
+                format!(
+                    "copy {} -> {} (rename failed: {})",
+                    src.display(),
+                    dst.display(),
+                    rename_err
+                )
+            })?;
+            let _ = fs::remove_file(src);
+            Ok(())
+        }
+    }
+}
+
+fn canonical_executable_name() -> OsString {
+    // 统一可执行文件名（去掉版本号信息），对齐发行资产的“平台关键字”。
+    // 例如：
+    // - Linux:  TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
+    // - Windows: TomatoNovelDownloader-Win64.exe
+    // - macOS:  TomatoNovelDownloader-macOS_amd64 / TomatoNovelDownloader-macOS_arm64
+    let platform_key = detect_platform_keyword();
+    let mut name = format!("TomatoNovelDownloader-{platform_key}");
+    if cfg!(windows) {
+        name.push_str(".exe");
+    }
+    OsString::from(name)
+}
+
+fn target_executable_path() -> Result<PathBuf> {
+    let local_exe = current_executable_path()?;
+    let parent = local_exe
+        .parent()
+        .ok_or_else(|| anyhow!("cannot determine executable directory"))?;
+    Ok(parent.join(canonical_executable_name()))
+}
+
+fn staged_path_next_to_target(target_exe: &Path) -> Result<PathBuf> {
+    let parent = target_exe
+        .parent()
+        .ok_or_else(|| anyhow!("cannot determine executable directory"))?;
+    let file_name = target_exe
+        .file_name()
+        .ok_or_else(|| anyhow!("invalid target executable name"))?;
+
+    let mut staged_name = OsString::from(file_name);
+    staged_name.push(".new");
+    Ok(parent.join(staged_name))
+}
+
 fn download_and_verify(tmp_dir: &Path, matched: &MatchedReleaseAsset) -> Result<PathBuf> {
     let client = build_http_client()?;
     let url = &matched.download_url;
@@ -336,31 +442,30 @@ fn compute_file_sha256(path: &Path) -> Result<String> {
 
 fn unix_apply(tmp_file: &Path) -> Result<PathBuf> {
     let local_exe = current_executable_path()?;
-    let parent = local_exe
-        .parent()
-        .ok_or_else(|| anyhow!("cannot determine executable directory"))?;
+    let target_exe = target_executable_path()?;
+    let staged = staged_path_next_to_target(&target_exe)?;
+    let _ = fs::remove_file(&staged);
 
-    let file_name = tmp_file
-        .file_name()
-        .ok_or_else(|| anyhow!("temp file missing name"))?;
-    let new_exe = parent.join(file_name);
+    move_or_copy(tmp_file, &staged).context("stage new executable")?;
 
-    if local_exe.exists() {
-        let _ = fs::remove_file(&local_exe);
-    }
-
-    fs::rename(tmp_file, &new_exe).context("move new executable")?;
+    // Unix 下 rename 可以原子覆盖目标文件（即便目标已存在）。
+    fs::rename(&staged, &target_exe).context("replace target executable")?;
 
     // chmod 755 best-effort
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perm = fs::metadata(&new_exe)?.permissions();
+        let mut perm = fs::metadata(&target_exe)?.permissions();
         perm.set_mode(0o755);
-        let _ = fs::set_permissions(&new_exe, perm);
+        let _ = fs::set_permissions(&target_exe, perm);
     }
 
-    Ok(new_exe)
+    // 若旧文件名与目标文件名不同，尽量删除旧文件（Unix 允许删除正在运行的文件）。
+    if local_exe != target_exe {
+        let _ = fs::remove_file(&local_exe);
+    }
+
+    Ok(target_exe)
 }
 
 fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
@@ -369,38 +474,24 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
         .parent()
         .ok_or_else(|| anyhow!("cannot determine executable directory"))?;
 
-    let file_name = tmp_file
-        .file_name()
-        .ok_or_else(|| anyhow!("temp file missing name"))?;
-    let new_exe = parent.join(file_name);
-
-    // move to <name>.new next to executable
-    let new_name = new_exe
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| anyhow!("invalid new exe name"))?;
-    let staged = parent.join(format!("{new_name}.new"));
-    let _ = fs::remove_file(&staged);
-    fs::rename(tmp_file, &staged).context("stage new executable")?;
-
-    let mut args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let arg_line = args
-        .drain(..)
-        .map(|a| {
-            let s = a.to_string_lossy();
-            // very small quoting for cmd.exe
-            if s.contains(' ') || s.contains('"') {
-                OsString::from(format!("\"{}\"", s.replace('"', "\\\"")))
-            } else {
-                OsString::from(s.as_ref())
-            }
-        })
-        .collect::<Vec<_>>();
-
     let exe_name = local_exe
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow!("invalid exe name"))?;
+
+    // 统一目标文件名（去掉版本号信息）。
+    let target_name = canonical_executable_name();
+    let target_name = target_name
+        .to_str()
+        .ok_or_else(|| anyhow!("invalid target exe name"))?
+        .to_string();
+
+    // stage to <target_name>.new next to executable (same directory)
+    let staged = parent.join(format!("{target_name}.new"));
+    let _ = fs::remove_file(&staged);
+    move_or_copy(tmp_file, &staged).context("stage new executable")?;
+
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     // bat: wait -> delete old -> rename staged -> start -> delete self
     let mut lines = Vec::new();
@@ -410,22 +501,26 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
     lines.push("".to_string());
     lines.push(format!("cd /d \"{}\"", parent.display()));
     lines.push("".to_string());
+    // 删除旧入口（可能带版本号），再删除目标文件（若存在）
     lines.push(format!(
         "if exist \"{}\" (del /F /Q \"{}\")",
         exe_name, exe_name
     ));
+    if target_name != exe_name {
+        lines.push(format!(
+            "if exist \"{}\" (del /F /Q \"{}\")",
+            target_name, target_name
+        ));
+    }
     lines.push(format!(
-        "if exist \"{new_name}.new\" (ren \"{new_name}.new\" \"{new_name}\")"
+        "if exist \"{target_name}.new\" (ren \"{target_name}.new\" \"{target_name}\")"
     ));
     lines.push("".to_string());
     lines.push("set PYINSTALLER_RESET_ENVIRONMENT=1".to_string());
 
-    let mut start_line = format!("start \"\" \"{}\"", new_name);
-    for a in arg_line {
-        start_line.push(' ');
-        start_line.push_str(&a.to_string_lossy());
-    }
-    lines.push(start_line);
+    // Use %* to forward args passed to this .bat.
+    // We pass args from Rust when spawning the .bat, which avoids fragile manual quoting.
+    lines.push(format!("start \"\" \"{}\" %*", target_name));
     lines.push("".to_string());
     lines.push("del \"%~f0\"".to_string());
 
@@ -433,7 +528,10 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
     let bat_path = std::env::temp_dir().join("tnd_update_script.bat");
     fs::write(&bat_path, bat_content).context("write update bat")?;
 
-    Command::new(&bat_path)
+    // 通过 cmd.exe 执行 .bat，兼容性更好（CreateProcess 不能直接执行 batch）。
+    Command::new("cmd")
+        .args(["/C", bat_path.to_string_lossy().as_ref()])
+        .args(args)
         .spawn()
         .context("spawn update bat")?;
 

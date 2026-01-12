@@ -16,14 +16,23 @@ use std::thread;
 mod base_system;
 mod book_parser;
 mod download;
+mod network_parser;
 mod prewarm_state;
+mod third_party;
 mod ui;
 
-use base_system::config::load_or_create;
+use base_system::config::{load_or_create, load_or_create_with_base};
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
-use tomato_novel_official_api::prewarm_iid;
 use tracing::{info, warn};
+
+#[cfg(all(feature = "official-api", feature = "no-official-api"))]
+compile_error!(
+    "features 'official-api' and 'no-official-api' are mutually exclusive; use exactly one"
+);
+
+#[cfg(feature = "official-api")]
+use tomato_novel_official_api::prewarm_iid;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,9 +44,13 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     debug: bool,
 
-    /// 启用服务器模式（暂未实现）
+    /// 启用服务器模式（Web UI）
     #[arg(long, default_value_t = false)]
     server: bool,
+
+    /// Web UI 密码（启用锁模式，防止陌生人使用）
+    #[arg(long)]
+    password: Option<String>,
 
     /// 显示版本信息后退出
     #[arg(long, default_value_t = false)]
@@ -50,6 +63,10 @@ struct Cli {
     /// 自更新时自动确认（等价于提示输入 Y）
     #[arg(long, default_value_t = false)]
     self_update_yes: bool,
+
+    /// 数据目录路径（用于存放 config.yml 和 logs 等文件，方便 Docker 挂载）
+    #[arg(long)]
+    data_dir: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -60,27 +77,42 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let _log = init_logging(cli.debug)?;
+    let data_dir = cli.data_dir.as_ref().map(std::path::Path::new);
+    let _log = init_logging(cli.debug, data_dir)?;
 
     if cli.self_update {
         let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
         return Ok(());
     }
 
+    // 启动时强制热更新（仅当 SHA256 不同且 tag 相同）。
+    // 例外：cargo run/开发态运行时跳过。
+    let _ = base_system::self_update::check_hotfix_and_apply(VERSION);
+
     prewarm_state::mark_prewarm_start();
     thread::spawn(|| {
-        match prewarm_iid() {
-            Ok(_) => info!(target: "startup", "IID 预热完成"),
-            Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+        #[cfg(feature = "official-api")]
+        {
+            match prewarm_iid() {
+                Ok(_) => info!(target: "startup", "IID 预热完成"),
+                Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+            }
+        }
+
+        #[cfg(not(feature = "official-api"))]
+        {
+            info!(target: "startup", "no-official-api 构建：跳过 IID 预热");
         }
         prewarm_state::mark_prewarm_done();
     });
 
-    let mut config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
+    let mut config = load_config_from_data_dir(data_dir)?;
 
     if cli.server {
-        println!("服务器模式暂未实现，当前仅支持终端 UI 模式。");
-        return Ok(());
+        let password = cli
+            .password
+            .or_else(|| std::env::var("TOMATO_WEB_PASSWORD").ok());
+        return ui::web::run(&mut config, password);
     }
 
     loop {
@@ -93,14 +125,26 @@ fn main() -> Result<()> {
             ui::tui::TuiExit::Quit => return Ok(()),
             ui::tui::TuiExit::SwitchToOldCli => {
                 // 模拟“重启”：重新从磁盘加载配置，然后进入 noui
-                config = load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))?;
+                config = load_config_from_data_dir(data_dir)?;
                 config.old_cli = true;
+            }
+            ui::tui::TuiExit::SelfUpdate { auto_yes } => {
+                let _ = base_system::self_update::check_for_updates(VERSION, auto_yes);
+                return Ok(());
             }
         }
     }
 }
 
-fn init_logging(debug: bool) -> Result<LogSystem> {
+fn load_config_from_data_dir(data_dir: Option<&std::path::Path>) -> Result<Config> {
+    if let Some(dir) = data_dir {
+        load_or_create_with_base::<Config>(None, Some(dir)).map_err(|e| anyhow!(e.to_string()))
+    } else {
+        load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))
+    }
+}
+
+fn init_logging(debug: bool, base_dir: Option<&std::path::Path>) -> Result<LogSystem> {
     let opts = LogOptions {
         debug,
         use_color: true,
@@ -108,5 +152,9 @@ fn init_logging(debug: bool) -> Result<LogSystem> {
         console: false,
         broadcast_to_ui: true,
     };
-    LogSystem::init(opts).map_err(|e| anyhow!(e))
+    if let Some(base_dir) = base_dir {
+        LogSystem::init_with_base(opts, Some(base_dir)).map_err(|e| anyhow!(e))
+    } else {
+        LogSystem::init(opts).map_err(|e| anyhow!(e))
+    }
 }

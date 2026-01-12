@@ -5,6 +5,8 @@ use super::*;
 use std::io::Write;
 use std::path::Path;
 
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+
 use crate::base_system::config::{ConfigSpec, write_with_comments};
 
 pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
@@ -119,13 +121,38 @@ pub(super) fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<
         let menu_area = layout[2];
         let results_area = layout[3];
         let status_area = layout[4];
-        let pos_in = |area: Rect, col: u16, row: u16| {
-            col >= area.x
-                && col < area.x + area.width
-                && row >= area.y
-                && row < area.y + area.height
-        };
+        let pos_in = |area: Rect, col: u16, row: u16| super::pos_in(area, col, row);
         match me.kind {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if pos_in(menu_area, me.column, me.row) {
+                    let up = matches!(me.kind, MouseEventKind::ScrollUp);
+                    if app.menu_state.selected().is_none() {
+                        app.menu_state.select(Some(0));
+                    } else if up {
+                        let sel = app.menu_state.selected().unwrap_or(0);
+                        let prev = sel.saturating_sub(1);
+                        app.menu_state.select(Some(prev));
+                    } else {
+                        let sel = app.menu_state.selected().unwrap_or(0);
+                        let next = (sel + 1).min(MENU_ITEMS.len().saturating_sub(1));
+                        app.menu_state.select(Some(next));
+                    }
+                    app.focus = Focus::Menu;
+                    return Ok(());
+                }
+                if pos_in(results_area, me.column, me.row) && !app.results.is_empty() {
+                    let up = matches!(me.kind, MouseEventKind::ScrollUp);
+                    if app.list_state.selected().is_none() {
+                        app.list_state.select(Some(0));
+                    } else if up {
+                        app.select_prev();
+                    } else {
+                        app.select_next();
+                    }
+                    app.focus = Focus::Results;
+                    return Ok(());
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 if pos_in(input_area, me.column, me.row) {
                     app.focus = Focus::Input;
@@ -133,22 +160,30 @@ pub(super) fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<
                 }
                 if pos_in(menu_area, me.column, me.row) {
                     app.focus = Focus::Menu;
-                    let idx = me.row.saturating_sub(menu_area.y + 1) as usize;
-                    if idx < MENU_ITEMS.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        menu_area,
+                        me.row,
+                        &app.menu_state,
+                        MENU_ITEMS.len(),
+                    ) {
                         app.menu_state.select(Some(idx));
                         super::trigger_menu_action(app)?;
                     }
                     return Ok(());
                 }
                 if pos_in(results_area, me.column, me.row) {
-                    if !app.results.is_empty() {
-                        let idx = me.row.saturating_sub(results_area.y + 1) as usize;
-                        if idx < app.results.len() {
-                            app.list_state.select(Some(idx));
-                            app.focus = Focus::Results;
-                            let hint = book_meta_from_item(&app.results[idx]);
-                            super::start_preview_task(app, app.results[idx].book_id.clone(), hint)?;
-                        }
+                    if !app.results.is_empty()
+                        && let Some(idx) = super::list_index_from_mouse_row(
+                            results_area,
+                            me.row,
+                            &app.list_state,
+                            app.results.len(),
+                        )
+                    {
+                        app.list_state.select(Some(idx));
+                        app.focus = Focus::Results;
+                        let hint = book_meta_from_item(&app.results[idx]);
+                        super::start_preview_task(app, app.results[idx].book_id.clone(), hint)?;
                     }
                     return Ok(());
                 }
@@ -158,20 +193,28 @@ pub(super) fn handle_mouse_home(app: &mut App, me: event::MouseEvent) -> Result<
             }
             MouseEventKind::Moved => {
                 if pos_in(menu_area, me.column, me.row) {
-                    let idx = me.row.saturating_sub(menu_area.y + 1) as usize;
-                    if idx < MENU_ITEMS.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        menu_area,
+                        me.row,
+                        &app.menu_state,
+                        MENU_ITEMS.len(),
+                    ) {
                         app.menu_state.select(Some(idx));
                         app.focus = Focus::Menu;
                     }
                     return Ok(());
                 }
                 if pos_in(results_area, me.column, me.row) {
-                    if !app.results.is_empty() {
-                        let idx = me.row.saturating_sub(results_area.y + 1) as usize;
-                        if idx < app.results.len() {
-                            app.list_state.select(Some(idx));
-                            app.focus = Focus::Results;
-                        }
+                    if !app.results.is_empty()
+                        && let Some(idx) = super::list_index_from_mouse_row(
+                            results_area,
+                            me.row,
+                            &app.list_state,
+                            app.results.len(),
+                        )
+                    {
+                        app.list_state.select(Some(idx));
+                        app.focus = Focus::Results;
                     }
                     return Ok(());
                 }
@@ -476,15 +519,47 @@ pub(super) fn draw_home(frame: &mut ratatui::Frame, app: &mut App) {
     } else {
         Style::default()
     };
-    let menu_list = List::new(menu_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("操作 (Enter 或鼠标点击)"),
+    let menu_block = Block::default()
+        .borders(Borders::ALL)
+        .title("操作 (Enter 或鼠标点击)");
+    frame.render_widget(menu_block.clone(), layout[2]);
+    let menu_inner = menu_block.inner(layout[2]);
+    let menu_len = MENU_ITEMS.len();
+    let need_scrollbar =
+        menu_len > 0 && menu_inner.height > 0 && menu_len > menu_inner.height as usize;
+    let (menu_area, menu_sb_area) = if need_scrollbar && menu_inner.width > 0 {
+        let list_w = menu_inner.width.saturating_sub(1).max(1);
+        (
+            Rect {
+                x: menu_inner.x,
+                y: menu_inner.y,
+                width: list_w,
+                height: menu_inner.height,
+            },
+            Some(Rect {
+                x: menu_inner.x.saturating_add(list_w),
+                y: menu_inner.y,
+                width: 1,
+                height: menu_inner.height,
+            }),
         )
+    } else {
+        (menu_inner, None)
+    };
+    let menu_list = List::new(menu_items)
         .highlight_style(menu_style.add_modifier(Modifier::BOLD))
         .highlight_symbol(">> ");
-    frame.render_stateful_widget(menu_list, layout[2], &mut app.menu_state);
+    frame.render_stateful_widget(menu_list, menu_area, &mut app.menu_state);
+    if let Some(sb_area) = menu_sb_area {
+        let pos = app
+            .menu_state
+            .selected()
+            .unwrap_or(0)
+            .min(menu_len.saturating_sub(1));
+        let mut sb_state = ScrollbarState::new(menu_len).position(pos);
+        let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(sb, sb_area, &mut sb_state);
+    }
 
     let items: Vec<ListItem> = if app.results.is_empty() {
         vec![ListItem::new("无搜索结果")]
@@ -498,20 +573,54 @@ pub(super) fn draw_home(frame: &mut ratatui::Frame, app: &mut App) {
             .collect()
     };
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("搜索结果 (上下选择, Enter 下载)"),
+    let results_block = Block::default()
+        .borders(Borders::ALL)
+        .title("搜索结果 (上下选择, Enter 下载)");
+    frame.render_widget(results_block.clone(), layout[3]);
+    let results_inner = results_block.inner(layout[3]);
+
+    let results_len = app.results.len();
+    let need_scrollbar =
+        results_len > 0 && results_inner.height > 0 && results_len > results_inner.height as usize;
+    let (list_area, sb_area) = if need_scrollbar && results_inner.width > 0 {
+        let list_w = results_inner.width.saturating_sub(1).max(1);
+        (
+            Rect {
+                x: results_inner.x,
+                y: results_inner.y,
+                width: list_w,
+                height: results_inner.height,
+            },
+            Some(Rect {
+                x: results_inner.x.saturating_add(list_w),
+                y: results_inner.y,
+                width: 1,
+                height: results_inner.height,
+            }),
         )
+    } else {
+        (results_inner, None)
+    };
+
+    let list = List::new(items)
         .highlight_style(
             Style::default()
                 .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
+    frame.render_stateful_widget(list, list_area, &mut app.list_state);
 
-    frame.render_stateful_widget(list, layout[3], &mut app.list_state);
+    if let Some(sb_area) = sb_area {
+        let pos = app
+            .list_state
+            .selected()
+            .unwrap_or(0)
+            .min(results_len.saturating_sub(1));
+        let mut sb_state = ScrollbarState::new(results_len).position(pos);
+        let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(sb, sb_area, &mut sb_state);
+    }
 
     let mut msg_lines: Vec<Line> = Vec::new();
     if let Some(detail) = current_selection_detail_lines(app) {

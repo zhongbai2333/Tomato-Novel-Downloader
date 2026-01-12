@@ -2,11 +2,14 @@
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
-目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了~~（虽说原本的Python版本也没几行是原项目的了）~~，Fork网络也是由于我懒得更换仓库
+目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了（~~虽说原本的Python版本也没几行是原项目的了~~），Fork网络也是由于我懒得更换仓库
 
-我对其进行重构 + 优化，添加更对功能，包括：EPUB下载支持、更好的断点传输、更好的错误管理、书本搜索等特性
+我对其进行重构 + 优化，添加更多功能，包括：EPUB 下载支持、更好的断点续传、更好的错误管理、书本搜索、Web UI 等特性。
 
-本项目~~完全~~基于第三方API，~~未~~使用官方API
+本项目支持两种构建模式：
+
+- 默认模式（`official-api`）：保留 Official-API 能力（搜索/目录/段评等），同时也兼容第三方正文模式。
+- No-Official-API 模式（`no-official-api`）：**不依赖 Official-API crate**；目录/书信息走网页解析；**正文强制使用第三方 API 地址池**。
 
 为了保证第三方API安全，部分第三方接口相关代码并不开源，包括地址和token，敬请谅解，谢谢！
 
@@ -22,6 +25,121 @@
 
 根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases)列表下载可执行文件，并运行
 你可以通过输入书籍id以及需要保存的路径来进行下载
+
+### Web UI 服务器模式（--server）
+
+如果你希望在局域网用浏览器操作（搜索、发起下载、查看任务、下载文件/打包下载文件夹），可以启用 Web UI：
+
+- 启动 Web UI：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --server
+    ```
+
+- 监听地址（默认 `127.0.0.1:18423`）：
+
+    通过环境变量修改监听地址，例如局域网访问：
+
+    ```sh
+    TOMATO_WEB_ADDR=0.0.0.0:18423
+    ```
+
+    IPv6 监听示例（注意 IPv6 需要方括号）：
+
+    ```sh
+    TOMATO_WEB_ADDR=[::]:18423
+    ```
+
+    同时监听多个地址（用逗号或分号分隔），例如同时监听 IPv4 + IPv6：
+
+    ```sh
+    TOMATO_WEB_ADDR=0.0.0.0:18423,[::]:18423
+    ```
+
+- 密码锁模式（防止陌生人使用）：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --server --password 你的密码
+    ```
+
+    或者使用环境变量：
+
+    ```sh
+    TOMATO_WEB_PASSWORD=你的密码
+    ```
+
+- 数据目录（用于 Docker 部署或集中管理配置/日志）：
+
+    通过 `--data-dir` 参数指定数据目录，程序会将 `config.yml` 和 `logs` 文件夹放在该目录下：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --server --data-dir /data
+    ```
+
+    Docker 使用示例：
+
+    ```sh
+    docker run -v /host/data:/data my-tomato-image --server --data-dir /data
+    ```
+
+    这样可以方便地挂载数据目录，实现配置和日志的持久化。
+
+Web UI 提供的功能（纯 HTML，无需额外前端构建）：
+
+- 搜索书籍并创建下载任务
+- 任务列表/进度刷新/取消任务
+- 下载库按目录浏览（不再把所有文件递归平铺）
+- 文件直接下载
+- 文件夹一键打包为 zip 下载（保持目录结构，适配音频等“文件夹内包含文件夹”的情况）
+- 配置页面：可在线修改部分下载输出相关配置（会写回 `config.yml`）
+
+注意：Web UI 主要面向自建/局域网使用；如果要暴露到公网，建议放在反向代理/HTTPS 后面，并务必开启密码锁。
+
+---
+
+## 构建模式（Cargo Features）
+
+本项目提供两个互斥的 feature：`official-api` 与 `no-official-api`（两者不能同时启用）。
+
+### 默认模式：official-api（默认启用）
+
+- 构建（默认就会启用）：
+
+```sh
+cargo build --release
+```
+
+- 行为：
+  - 搜索功能可用（TUI / Web UI / 老 CLI 的搜索入口）。
+  - 段评（EPUB 段评页/资源抓取）可用（取决于配置项）。
+  - 正文获取可通过配置在“官方/第三方”之间切换（`use_official_api`）。
+
+### No-Official-API 模式：no-official-api（Issue #187）
+
+- 构建：
+
+```sh
+cargo build --release --no-default-features --features no-official-api
+```
+
+- 行为差异（重点）：
+  - **不依赖** `tomato-novel-official-api` crate，可在缺少 Official-API 环境时编译。
+  - 目录与书本信息：使用网页解析（`FanqieWebNetwork`）。
+  - **正文获取：强制第三方模式**（忽略/不使用 `use_official_api=true` 的官方分支）。
+  - 搜索功能：不可用（会返回提示/报错）。
+  - 段评：不可用（会被强制关闭）。
+
+- 配置要求：必须提供第三方地址池 `api_endpoints`，否则无法下载正文：
+
+```yaml
+# config.yml
+# no-official-api 构建下，正文强制走第三方；该字段会被忽略
+use_official_api: false
+
+# 必填：第三方 API 地址池（至少 1 个）
+api_endpoints:
+    - "https://example.com"  # 你的第三方服务地址
+```
 
 ---
 
@@ -49,7 +167,10 @@
 
 2. 手机端可以正常运行吗？
 
-    **仅限安卓设备**可以正常运行，为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
+    **仅限安卓设备（Termux）**可以运行。
+    但由于 **TUI/CLI 界面对小屏幕不太友好**，手机端更推荐使用 **Web UI 模式（--server）**：在 Termux 里启动服务，然后用手机浏览器操作（或让同一局域网的其它设备访问）。
+
+    为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
 
     下载termux(链接:(<https://github.com/termux/termux-app/releases>) 并安装，然后运行部署脚本：
 
@@ -62,6 +183,17 @@
     ```sh
     bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
     ```
+
+    安装完成后，推荐用 Web UI 启动（示例）：
+
+    ```sh
+    TOMATO_WEB_ADDR=0.0.0.0:18423 TOMATO_WEB_PASSWORD=你的密码 tomato-novel-downloader --server
+    ```
+
+    然后在浏览器打开：
+
+    - 本机：`http://127.0.0.1:18423/`
+    - 局域网其它设备：`http://<手机的局域网IP>:18423/`
 
 3. 电脑端该如何运行？
 
@@ -81,7 +213,10 @@
 
 4. 小说id是什么？在哪里获取？
 
-    首先你需要找到自己想下载的小说的详情页(例如<https://fanqienovel.com/page/7143038691944959011> )，链接中“7143038691944959011”就是小说id
+    推荐两种方式：
+
+    - 直接使用 Web UI 的“搜索书籍”，不需要手动找 ID。
+    - 如果你已经有分享链接/书籍信息，通常会包含一段很长的数字（Book ID）。复制该数字即可。
 
 5. 我是纯小白，程序在哪里下载啊
 

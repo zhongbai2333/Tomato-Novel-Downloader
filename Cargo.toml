@@ -1,7 +1,17 @@
 [package]
 name = "tomato-novel-downloader"
-version = "2.0.1"
+version = "2.1.2"
 edition = "2024"
+
+[features]
+# 默认构建：启用 Official-API（保持现有行为）。
+default = ["official-api"]
+
+# 依赖 Tomato-Novel-Official-API 的实现。
+official-api = ["dep:tomato-novel-official-api"]
+
+# 不依赖 Official-API 的构建：目录/书信息走 web 解析；正文强制第三方模式。
+no-official-api = []
 
 [dependencies]
 anyhow = "1.0"
@@ -32,7 +42,11 @@ textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-tomato-novel-official-api = { path = "../Tomato-Novel-Official-API", features = ["full_api"] }
+tomato-novel-official-api = { path = "../Tomato-Novel-Official-API", optional = true }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-core = "0.3"
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
@@ -40,7 +54,6 @@ winres = "0.1"
 [profile.release]
 opt-level = "z"
 lto = "fat"
-codegen-units = 1
 debug = false
 panic = "unwind"
 strip = "symbols"

@@ -1,11 +1,9 @@
 //! 无 UI 的更新检查与提示。
 
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use serde_json::Value;
-use tomato_novel_official_api::DirectoryClient;
+use crate::base_system::novel_updates;
+use anyhow::Result;
 
 use crate::base_system::context::Config;
 
@@ -13,7 +11,6 @@ use crate::base_system::context::Config;
 pub(super) struct UpdateEntry {
     pub(super) book_id: String,
     pub(super) label: String,
-    pub(super) new_count: usize,
 }
 
 pub(super) fn update_menu(config: &Config) -> Result<Option<String>> {
@@ -103,66 +100,21 @@ fn select_from_list(list: &[UpdateEntry], title: &str) -> Result<Option<String>>
 }
 
 fn scan_updates(_config: &Config, save_dir: &Path) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
-    let mut updates = Vec::new();
-    let mut no_updates = Vec::new();
+    let scan = novel_updates::scan_novel_updates(save_dir)?;
 
-    let client = DirectoryClient::new().context("init DirectoryClient")?;
-    let dir_reader =
-        fs::read_dir(save_dir).with_context(|| format!("read dir {}", save_dir.display()))?;
-    for entry in dir_reader.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
+    let to_entry = |it: novel_updates::NovelUpdateRow| {
+        let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
+        UpdateEntry {
+            book_id: it.book_id.clone(),
+            label: format!(
+                "{}《{}》({}) — 新章节：{}",
+                ignore_marker, it.book_name, it.book_id, it.new_count
+            ),
         }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        let Some((book_id, book_name)) = name.split_once('_') else {
-            continue;
-        };
-        if !book_id.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-
-        let downloaded_count = read_downloaded_count(&path, book_id).unwrap_or(0);
-        let chapter_list = match client.fetch_directory(book_id) {
-            Ok(d) => d.chapters,
-            Err(_) => Vec::new(),
-        };
-        if chapter_list.is_empty() {
-            continue;
-        }
-        let total = chapter_list.len();
-        let new_count = total.saturating_sub(downloaded_count);
-        let label = format!("《{}》({}) — 新章节：{}", book_name, book_id, new_count);
-        let entry = UpdateEntry {
-            book_id: book_id.to_string(),
-            label,
-            new_count,
-        };
-        if entry.new_count > 0 {
-            updates.push(entry);
-        } else {
-            no_updates.push(entry);
-        }
-    }
-
-    Ok((updates, no_updates))
-}
-
-fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usize> {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return None;
     };
-    let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
-    Some(downloaded.len())
+
+    Ok((
+        scan.updates.into_iter().map(to_entry).collect(),
+        scan.no_updates.into_iter().map(to_entry).collect(),
+    ))
 }

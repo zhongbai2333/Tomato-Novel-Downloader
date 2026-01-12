@@ -13,12 +13,20 @@ pub struct EpubGenerator {
     book: EpubBuilder<ZipLibrary>,
     chapters: Vec<(String, String)>,
     style: String,
+    #[allow(dead_code)]
     file_counter: usize,
     title: String,
 }
 
 impl EpubGenerator {
-    pub fn new(identifier: &str, title: &str, cfg: &Config) -> Result<Self> {
+    pub fn new(
+        identifier: &str,
+        title: &str,
+        author: &str,
+        tags: &str,
+        description: &str,
+        cfg: &Config,
+    ) -> Result<Self> {
         let zip = ZipLibrary::new().map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut book = EpubBuilder::new(zip).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -26,7 +34,28 @@ impl EpubGenerator {
         book.metadata("identifier", safe_id).ok();
         book.metadata("title", title).ok();
         book.metadata("language", "zh").ok();
-        book.metadata("author", "unknown").ok();
+
+        let author = author.trim();
+        if !author.is_empty() {
+            // epub-builder uses Dublin Core style names; `creator` is the standard field.
+            // Keep `author` too for compatibility with older readers/tooling.
+            book.metadata("creator", author).ok();
+            book.metadata("author", author).ok();
+        }
+
+        let tags = tags.trim();
+        if !tags.is_empty() {
+            // Tags/keywords
+            book.metadata("subject", tags).ok();
+        }
+
+        let description = description.trim();
+        if !description.is_empty() {
+            book.metadata("description", description).ok();
+        }
+
+        // A stable default publisher helps some readers display richer info.
+        book.metadata("publisher", "Tomato-Novel-Downloader").ok();
 
         let indent_em = cfg.first_line_indent_em.max(0.0);
         let indent_rule = if indent_em > 0.0 {
@@ -67,9 +96,14 @@ impl EpubGenerator {
         })
     }
 
+    #[allow(dead_code)]
     pub fn add_chapter(&mut self, title: &str, content: &str) {
         let file_name = format!("chapter_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
+        self.add_chapter_named(file_name, title, content);
+    }
+
+    pub fn add_chapter_named(&mut self, file_name: String, title: &str, content: &str) {
         let cleaned = if content.trim().is_empty() {
             "<p class='no-indent'>本章内容未下载完成或为空（可能是用户中断或网络错误）。</p>"
                 .to_string()
@@ -77,32 +111,23 @@ impl EpubGenerator {
             content.to_string()
         };
         self.chapters
-            .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
+            .push((file_name, wrap_chapter_html(title, &cleaned)));
     }
 
     #[allow(dead_code)]
-    pub fn peek_next_aux_file_name(&self) -> String {
-        format!("aux_{:05}.xhtml", self.file_counter)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_aux_file_name_after_next_chapter(&self) -> String {
-        format!("aux_{:05}.xhtml", self.file_counter + 1)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_chapter_file_name(&self) -> String {
-        format!("chapter_{:05}.xhtml", self.file_counter)
-    }
-
-    #[allow(dead_code)]
-    pub fn peek_next_chapter_file_name_after_next_aux(&self) -> String {
-        format!("chapter_{:05}.xhtml", self.file_counter + 1)
-    }
-
     pub fn add_aux_page(&mut self, title: &str, content: &str, include_in_spine: bool) -> String {
         let file_name = format!("aux_{:05}.xhtml", self.file_counter);
         self.file_counter += 1;
+        self.add_aux_page_named(file_name, title, content, include_in_spine)
+    }
+
+    pub fn add_aux_page_named(
+        &mut self,
+        file_name: String,
+        title: &str,
+        content: &str,
+        include_in_spine: bool,
+    ) -> String {
         let cleaned = if content.trim().is_empty() {
             format!(
                 "<h3>{}</h3><p class='no-indent'>（空页面）</p>",
@@ -115,7 +140,6 @@ impl EpubGenerator {
             self.chapters
                 .push((file_name.clone(), wrap_chapter_html(title, &cleaned)));
         }
-
         file_name
     }
 

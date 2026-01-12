@@ -3,10 +3,46 @@
 use super::*;
 use std::thread;
 
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+
+use crate::base_system::novel_updates;
+
 pub(super) fn handle_event_update(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('b') => exit_update_view(app)?,
+            KeyCode::Char('i') => {
+                // 切换当前选中书籍的忽略更新状态
+                if let Some(entry) = current_update_entry(app) {
+                    // 加载BookManager来切换忽略状态
+                    let mut manager = match crate::book_parser::book_manager::BookManager::new(
+                        app.config.clone(),
+                        &entry.book_id,
+                        &entry.book_name,
+                    ) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            app.status = format!("加载书籍状态失败: {}", e);
+                            return Ok(());
+                        }
+                    };
+
+                    // 加载现有状态
+                    manager.load_existing_status(&entry.book_id, &entry.book_name);
+
+                    // 切换忽略状态并保存
+                    let new_state = manager.toggle_ignore_updates();
+
+                    if new_state {
+                        app.status = format!("已将《{}》添加到忽略列表", entry.book_name);
+                    } else {
+                        app.status = format!("已将《{}》从忽略列表移除", entry.book_name);
+                    }
+
+                    // 重新扫描更新
+                    show_update_menu(app)?;
+                }
+            }
             KeyCode::Char('p') => {
                 if let Some(entry) = current_update_entry(app) {
                     super::cover::show_cover(
@@ -60,12 +96,7 @@ fn exit_update_view(app: &mut App) -> Result<()> {
 
 pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Result<()> {
     if let Some(area) = app.last_update_exit_button {
-        let pos_in = |rect: Rect, col: u16, row: u16| {
-            col >= rect.x
-                && col < rect.x + rect.width
-                && row >= rect.y
-                && row < rect.y + rect.height
-        };
+        let pos_in = |rect: Rect, col: u16, row: u16| super::pos_in(rect, col, row);
         if pos_in(area, me.column, me.row)
             && matches!(me.kind, MouseEventKind::Down(MouseButton::Left))
         {
@@ -75,22 +106,43 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
 
     if let Some(layout) = app.last_update_layout {
         let list_area = layout[1];
-        let pos_in = |area: Rect, col: u16, row: u16| {
-            col >= area.x
-                && col < area.x + area.width
-                && row >= area.y
-                && row < area.y + area.height
-        };
+        let pos_in = |area: Rect, col: u16, row: u16| super::pos_in(area, col, row);
         match me.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 if pos_in(list_area, me.column, me.row) {
-                    let idx = me.row.saturating_sub(list_area.y + 1) as usize;
                     let list = if app.show_no_update {
                         &app.update_no_updates
                     } else {
                         &app.update_entries
                     };
-                    if idx < list.len() {
+                    if list.is_empty() {
+                        return Ok(());
+                    }
+                    if app.update_state.selected().is_none() {
+                        app.update_state.select(Some(0));
+                        return Ok(());
+                    }
+                    if matches!(me.kind, MouseEventKind::ScrollUp) {
+                        select_prev_update(app);
+                    } else {
+                        select_next_update(app);
+                    }
+                    return Ok(());
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if pos_in(list_area, me.column, me.row) {
+                    let list = if app.show_no_update {
+                        &app.update_no_updates
+                    } else {
+                        &app.update_entries
+                    };
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        list_area,
+                        me.row,
+                        &app.update_state,
+                        list.len(),
+                    ) {
                         app.update_state.select(Some(idx));
                         if let Some(entry) = current_update_entry(app) {
                             let hint = BookMeta {
@@ -104,13 +156,17 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
             }
             MouseEventKind::Moved => {
                 if pos_in(list_area, me.column, me.row) {
-                    let idx = me.row.saturating_sub(list_area.y + 1) as usize;
                     let list = if app.show_no_update {
                         &app.update_no_updates
                     } else {
                         &app.update_entries
                     };
-                    if idx < list.len() {
+                    if let Some(idx) = super::list_index_from_mouse_row(
+                        list_area,
+                        me.row,
+                        &app.update_state,
+                        list.len(),
+                    ) {
                         app.update_state.select(Some(idx));
                     }
                 }
@@ -187,101 +243,47 @@ pub(super) fn show_update_menu(app: &mut App) -> Result<()> {
 }
 
 fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
-    let mut updates = Vec::new();
-    let mut no_updates = Vec::new();
-
     let save_dir = config.default_save_dir();
-    if !save_dir.exists() {
-        return Ok((updates, no_updates));
-    }
-    let dir_reader =
-        fs::read_dir(&save_dir).with_context(|| format!("read dir {}", save_dir.display()))?;
-    let client = DirectoryClient::new().context("init DirectoryClient")?;
-    for entry in dir_reader.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        let (book_id, book_name) = match name.split_once('_') {
-            Some((id, n)) if id.chars().all(|c| c.is_ascii_digit()) => {
-                (id.to_string(), n.to_string())
-            }
-            _ => continue,
-        };
+    let scan = novel_updates::scan_novel_updates(&save_dir)?;
 
-        let downloaded_count = read_downloaded_count(&path, &book_id).unwrap_or(0);
-        let chapter_list = match client.fetch_directory(&book_id) {
-            Ok(d) => d.chapters,
-            Err(_) => Vec::new(),
-        };
-        if chapter_list.is_empty() {
-            continue;
-        }
-        let total = chapter_list.len();
-        let new_count = total.saturating_sub(downloaded_count);
-        let label = format!("《{}》({}) — 新章节: {}", book_name, book_id, new_count);
-        let entry = UpdateEntry {
-            book_id: book_id.clone(),
-            book_name: book_name.clone(),
-            folder: path.clone(),
-            label,
-            _new_count: new_count,
-            _has_update: new_count > 0,
-        };
-        if new_count > 0 {
-            updates.push(entry);
+    let to_entry = |it: novel_updates::NovelUpdateRow| {
+        let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
+        let label = if it.new_count > 0 && it.local_failed > 0 {
+            format!(
+                "{}《{}》({}) — 新章节: {} | 失败章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
+            )
+        } else if it.new_count > 0 {
+            format!(
+                "{}《{}》({}) — 新章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.new_count
+            )
+        } else if it.local_failed > 0 {
+            format!(
+                "{}《{}》({}) — 失败章节: {}",
+                ignore_marker, it.book_name, it.book_id, it.local_failed
+            )
         } else {
-            no_updates.push(entry);
+            format!(
+                "{}《{}》({}) — 新章节: 0",
+                ignore_marker, it.book_name, it.book_id
+            )
+        };
+
+        UpdateEntry {
+            book_id: it.book_id.clone(),
+            book_name: it.book_name.clone(),
+            folder: it.folder.clone(),
+            label,
+            _new_count: it.new_count,
+            _has_update: it.has_update,
         }
-    }
-    Ok((updates, no_updates))
-}
-
-pub(super) fn expected_book_folder(config: &Config, plan: &DownloadPlan) -> PathBuf {
-    crate::base_system::book_paths::book_folder_path(
-        config,
-        &plan.book_id,
-        plan.meta.book_name.as_deref(),
-    )
-}
-
-pub(super) fn read_downloaded_count(folder: &Path, book_id: &str) -> Option<usize> {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return None;
     };
-    let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
 
-    // 仅统计“成功下载”的章节：downloaded[chapter_id] = [title, content]
-    // 其中 content=null 表示下载失败（或未完成），不应该计入“已下载”。
-    let mut ok = 0usize;
-    for (_cid, pair) in downloaded {
-        match pair {
-            Value::Array(arr) => {
-                if arr.get(1).and_then(|v| v.as_str()).is_some() {
-                    ok += 1;
-                }
-            }
-            Value::Object(obj) => {
-                if obj.get("content").and_then(|v| v.as_str()).is_some() {
-                    ok += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-    Some(ok)
+    Ok((
+        scan.updates.into_iter().map(to_entry).collect(),
+        scan.no_updates.into_iter().map(to_entry).collect(),
+    ))
 }
 
 pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {
@@ -307,7 +309,7 @@ pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  |  上下选择，Enter 下载，n 切换无更新，b 或右下角返回"),
+        Span::raw("  |  上下选择，Enter 下载，i 忽略/取消忽略，n 切换无更新，b 或右下角返回"),
     ]);
     let header =
         Paragraph::new(header_line).block(Block::default().borders(Borders::ALL).title("更新检测"));
@@ -325,23 +327,55 @@ pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {
             .map(|u| ListItem::new(u.label.clone()))
             .collect()
     };
-    let list_widget = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(if app.show_no_update {
-                    "无更新书籍"
-                } else {
-                    "有更新书籍"
-                }),
+    let list_title = if app.show_no_update {
+        "无更新书籍"
+    } else {
+        "有更新书籍"
+    };
+    let list_block = Block::default().borders(Borders::ALL).title(list_title);
+    frame.render_widget(list_block.clone(), layout[1]);
+    let inner = list_block.inner(layout[1]);
+
+    let need_scrollbar = !list.is_empty() && inner.height > 0 && list.len() > inner.height as usize;
+    let (list_area, sb_area) = if need_scrollbar && inner.width > 0 {
+        let list_w = inner.width.saturating_sub(1).max(1);
+        (
+            Rect {
+                x: inner.x,
+                y: inner.y,
+                width: list_w,
+                height: inner.height,
+            },
+            Some(Rect {
+                x: inner.x.saturating_add(list_w),
+                y: inner.y,
+                width: 1,
+                height: inner.height,
+            }),
         )
+    } else {
+        (inner, None)
+    };
+
+    let list_widget = List::new(items)
         .highlight_style(
             Style::default()
                 .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(">> ");
-    frame.render_stateful_widget(list_widget, layout[1], &mut app.update_state);
+    frame.render_stateful_widget(list_widget, list_area, &mut app.update_state);
+
+    if let Some(sb_area) = sb_area {
+        let pos = app
+            .update_state
+            .selected()
+            .unwrap_or(0)
+            .min(list.len().saturating_sub(1));
+        let mut sb_state = ScrollbarState::new(list.len()).position(pos);
+        let sb = Scrollbar::default().orientation(ScrollbarOrientation::VerticalRight);
+        frame.render_stateful_widget(sb, sb_area, &mut sb_state);
+    }
 
     let mut msg_lines = vec![Line::from(app.status.clone())];
     if !app.update_entries.is_empty() {
