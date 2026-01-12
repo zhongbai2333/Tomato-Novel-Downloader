@@ -14,7 +14,7 @@ official-api = ["dep:tomato-novel-official-api"]
 no-official-api = []
 
 # 有声书（TTS）：默认启用；在 musl/android 等环境可关闭以避免 OpenSSL/curl 等原生依赖。
-tts = ["dep:tungstenite", "dep:uuid"]
+tts = ["dep:msedge-tts"]
 
 # TUI 粘贴板：默认启用；在不支持的平台可关闭。
 clipboard = ["dep:arboard"]
@@ -43,8 +43,7 @@ sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
 tempfile = "3.10"
-tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
+msedge-tts = { version = "0.2.4", optional = true }
 textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
