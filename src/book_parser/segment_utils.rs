@@ -1,6 +1,38 @@
 //! 段评/评论相关的解析与拼装工具。
 
 use regex::Regex;
+use std::sync::OnceLock;
+
+// Compiled regexes for performance (compiled once, reused across calls)
+fn class_attr_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r#"(?i)\bclass\s*=\s*["']([^"']*)["']"#).unwrap())
+}
+
+fn para_tag_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap())
+}
+
+fn para_tag_regex_case_insensitive() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap())
+}
+
+fn id_attr_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"(?is)\bid\s*=").unwrap())
+}
+
+fn html_tags_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"<[^>]+>").unwrap())
+}
+
+fn bracket_emoji_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"\[([\u4e00-\u9fa5]{1,4})\]").unwrap())
+}
 
 /// 将 [笑] 形式的简单表情替换为 emoji。
 pub fn convert_bracket_emojis(text: &str) -> String {
@@ -8,12 +40,12 @@ pub fn convert_bracket_emojis(text: &str) -> String {
         return text.to_string();
     }
     let map = emoji_map();
-    let re = Regex::new(r"\[([\u4e00-\u9fa5]{1,4})\]").unwrap();
-    re.replace_all(text, |caps: &regex::Captures| {
-        let key = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-        map.get(key).cloned().unwrap_or_else(|| caps[0].to_string())
-    })
-    .to_string()
+    bracket_emoji_regex()
+        .replace_all(text, |caps: &regex::Captures| {
+            let key = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            map.get(key).cloned().unwrap_or_else(|| caps[0].to_string())
+        })
+        .to_string()
 }
 
 pub fn to_cjk_numeral(n: i32) -> String {
@@ -45,30 +77,27 @@ pub fn to_cjk_numeral(n: i32) -> String {
 
 /// 检查段落是否应该在段评计数时跳过（如图片包装段落、卷标题等）。
 fn should_skip_para_for_comments(open_tag: &str) -> bool {
-    // Match class="..." or class='...' with exact class names or class lists
-    // This regex matches class attributes and captures the class list
-    let re_class = Regex::new(r#"(?i)\bclass\s*=\s*["']([^"']*)["']"#).unwrap();
+    // Set of class names that should be skipped (for O(1) lookup)
+    static SKIP_CLASSES: &[&str] = &[
+        "picture",
+        "volumetitle",
+        "volume-title",
+        "sectiontitle",
+        "section-title",
+        "catalogtitle",
+        "catalog-title",
+        "chaptertitle",
+        "chapter-title",
+    ];
     
-    if let Some(caps) = re_class.captures(open_tag) {
+    // Match class="..." or class='...' with exact class names or class lists
+    if let Some(caps) = class_attr_regex().captures(open_tag) {
         if let Some(class_list) = caps.get(1) {
             let classes = class_list.as_str();
             // Split by whitespace to get individual class names
-            let class_vec: Vec<&str> = classes.split_whitespace().collect();
-            
-            // Skip paragraphs that are wrappers for images (not counted as content paragraphs by the API)
-            if class_vec.contains(&"picture") {
-                return true;
-            }
-            
-            // Skip paragraphs with volume/section/catalog titles (added by new volume feature)
-            // Check for various possible naming conventions (camelCase, kebab-case, PascalCase)
-            for class in &class_vec {
+            for class in classes.split_whitespace() {
                 let lower = class.to_ascii_lowercase();
-                if lower == "volumetitle" || lower == "volume-title"
-                    || lower == "sectiontitle" || lower == "section-title"
-                    || lower == "catalogtitle" || lower == "catalog-title"
-                    || lower == "chaptertitle" || lower == "chapter-title"
-                {
+                if SKIP_CLASSES.contains(&lower.as_str()) {
                     return true;
                 }
             }
@@ -80,9 +109,8 @@ fn should_skip_para_for_comments(open_tag: &str) -> bool {
 
 /// 提取指定段落的纯文本摘要（用于段评回链）。
 pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
-    let re = Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap();
     let mut content_idx = 0;
-    for cap in re.captures_iter(chapter_html) {
+    for cap in para_tag_regex().captures_iter(chapter_html) {
         let open_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         // Skip non-content paragraphs to match API's paragraph counting
         if should_skip_para_for_comments(open_tag) {
@@ -116,17 +144,15 @@ pub fn inject_segment_links(
     // - SKIP non-content paragraphs (picture wrappers, volume titles, etc.) to match API counting
     // - if cnt>0 and <p> has no id=, add id="p-{idx}" while preserving other attrs
     // - append a badge link to the segment comment page
-    let re = Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap();
-    let re_has_id = Regex::new(r"(?is)\bid\s*=").unwrap();
 
     let mut out = String::new();
     let mut last_end = 0usize;
     let mut content_idx = 0usize; // Index for content paragraphs only
 
-    for m in re.find_iter(content_html) {
+    for m in para_tag_regex_case_insensitive().find_iter(content_html) {
         out.push_str(&content_html[last_end..m.start()]);
 
-        let caps = re.captures(m.as_str()).unwrap();
+        let caps = para_tag_regex_case_insensitive().captures(m.as_str()).unwrap();
         let mut open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
         let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -146,7 +172,7 @@ pub fn inject_segment_links(
             .unwrap_or(0);
 
         if cnt > 0 {
-            if !re_has_id.is_match(&open_tag) && open_tag.ends_with('>') {
+            if !id_attr_regex().is_match(&open_tag) && open_tag.ends_with('>') {
                 open_tag.pop();
                 open_tag.push_str(&format!(" id=\"p-{}\">", content_idx));
             }
@@ -181,8 +207,7 @@ fn html_escape_attr(input: &str) -> String {
 }
 
 fn strip_tags(raw: &str) -> String {
-    let re = Regex::new(r"<[^>]+>").unwrap();
-    re.replace_all(raw, "").to_string()
+    html_tags_regex().replace_all(raw, "").to_string()
 }
 
 fn emoji_map() -> std::collections::HashMap<&'static str, String> {
