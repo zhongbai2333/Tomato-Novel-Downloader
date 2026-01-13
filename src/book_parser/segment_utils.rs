@@ -24,6 +24,12 @@ fn para_tag_regex_case_insensitive() -> &'static Regex {
     REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap())
 }
 
+// Regex to match both paragraphs and headings (for skipping headings like clean_epub_body does)
+fn para_and_heading_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)|(<h[1-6]\b[^>]*?>.*?</h[1-6]>)").unwrap())
+}
+
 fn id_attr_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| Regex::new(r"(?is)\bid\s*=").unwrap())
@@ -147,6 +153,7 @@ pub fn inject_segment_links(
     // Mirror Python logic in `segment_utils.py`:
     // - iterate <p> in-order with a monotonically increasing idx
     // - SKIP non-content paragraphs (picture wrappers, volume titles, etc.) to match API counting
+    // - SKIP headings (EpubGenerator already injects <h1> for chapter title)
     // - if cnt>0 and <p> has no id=, add id="p-{idx}" while preserving other attrs
     // - append a badge link to the segment comment page
 
@@ -154,12 +161,21 @@ pub fn inject_segment_links(
     let mut last_end = 0usize;
     let mut content_idx = 0usize; // Index for content paragraphs only
 
-    for m in para_tag_regex_case_insensitive().find_iter(content_html) {
+    for m in para_and_heading_regex().find_iter(content_html) {
         out.push_str(&content_html[last_end..m.start()]);
 
-        let caps = para_tag_regex_case_insensitive()
+        let caps = para_and_heading_regex()
             .captures(m.as_str())
             .unwrap();
+        
+        // Check if this is a heading (group 4)
+        if caps.get(4).is_some() {
+            // Skip headings entirely (like clean_epub_body does) since wrap_chapter_html adds <h1>
+            last_end = m.end();
+            continue;
+        }
+
+        // This is a paragraph (groups 1-3)
         let mut open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
         let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
