@@ -121,7 +121,12 @@ fn should_skip_para_for_comments(open_tag: &str) -> bool {
 /// 提取指定段落的纯文本摘要（用于段评回链）。
 pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
     let mut content_idx = 0;
-    for cap in para_tag_regex().captures_iter(chapter_html) {
+    for cap in para_and_heading_regex().captures_iter(chapter_html) {
+        // Skip headings (group 4) - they're not content paragraphs
+        if cap.get(4).is_some() {
+            continue;
+        }
+        
         let open_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         // Skip non-content paragraphs to match API's paragraph counting
         if should_skip_para_for_comments(open_tag) {
