@@ -12,22 +12,12 @@ fn class_attr_regex() -> &'static Regex {
     REGEX.get_or_init(|| Regex::new(r#"(?i)\bclass\s*=\s*["']([^"']*)["']"#).unwrap())
 }
 
-// Case-sensitive regex for faster paragraph extraction
-fn para_tag_regex() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap())
-}
-
-// Case-insensitive regex for robust paragraph injection (handles <P>, <p>, etc.)
-fn para_tag_regex_case_insensitive() -> &'static Regex {
-    static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap())
-}
-
 // Regex to match both paragraphs and headings (for skipping headings like clean_epub_body does)
 fn para_and_heading_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
-    REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)|(<h[1-6]\b[^>]*?>.*?</h[1-6]>)").unwrap())
+    REGEX.get_or_init(|| {
+        Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)|(<h[1-6]\b[^>]*?>.*?</h[1-6]>)").unwrap()
+    })
 }
 
 fn id_attr_regex() -> &'static Regex {
@@ -104,16 +94,17 @@ fn should_skip_para_for_comments(open_tag: &str) -> bool {
 
     // Match class="..." or class='...' with exact class names or class lists
     if let Some(caps) = class_attr_regex().captures(open_tag)
-        && let Some(class_list) = caps.get(1) {
-            let classes = class_list.as_str();
-            // Split by whitespace to get individual class names
-            for class in classes.split_whitespace() {
-                let lower = class.to_ascii_lowercase();
-                if SKIP_CLASSES.contains(&lower.as_str()) {
-                    return true;
-                }
+        && let Some(class_list) = caps.get(1)
+    {
+        let classes = class_list.as_str();
+        // Split by whitespace to get individual class names
+        for class in classes.split_whitespace() {
+            let lower = class.to_ascii_lowercase();
+            if SKIP_CLASSES.contains(&lower.as_str()) {
+                return true;
             }
         }
+    }
 
     false
 }
@@ -126,7 +117,7 @@ pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
         if cap.get(4).is_some() {
             continue;
         }
-        
+
         let open_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         // Skip non-content paragraphs to match API's paragraph counting
         if should_skip_para_for_comments(open_tag) {
@@ -169,10 +160,8 @@ pub fn inject_segment_links(
     for m in para_and_heading_regex().find_iter(content_html) {
         out.push_str(&content_html[last_end..m.start()]);
 
-        let caps = para_and_heading_regex()
-            .captures(m.as_str())
-            .unwrap();
-        
+        let caps = para_and_heading_regex().captures(m.as_str()).unwrap();
+
         // Check if this is a heading (group 4)
         if caps.get(4).is_some() {
             // Skip headings entirely (like clean_epub_body does) since wrap_chapter_html adds <h1>
