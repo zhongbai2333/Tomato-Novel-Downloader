@@ -45,21 +45,36 @@ pub fn to_cjk_numeral(n: i32) -> String {
 
 /// 检查段落是否应该在段评计数时跳过（如图片包装段落、卷标题等）。
 fn should_skip_para_for_comments(open_tag: &str) -> bool {
-    let lower = open_tag.to_ascii_lowercase();
-    // Skip paragraphs that are wrappers for images (not counted as content paragraphs by the API)
-    if lower.contains("class=\"picture\"") || lower.contains("class='picture'") {
-        return true;
+    // Match class="..." or class='...' with exact class names or class lists
+    // This regex matches class attributes and captures the class list
+    let re_class = Regex::new(r#"(?i)\bclass\s*=\s*["']([^"']*)["']"#).unwrap();
+    
+    if let Some(caps) = re_class.captures(open_tag) {
+        if let Some(class_list) = caps.get(1) {
+            let classes = class_list.as_str();
+            // Split by whitespace to get individual class names
+            let class_vec: Vec<&str> = classes.split_whitespace().collect();
+            
+            // Skip paragraphs that are wrappers for images (not counted as content paragraphs by the API)
+            if class_vec.contains(&"picture") {
+                return true;
+            }
+            
+            // Skip paragraphs with volume/section/catalog titles (added by new volume feature)
+            // Check for various possible naming conventions (camelCase, kebab-case, PascalCase)
+            for class in &class_vec {
+                let lower = class.to_ascii_lowercase();
+                if lower == "volumetitle" || lower == "volume-title"
+                    || lower == "sectiontitle" || lower == "section-title"
+                    || lower == "catalogtitle" || lower == "catalog-title"
+                    || lower == "chaptertitle" || lower == "chapter-title"
+                {
+                    return true;
+                }
+            }
+        }
     }
-    // Skip paragraphs with volume/section/catalog titles (added by new volume feature)
-    if lower.contains("class=\"volumetitle\"") || lower.contains("class='volumetitle'")
-        || lower.contains("class=\"sectiontitle\"") || lower.contains("class='sectiontitle'")
-        || lower.contains("class=\"catalogtitle\"") || lower.contains("class='catalogtitle'")
-        || lower.contains("class=\"volume-title\"") || lower.contains("class='volume-title'")
-        || lower.contains("class=\"section-title\"") || lower.contains("class='section-title'")
-        || lower.contains("class=\"catalog-title\"") || lower.contains("class='catalog-title'")
-    {
-        return true;
-    }
+    
     false
 }
 
