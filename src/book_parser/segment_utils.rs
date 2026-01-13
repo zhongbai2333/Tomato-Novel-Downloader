@@ -43,11 +43,37 @@ pub fn to_cjk_numeral(n: i32) -> String {
     }
 }
 
+/// 检查段落是否应该在段评计数时跳过（如图片包装段落、卷标题等）。
+fn should_skip_para_for_comments(open_tag: &str) -> bool {
+    let lower = open_tag.to_ascii_lowercase();
+    // Skip paragraphs that are wrappers for images (not counted as content paragraphs by the API)
+    if lower.contains("class=\"picture\"") || lower.contains("class='picture'") {
+        return true;
+    }
+    // Skip paragraphs with volume/section/catalog titles (added by new volume feature)
+    if lower.contains("class=\"volumetitle\"") || lower.contains("class='volumetitle'")
+        || lower.contains("class=\"sectiontitle\"") || lower.contains("class='sectiontitle'")
+        || lower.contains("class=\"catalogtitle\"") || lower.contains("class='catalogtitle'")
+        || lower.contains("class=\"volume-title\"") || lower.contains("class='volume-title'")
+        || lower.contains("class=\"section-title\"") || lower.contains("class='section-title'")
+        || lower.contains("class=\"catalog-title\"") || lower.contains("class='catalog-title'")
+    {
+        return true;
+    }
+    false
+}
+
 /// 提取指定段落的纯文本摘要（用于段评回链）。
 pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
     let re = Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap();
-    for (idx, cap) in re.captures_iter(chapter_html).enumerate() {
-        if idx == target_idx {
+    let mut content_idx = 0;
+    for cap in re.captures_iter(chapter_html) {
+        let open_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        // Skip non-content paragraphs to match API's paragraph counting
+        if should_skip_para_for_comments(open_tag) {
+            continue;
+        }
+        if content_idx == target_idx {
             let inner = cap.get(2).map(|m| m.as_str()).unwrap_or("");
             let inner_text = strip_tags(inner).trim().to_string();
             if inner_text.is_empty() {
@@ -60,6 +86,7 @@ pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
                 .unwrap_or_else(|| inner_text.len().min(20));
             return inner_text[..cut].trim().to_string();
         }
+        content_idx += 1;
     }
     String::new()
 }
@@ -71,6 +98,7 @@ pub fn inject_segment_links(
 ) -> String {
     // Mirror Python logic in `segment_utils.py`:
     // - iterate <p> in-order with a monotonically increasing idx
+    // - SKIP non-content paragraphs (picture wrappers, volume titles, etc.) to match API counting
     // - if cnt>0 and <p> has no id=, add id="p-{idx}" while preserving other attrs
     // - append a badge link to the segment comment page
     let re = Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap();
@@ -78,8 +106,9 @@ pub fn inject_segment_links(
 
     let mut out = String::new();
     let mut last_end = 0usize;
+    let mut content_idx = 0usize; // Index for content paragraphs only
 
-    for (idx, m) in re.find_iter(content_html).enumerate() {
+    for m in re.find_iter(content_html) {
         out.push_str(&content_html[last_end..m.start()]);
 
         let caps = re.captures(m.as_str()).unwrap();
@@ -87,20 +116,29 @@ pub fn inject_segment_links(
         let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
 
+        // Skip non-content paragraphs to match API's paragraph counting
+        if should_skip_para_for_comments(&open_tag) {
+            out.push_str(&open_tag);
+            out.push_str(&inner);
+            out.push_str(close_tag);
+            last_end = m.end();
+            continue;
+        }
+
         let cnt = seg_counts
-            .get(&idx.to_string())
+            .get(&content_idx.to_string())
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
 
         if cnt > 0 {
             if !re_has_id.is_match(&open_tag) && open_tag.ends_with('>') {
                 open_tag.pop();
-                open_tag.push_str(&format!(" id=\"p-{idx}\">"));
+                open_tag.push_str(&format!(" id=\"p-{}\">", content_idx));
             }
             inner.push_str(&format!(
                 " <a class=\"seg-count\" href=\"{}#para-{}\" title=\"查看本段评论\">({})</a>",
                 html_escape_attr(comments_file),
-                idx,
+                content_idx,
                 cnt
             ));
         }
@@ -110,6 +148,7 @@ pub fn inject_segment_links(
         out.push_str(close_tag);
 
         last_end = m.end();
+        content_idx += 1; // Only increment for content paragraphs
     }
 
     out.push_str(&content_html[last_end..]);
