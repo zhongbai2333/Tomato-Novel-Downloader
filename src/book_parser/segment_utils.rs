@@ -95,10 +95,10 @@ fn should_skip_para_for_comments(open_tag: &str) -> bool {
         "chaptertitle",
         "chapter-title",
     ];
-    
+
     // Match class="..." or class='...' with exact class names or class lists
-    if let Some(caps) = class_attr_regex().captures(open_tag) {
-        if let Some(class_list) = caps.get(1) {
+    if let Some(caps) = class_attr_regex().captures(open_tag)
+        && let Some(class_list) = caps.get(1) {
             let classes = class_list.as_str();
             // Split by whitespace to get individual class names
             for class in classes.split_whitespace() {
@@ -108,8 +108,7 @@ fn should_skip_para_for_comments(open_tag: &str) -> bool {
                 }
             }
         }
-    }
-    
+
     false
 }
 
@@ -158,7 +157,9 @@ pub fn inject_segment_links(
     for m in para_tag_regex_case_insensitive().find_iter(content_html) {
         out.push_str(&content_html[last_end..m.start()]);
 
-        let caps = para_tag_regex_case_insensitive().captures(m.as_str()).unwrap();
+        let caps = para_tag_regex_case_insensitive()
+            .captures(m.as_str())
+            .unwrap();
         let mut open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
         let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");

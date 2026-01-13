@@ -1542,19 +1542,21 @@ fn finalize_epub(
     for (idx, b) in builds.iter().enumerate() {
         if let Some(vol) = volume_title_by_chapter_id.get(&b.chapter_id) {
             let vol_trim = vol.trim();
-            if !vol_trim.is_empty() && inserted_volumes.insert(vol_trim.to_string())
-                && let Some(file) = volume_file_by_title.get(vol_trim) {
-                    info!(
-                        target: "volume",
-                        title = %vol_trim,
-                        file = %file,
-                        before_chapter_id = %b.chapter_id,
-                        before_chapter_index = idx,
-                        "inserting volume title page"
-                    );
-                    let body = format!("<p class=\"no-indent\">{}</p>", escape_html(vol_trim));
-                    let _ = epub_gen.add_aux_page_named(file.clone(), vol_trim, &body, true);
-                }
+            if !vol_trim.is_empty()
+                && inserted_volumes.insert(vol_trim.to_string())
+                && let Some(file) = volume_file_by_title.get(vol_trim)
+            {
+                info!(
+                    target: "volume",
+                    title = %vol_trim,
+                    file = %file,
+                    before_chapter_id = %b.chapter_id,
+                    before_chapter_index = idx,
+                    "inserting volume title page"
+                );
+                let body = format!("<p class=\"no-indent\">{}</p>", escape_html(vol_trim));
+                let _ = epub_gen.add_aux_page_named(file.clone(), vol_trim, &body, true);
+            }
         }
 
         let comment_file = comment_page_for_chapter
@@ -1713,15 +1715,17 @@ fn extract_volume_to_chapter_ids(
 
                 // Case 0: 章节对象自带卷名（官方目录里常见 item_data_list: { item_id, title, volume_name, ... }）
                 if let Some(vol) = pick_volume_title(obj)
-                    && let Some(id) = looks_like_chapter_obj(obj) {
-                        push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
-                    }
+                    && let Some(id) = looks_like_chapter_obj(obj)
+                {
+                    push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
+                }
 
                 // Case 1: 该节点本身就是章节对象（叶子）
                 if let Some(vol) = current_volume
-                    && let Some(id) = looks_like_chapter_obj(obj) {
-                        push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
-                    }
+                    && let Some(id) = looks_like_chapter_obj(obj)
+                {
+                    push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
+                }
 
                 // Case 2: 该节点像“卷/分组”节点：有标题 + 含子列表。
                 // 这里不强依赖特定字段名，只要 title 存在就作为潜在卷标题向下传递。
@@ -2261,13 +2265,14 @@ fn normalize_html_to_xhtml_fragment(html: &str) -> String {
     let lower = s.to_ascii_lowercase();
     if lower.contains("<article")
         && let (Some(a_start), Some(a_end)) = (lower.find("<article"), lower.rfind("</article>"))
-            && let Some(gt) = lower[a_start..].find('>') {
-                let body_start = a_start + gt + 1;
-                let body_end = a_end;
-                if body_start <= body_end && body_end <= s.len() {
-                    s = s[body_start..body_end].to_string();
-                }
-            }
+        && let Some(gt) = lower[a_start..].find('>')
+    {
+        let body_start = a_start + gt + 1;
+        let body_end = a_end;
+        if body_start <= body_end && body_end <= s.len() {
+            s = s[body_start..body_end].to_string();
+        }
+    }
 
     s.trim().to_string()
 }
