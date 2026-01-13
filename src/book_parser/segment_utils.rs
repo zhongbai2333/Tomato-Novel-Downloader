@@ -6,14 +6,19 @@ use std::sync::OnceLock;
 // Compiled regexes for performance (compiled once, reused across calls)
 fn class_attr_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
+    // Note: This pattern handles typical HTML class attributes but doesn't handle edge cases
+    // like escaped quotes within the class value. In practice, Tomato Novel API HTML doesn't
+    // use such complex patterns.
     REGEX.get_or_init(|| Regex::new(r#"(?i)\bclass\s*=\s*["']([^"']*)["']"#).unwrap())
 }
 
+// Case-sensitive regex for faster paragraph extraction
 fn para_tag_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| Regex::new(r"(<p[^>]*>)(.*?)(</p>)").unwrap())
 }
 
+// Case-insensitive regex for robust paragraph injection (handles <P>, <p>, etc.)
 fn para_tag_regex_case_insensitive() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| Regex::new(r"(?is)(<p\b[^>]*>)(.*?)(</p>)").unwrap())
@@ -77,7 +82,8 @@ pub fn to_cjk_numeral(n: i32) -> String {
 
 /// 检查段落是否应该在段评计数时跳过（如图片包装段落、卷标题等）。
 fn should_skip_para_for_comments(open_tag: &str) -> bool {
-    // Set of class names that should be skipped (for O(1) lookup)
+    // List of class names that should be skipped when counting content paragraphs.
+    // Uses linear search which is efficient for small lists (9 items).
     static SKIP_CLASSES: &[&str] = &[
         "picture",
         "volumetitle",
