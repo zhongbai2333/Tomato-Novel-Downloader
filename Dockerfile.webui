@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM rust:nightly-bookworm AS builder
+FROM rust:nightly AS builder
 
 WORKDIR /workspace
 
