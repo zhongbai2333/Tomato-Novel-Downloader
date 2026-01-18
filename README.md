@@ -97,6 +97,28 @@ Web UI 提供的功能（纯 HTML，无需额外前端构建）：
 
 ---
 
+## Docker 镜像
+
+已提供 Web UI 版本的 Docker 镜像：
+
+- 镜像地址：https://hub.docker.com/r/zhongbai233/tomato-novel-downloader-webui
+
+示例（映射端口与持久化数据目录）：
+
+```sh
+docker run -d \
+    --name tomato-novel-webui \
+    -p 18423:18423 \
+    -v /host/data:/data \
+    -e TOMATO_WEB_ADDR=0.0.0.0:18423 \
+    -e TOMATO_WEB_PASSWORD=你的密码 \
+    zhongbai233/tomato-novel-downloader-webui:latest --server --data-dir /data
+```
+
+可通过 `TOMATO_WEB_ADDR`、`TOMATO_WEB_PASSWORD` 与 `--data-dir` 控制监听地址、密码与数据目录（见上文 Web UI 说明）。
+
+---
+
 ## 构建模式（Cargo Features）
 
 本项目提供两个互斥的 feature：`official-api` 与 `no-official-api`（两者不能同时启用）。
