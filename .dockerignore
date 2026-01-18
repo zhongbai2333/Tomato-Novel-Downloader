@@ -1,0 +1,9 @@
+target/
+Tomato-Novel-Official-API/target/
+.git/
+.github/
+logs/
+novels/
+img/
+*.log
+*.tmp

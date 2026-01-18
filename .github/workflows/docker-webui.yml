@@ -1,0 +1,59 @@
+name: Build & Push WebUI Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "额外 tag（可选，例如: hotfix-1）"
+        required: false
+        default: ""
+
+jobs:
+  docker-webui:
+    name: Build & Push WebUI Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout A Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Tomato-Novel-Official-API (private)
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: zhongbai233/tomato-novel-downloader-webui
+          tags: |
+            type=sha
+            type=raw,value=manual
+            type=raw,value=${{ inputs.image_tag }},enable=${{ inputs.image_tag != '' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.webui
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

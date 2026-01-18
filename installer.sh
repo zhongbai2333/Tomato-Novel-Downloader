@@ -39,8 +39,10 @@ log_error() { printf "\033[1;31m[ERR ]\033[0m %s\n" "$*" >&2; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 IS_TERMUX=false
-if [ -n "${PREFIX:-}" ] && [[ "${PREFIX}" == *"com.termux"* ]]; then
-    IS_TERMUX=true
+if [ -n "${PREFIX:-}" ]; then
+    if [[ "${PREFIX}" == *"com.termux"* ]] || [[ "${PREFIX}" == *"bin.mt.plus"* ]] || [[ "${PREFIX}" == *"com.duoduo.mt"* ]]; then
+        IS_TERMUX=true
+    fi
 fi
 
 IS_MUSL=false
@@ -231,11 +233,12 @@ if $IS_TERMUX; then
     if [[ "${BINARY_NAME}" == TomatoNovelDownloader-Android_* ]]; then
         cat > "$RUN_SH_PATH" <<EOF
 #!/usr/bin/env bash
-# Termux 环境：运行 Android 原生 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
+# Termux / MT 管理器环境：运行 Android 原生 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
 # 你可以用环境变量控制监听地址与密码锁：
 #   TOMATO_WEB_ADDR=0.0.0.0:18423
 #   TOMATO_WEB_PASSWORD=你的密码
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+termux-open-url "http://127.0.0.1:18423/" >/dev/null 2>&1 || true
 exec "\${SCRIPT_DIR}/${BINARY_NAME}" --server "\$@"
 EOF
     else
@@ -246,11 +249,12 @@ EOF
         pkg install -y glibc-runner
         cat > "$RUN_SH_PATH" <<EOF
 #!/usr/bin/env bash
-# Termux 环境下使用 glibc-runner 运行 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
+# Termux / MT 管理器环境下使用 glibc-runner 运行 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
 # 你可以用环境变量控制监听地址与密码锁：
 #   TOMATO_WEB_ADDR=0.0.0.0:18423
 #   TOMATO_WEB_PASSWORD=你的密码
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+termux-open-url "http://127.0.0.1:18423/" >/dev/null 2>&1 || true
 exec glibc-runner "\${SCRIPT_DIR}/${BINARY_NAME}" --server "\$@"
 EOF
     fi
