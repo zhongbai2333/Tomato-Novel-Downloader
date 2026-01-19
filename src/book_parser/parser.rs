@@ -188,59 +188,62 @@ impl ContentParser {
             return s.to_string();
         }
 
-        s.replace("&nbsp;", " ")
+        // First, decode numeric entities (&#NNN; and &#xHH;) to handle ALL possible symbols
+        let re_decimal = Regex::new(r"&#(\d+);").unwrap();
+        let re_hex = Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap();
+        
+        let mut result = s.to_string();
+        
+        // Decode decimal numeric entities (&#NNN;)
+        result = re_decimal.replace_all(&result, |caps: &regex::Captures| {
+            if let Some(num_str) = caps.get(1) {
+                if let Ok(code_point) = num_str.as_str().parse::<u32>() {
+                    if let Some(ch) = char::from_u32(code_point) {
+                        return ch.to_string();
+                    }
+                }
+            }
+            caps[0].to_string() // Return original if parsing fails
+        }).to_string();
+        
+        // Decode hexadecimal numeric entities (&#xHH; or &#XHH;)
+        result = re_hex.replace_all(&result, |caps: &regex::Captures| {
+            if let Some(hex_str) = caps.get(1) {
+                if let Ok(code_point) = u32::from_str_radix(hex_str.as_str(), 16) {
+                    if let Some(ch) = char::from_u32(code_point) {
+                        return ch.to_string();
+                    }
+                }
+            }
+            caps[0].to_string() // Return original if parsing fails
+        }).to_string();
+
+        // Then decode named entities
+        result
+            .replace("&nbsp;", " ")
             // Straight quotes and apostrophes
             .replace("&quot;", "\"")
-            .replace("&#34;", "\"")
-            .replace("&#x22;", "\"")
             .replace("&apos;", "'")
-            .replace("&#39;", "'")
-            .replace("&#x27;", "'")
             // Curly quotes (common in Chinese novels)
             .replace("&ldquo;", "\u{201C}")
-            .replace("&#8220;", "\u{201C}")
-            .replace("&#x201C;", "\u{201C}")
             .replace("&rdquo;", "\u{201D}")
-            .replace("&#8221;", "\u{201D}")
-            .replace("&#x201D;", "\u{201D}")
             .replace("&lsquo;", "\u{2018}")
-            .replace("&#8216;", "\u{2018}")
-            .replace("&#x2018;", "\u{2018}")
             .replace("&rsquo;", "\u{2019}")
-            .replace("&#8217;", "\u{2019}")
-            .replace("&#x2019;", "\u{2019}")
             .replace("&sbquo;", "\u{201A}")
-            .replace("&#8218;", "\u{201A}")
             .replace("&bdquo;", "\u{201E}")
-            .replace("&#8222;", "\u{201E}")
             // Dashes (common in Chinese novels)
             .replace("&ndash;", "\u{2013}")
-            .replace("&#8211;", "\u{2013}")
-            .replace("&#x2013;", "\u{2013}")
             .replace("&mdash;", "\u{2014}")
-            .replace("&#8212;", "\u{2014}")
-            .replace("&#x2014;", "\u{2014}")
             // Ellipsis
             .replace("&hellip;", "\u{2026}")
-            .replace("&#8230;", "\u{2026}")
-            .replace("&#x2026;", "\u{2026}")
             // Other punctuation
             .replace("&bull;", "\u{2022}")
-            .replace("&#8226;", "\u{2022}")
             .replace("&shy;", "\u{00AD}")
             // Angle brackets
             .replace("&lt;", "<")
-            .replace("&#60;", "<")
-            .replace("&#x3C;", "<")
-            .replace("&#x3c;", "<")
             .replace("&gt;", ">")
-            .replace("&#62;", ">")
-            .replace("&#x3E;", ">")
-            .replace("&#x3e;", ">")
             .replace("&lsaquo;", "\u{2039}")
-            .replace("&#8249;", "\u{2039}")
             .replace("&rsaquo;", "\u{203A}")
-            .replace("&#8250;", "\u{203A}")
             // Must be last to avoid double-decoding
             .replace("&amp;", "&")
     }
