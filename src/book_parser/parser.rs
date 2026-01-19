@@ -70,14 +70,12 @@ impl ContentParser {
         let normalized = re_breaks.replace_all(raw, "\n");
         let normalized = re_open_p.replace_all(&normalized, "\n");
         let normalized = normalized
-            .replace("&nbsp;", " ")
             .replace("\r\n", "\n")
             .replace('\r', "\n");
 
         let without_tags = Self::strip_tags(&normalized);
         let without_tags = Self::unescape_html_entities(&without_tags);
         let without_tags = without_tags
-            .replace("&nbsp;", " ")
             .replace("\r\n", "\n")
             .replace('\r', "\n");
 
@@ -189,6 +187,7 @@ impl ContentParser {
 
     fn unescape_html_entities(s: &str) -> String {
         // Decode common HTML entities that may appear in the API response
+        // Note: &amp; must be replaced last to avoid double-decoding issues
         if !(s.contains("&amp;")
             || s.contains("&lt;")
             || s.contains("&gt;")
@@ -210,6 +209,6 @@ impl ContentParser {
             .replace("&#x27;", "'")
             .replace("&lt;", "<")
             .replace("&gt;", ">")
-            .replace("&amp;", "&")
+            .replace("&amp;", "&") // Must be last to avoid double-decoding
     }
 }
