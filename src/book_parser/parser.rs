@@ -188,9 +188,12 @@ impl ContentParser {
             return s.to_string();
         }
 
-        // First, decode numeric entities (&#NNN; and &#xHH;) to handle ALL possible symbols
-        let re_decimal = Regex::new(r"&#(\d+);").unwrap();
-        let re_hex = Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap();
+        use std::sync::OnceLock;
+        static RE_DECIMAL: OnceLock<Regex> = OnceLock::new();
+        static RE_HEX: OnceLock<Regex> = OnceLock::new();
+        
+        let re_decimal = RE_DECIMAL.get_or_init(|| Regex::new(r"&#(\d+);").unwrap());
+        let re_hex = RE_HEX.get_or_init(|| Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap());
         
         let mut result = s.to_string();
         
@@ -198,8 +201,11 @@ impl ContentParser {
         result = re_decimal.replace_all(&result, |caps: &regex::Captures| {
             if let Some(num_str) = caps.get(1) {
                 if let Ok(code_point) = num_str.as_str().parse::<u32>() {
-                    if let Some(ch) = char::from_u32(code_point) {
-                        return ch.to_string();
+                    // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                    if code_point <= 0x10FFFF {
+                        if let Some(ch) = char::from_u32(code_point) {
+                            return ch.to_string();
+                        }
                     }
                 }
             }
@@ -210,8 +216,11 @@ impl ContentParser {
         result = re_hex.replace_all(&result, |caps: &regex::Captures| {
             if let Some(hex_str) = caps.get(1) {
                 if let Ok(code_point) = u32::from_str_radix(hex_str.as_str(), 16) {
-                    if let Some(ch) = char::from_u32(code_point) {
-                        return ch.to_string();
+                    // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                    if code_point <= 0x10FFFF {
+                        if let Some(ch) = char::from_u32(code_point) {
+                            return ch.to_string();
+                        }
                     }
                 }
             }
