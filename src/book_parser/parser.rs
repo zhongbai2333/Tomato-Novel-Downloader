@@ -69,16 +69,11 @@ impl ContentParser {
 
         let normalized = re_breaks.replace_all(raw, "\n");
         let normalized = re_open_p.replace_all(&normalized, "\n");
-        let normalized = normalized
-            .replace("&nbsp;", " ")
-            .replace("\r\n", "\n")
-            .replace('\r', "\n");
+        let normalized = normalized.replace("\r\n", "\n").replace('\r', "\n");
 
         let without_tags = Self::strip_tags(&normalized);
-        let without_tags = without_tags
-            .replace("&nbsp;", " ")
-            .replace("\r\n", "\n")
-            .replace('\r', "\n");
+        let without_tags = Self::unescape_html_entities(&without_tags);
+        let without_tags = without_tags.replace("\r\n", "\n").replace('\r', "\n");
 
         // Keep paragraph breaks: output blank lines between paragraphs.
         let mut out = Vec::new();
@@ -184,5 +179,81 @@ impl ContentParser {
             .replace('>', "&gt;")
             .replace('"', "&quot;")
             .replace('\'', "&#39;")
+    }
+
+    fn unescape_html_entities(s: &str) -> String {
+        // Decode common HTML entities that may appear in the API response
+        // Note: &amp; must be replaced last to avoid double-decoding issues
+        if !(s.contains('&')) {
+            return s.to_string();
+        }
+
+        use std::sync::OnceLock;
+        static RE_DECIMAL: OnceLock<Regex> = OnceLock::new();
+        static RE_HEX: OnceLock<Regex> = OnceLock::new();
+
+        let re_decimal = RE_DECIMAL.get_or_init(|| Regex::new(r"&#(\d+);").unwrap());
+        let re_hex = RE_HEX.get_or_init(|| Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap());
+
+        let mut result = s.to_string();
+
+        // Decode decimal numeric entities (&#NNN;)
+        result = re_decimal
+            .replace_all(&result, |caps: &regex::Captures| {
+                if let Some(num_str) = caps.get(1)
+                    && let Ok(code_point) = num_str.as_str().parse::<u32>() {
+                        // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                        if code_point <= 0x10FFFF
+                            && let Some(ch) = char::from_u32(code_point) {
+                                return ch.to_string();
+                            }
+                    }
+                caps[0].to_string() // Return original if parsing fails
+            })
+            .to_string();
+
+        // Decode hexadecimal numeric entities (&#xHH; or &#XHH;)
+        result = re_hex
+            .replace_all(&result, |caps: &regex::Captures| {
+                if let Some(hex_str) = caps.get(1)
+                    && let Ok(code_point) = u32::from_str_radix(hex_str.as_str(), 16) {
+                        // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                        if code_point <= 0x10FFFF
+                            && let Some(ch) = char::from_u32(code_point) {
+                                return ch.to_string();
+                            }
+                    }
+                caps[0].to_string() // Return original if parsing fails
+            })
+            .to_string();
+
+        // Then decode named entities
+        result
+            .replace("&nbsp;", " ")
+            // Straight quotes and apostrophes
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            // Curly quotes (common in Chinese novels)
+            .replace("&ldquo;", "\u{201C}")
+            .replace("&rdquo;", "\u{201D}")
+            .replace("&lsquo;", "\u{2018}")
+            .replace("&rsquo;", "\u{2019}")
+            .replace("&sbquo;", "\u{201A}")
+            .replace("&bdquo;", "\u{201E}")
+            // Dashes (common in Chinese novels)
+            .replace("&ndash;", "\u{2013}")
+            .replace("&mdash;", "\u{2014}")
+            // Ellipsis
+            .replace("&hellip;", "\u{2026}")
+            // Other punctuation
+            .replace("&bull;", "\u{2022}")
+            .replace("&shy;", "\u{00AD}")
+            // Angle brackets
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&lsaquo;", "\u{2039}")
+            .replace("&rsaquo;", "\u{203A}")
+            // Must be last to avoid double-decoding
+            .replace("&amp;", "&")
     }
 }
