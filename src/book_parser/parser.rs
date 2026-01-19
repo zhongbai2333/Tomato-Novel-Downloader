@@ -188,27 +188,58 @@ impl ContentParser {
     fn unescape_html_entities(s: &str) -> String {
         // Decode common HTML entities that may appear in the API response
         // Note: &amp; must be replaced last to avoid double-decoding issues
-        if !(s.contains("&amp;")
-            || s.contains("&lt;")
-            || s.contains("&gt;")
-            || s.contains("&quot;")
-            || s.contains("&#34;")
-            || s.contains("&#39;")
-            || s.contains("&#x27;")
-            || s.contains("&#x22;")
-            || s.contains("&nbsp;"))
-        {
+        if !(s.contains('&')) {
             return s.to_string();
         }
 
         s.replace("&nbsp;", " ")
+            // Straight quotes and apostrophes
             .replace("&quot;", "\"")
             .replace("&#34;", "\"")
             .replace("&#x22;", "\"")
+            .replace("&apos;", "'")
             .replace("&#39;", "'")
             .replace("&#x27;", "'")
+            // Curly quotes (common in Chinese novels)
+            .replace("&ldquo;", "\u{201C}")
+            .replace("&#8220;", "\u{201C}")
+            .replace("&#x201C;", "\u{201C}")
+            .replace("&rdquo;", "\u{201D}")
+            .replace("&#8221;", "\u{201D}")
+            .replace("&#x201D;", "\u{201D}")
+            .replace("&lsquo;", "\u{2018}")
+            .replace("&#8216;", "\u{2018}")
+            .replace("&#x2018;", "\u{2018}")
+            .replace("&rsquo;", "\u{2019}")
+            .replace("&#8217;", "\u{2019}")
+            .replace("&#x2019;", "\u{2019}")
+            .replace("&sbquo;", "\u{201A}")
+            .replace("&#8218;", "\u{201A}")
+            .replace("&bdquo;", "\u{201E}")
+            .replace("&#8222;", "\u{201E}")
+            // Dashes (common in Chinese novels)
+            .replace("&ndash;", "\u{2013}")
+            .replace("&#8211;", "\u{2013}")
+            .replace("&#x2013;", "\u{2013}")
+            .replace("&mdash;", "\u{2014}")
+            .replace("&#8212;", "\u{2014}")
+            .replace("&#x2014;", "\u{2014}")
+            // Ellipsis
+            .replace("&hellip;", "\u{2026}")
+            .replace("&#8230;", "\u{2026}")
+            .replace("&#x2026;", "\u{2026}")
+            // Other punctuation
+            .replace("&bull;", "\u{2022}")
+            .replace("&#8226;", "\u{2022}")
+            .replace("&shy;", "\u{00AD}")
+            // Angle brackets
             .replace("&lt;", "<")
             .replace("&gt;", ">")
-            .replace("&amp;", "&") // Must be last to avoid double-decoding
+            .replace("&lsaquo;", "\u{2039}")
+            .replace("&#8249;", "\u{2039}")
+            .replace("&rsaquo;", "\u{203A}")
+            .replace("&#8250;", "\u{203A}")
+            // Must be last to avoid double-decoding
+            .replace("&amp;", "&")
     }
 }
