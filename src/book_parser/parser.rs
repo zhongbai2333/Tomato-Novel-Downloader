@@ -230,7 +230,13 @@ impl ContentParser {
             .replace("&shy;", "\u{00AD}")
             // Angle brackets
             .replace("&lt;", "<")
+            .replace("&#60;", "<")
+            .replace("&#x3C;", "<")
+            .replace("&#x3c;", "<")
             .replace("&gt;", ">")
+            .replace("&#62;", ">")
+            .replace("&#x3E;", ">")
+            .replace("&#x3e;", ">")
             .replace("&lsaquo;", "\u{2039}")
             .replace("&#8249;", "\u{2039}")
             .replace("&rsaquo;", "\u{203A}")
