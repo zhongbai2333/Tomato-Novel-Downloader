@@ -102,8 +102,11 @@ Web UI 提供的功能（纯 HTML，无需额外前端构建）：
 已提供 Web UI 版本的 Docker 镜像：
 
 - 镜像地址：https://hub.docker.com/r/zhongbai233/tomato-novel-downloader-webui
+- Tags 说明：
+  - `latest`：默认 **glibc** 版本（常规服务器/桌面环境）
+  - `latest-musl`：**musl** 版本，适用于 **软路由 / NAS** 等轻量系统
 
-示例（映射端口与持久化数据目录）：
+示例（映射端口与持久化数据目录，使用 glibc 版本）：
 
 ```sh
 docker run -d \
@@ -113,6 +116,18 @@ docker run -d \
     -e TOMATO_WEB_ADDR=0.0.0.0:18423 \
     -e TOMATO_WEB_PASSWORD=你的密码 \
     zhongbai233/tomato-novel-downloader-webui:latest --server --data-dir /data
+```
+
+如果你使用软路由或 NAS 系统，请使用 musl 版本：
+
+```sh
+docker run -d \
+    --name tomato-novel-webui \
+    -p 18423:18423 \
+    -v /host/data:/data \
+    -e TOMATO_WEB_ADDR=0.0.0.0:18423 \
+    -e TOMATO_WEB_PASSWORD=你的密码 \
+    zhongbai233/tomato-novel-downloader-webui:latest-musl --server --data-dir /data
 ```
 
 可通过 `TOMATO_WEB_ADDR`、`TOMATO_WEB_PASSWORD` 与 `--data-dir` 控制监听地址、密码与数据目录（见上文 Web UI 说明）。
