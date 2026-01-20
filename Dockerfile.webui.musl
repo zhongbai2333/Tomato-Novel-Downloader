@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.6
+
+FROM rust:1.92.0-alpine AS builder
+
+WORKDIR /workspace
+
+RUN apk add --no-cache \
+    build-base \
+    musl-dev \
+    pkgconfig \
+    openssl-dev \
+    ca-certificates
+
+ARG TARGETARCH
+
+RUN case "$TARGETARCH" in \
+      amd64) echo x86_64-unknown-linux-musl > /tmp/target ;; \
+      arm64) echo aarch64-unknown-linux-musl > /tmp/target ;; \
+      *) echo "Unsupported TARGETARCH: $TARGETARCH"; exit 1 ;; \
+    esac
+
+RUN rustup target add $(cat /tmp/target)
+
+# Copy source (includes Tomato-Novel-Official-API as subdir in the build context)
+COPY . /workspace/Tomato-Novel-Downloader
+
+# Move the private dependency to expected sibling path
+RUN if [ -d "/workspace/Tomato-Novel-Downloader/Tomato-Novel-Official-API" ]; then \
+      mv /workspace/Tomato-Novel-Downloader/Tomato-Novel-Official-API /workspace/Tomato-Novel-Official-API; \
+    fi
+
+WORKDIR /workspace/Tomato-Novel-Downloader
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo build --release --target $(cat /tmp/target) --no-default-features --features official-api,tts-native,clipboard
+
+RUN mkdir -p /workspace/out \
+    && cp /workspace/Tomato-Novel-Downloader/target/$(cat /tmp/target)/release/tomato-novel-downloader /workspace/out/tomato-novel-downloader
+
+FROM alpine:3.20
+
+RUN apk add --no-cache bash ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /workspace/out/tomato-novel-downloader /app/tomato-novel-downloader
+COPY docker-entrypoint-webui.sh /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh
+
+ENV TOMATO_WEB_ADDR=0.0.0.0:18423
+ENV TOMATO_DATA_DIR=
+ENV TOMATO_WEB_PASSWORD=
+
+EXPOSE 18423
+
+ENTRYPOINT ["/app/entrypoint.sh"]

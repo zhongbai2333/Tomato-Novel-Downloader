@@ -580,21 +580,40 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Docker metadata
-        id: meta
+      - name: Docker metadata (glibc)
+        id: meta_glibc
         uses: docker/metadata-action@v5
         with:
           images: zhongbai233/tomato-novel-downloader-webui
           tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
+            type=ref,event=tag,suffix=-glibc
+            type=raw,value=latest
 
-      - name: Build and push
+      - name: Build and push (glibc)
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile.webui
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_glibc.outputs.tags }}
+          labels: ${{ steps.meta_glibc.outputs.labels }}
+
+      - name: Docker metadata (musl)
+        id: meta_musl
+        uses: docker/metadata-action@v5
+        with:
+          images: zhongbai233/tomato-novel-downloader-webui
+          tags: |
+            type=ref,event=tag,suffix=-musl
+            type=raw,value=latest-musl
+
+      - name: Build and push (musl)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.webui.musl
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta_musl.outputs.tags }}
+          labels: ${{ steps.meta_musl.outputs.labels }}
