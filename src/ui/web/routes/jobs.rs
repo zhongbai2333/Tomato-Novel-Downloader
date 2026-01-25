@@ -68,7 +68,7 @@ pub(crate) async fn create_job(
         // Build chapter range if specified
         let range = if let (Some(start), Some(end)) = (range_start, range_end) {
             let total = plan.chapters.len();
-            if start > 0 && end > 0 && start <= end && end <= total {
+            if start >= 1 && end >= 1 && start <= end && end <= total {
                 Some(dl::ChapterRange { start, end })
             } else {
                 None

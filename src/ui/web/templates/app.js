@@ -432,7 +432,15 @@ async function confirmPreview() {
       const end = parseInt(parts[1], 10);
       const total = currentPreviewData.chapter_count || 0;
       
-      if (isNaN(start) || isNaN(end) || start <= 0 || end <= 0 || start > end || end > total) {
+      if (total === 0) {
+        if (rangeHint) {
+          rangeHint.textContent = '章节数未知，无法使用范围下载';
+          rangeHint.style.color = 'red';
+        }
+        return;
+      }
+      
+      if (isNaN(start) || isNaN(end) || start < 1 || end < 1 || start > end || end > total) {
         if (rangeHint) {
           rangeHint.textContent = `范围无效，请输入正确的范围 (1-${total})`;
           rangeHint.style.color = 'red';
