@@ -201,13 +201,15 @@ impl ContentParser {
         result = re_decimal
             .replace_all(&result, |caps: &regex::Captures| {
                 if let Some(num_str) = caps.get(1)
-                    && let Ok(code_point) = num_str.as_str().parse::<u32>() {
-                        // Validate code point is in valid Unicode range (0 to 0x10FFFF)
-                        if code_point <= 0x10FFFF
-                            && let Some(ch) = char::from_u32(code_point) {
-                                return ch.to_string();
-                            }
+                    && let Ok(code_point) = num_str.as_str().parse::<u32>()
+                {
+                    // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                    if code_point <= 0x10FFFF
+                        && let Some(ch) = char::from_u32(code_point)
+                    {
+                        return ch.to_string();
                     }
+                }
                 caps[0].to_string() // Return original if parsing fails
             })
             .to_string();
@@ -216,13 +218,15 @@ impl ContentParser {
         result = re_hex
             .replace_all(&result, |caps: &regex::Captures| {
                 if let Some(hex_str) = caps.get(1)
-                    && let Ok(code_point) = u32::from_str_radix(hex_str.as_str(), 16) {
-                        // Validate code point is in valid Unicode range (0 to 0x10FFFF)
-                        if code_point <= 0x10FFFF
-                            && let Some(ch) = char::from_u32(code_point) {
-                                return ch.to_string();
-                            }
+                    && let Ok(code_point) = u32::from_str_radix(hex_str.as_str(), 16)
+                {
+                    // Validate code point is in valid Unicode range (0 to 0x10FFFF)
+                    if code_point <= 0x10FFFF
+                        && let Some(ch) = char::from_u32(code_point)
+                    {
+                        return ch.to_string();
                     }
+                }
                 caps[0].to_string() // Return original if parsing fails
             })
             .to_string();

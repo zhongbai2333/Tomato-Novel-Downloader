@@ -26,6 +26,40 @@
 根据自己的系统版本在[Releases](https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases)列表下载可执行文件，并运行
 你可以通过输入书籍id以及需要保存的路径来进行下载
 
+### 命令行模式（非交互）
+
+如果你需要在自动化脚本中使用下载器（例如为 Kindle 自动更新番茄小说），可以使用命令行参数直接下载或更新书籍：
+
+- 直接下载指定书籍：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --download <book_id>
+    ```
+
+    示例：
+    ```sh
+    Tomato-Novel-Downloader.exe --download 7318247498772674083
+    ```
+
+- 更新指定书籍：
+
+    ```sh
+    Tomato-Novel-Downloader.exe --update <book_id>
+    ```
+
+    示例：
+    ```sh
+    Tomato-Novel-Downloader.exe --update 7318247498772674083
+    ```
+
+注意：
+- 命令行模式为非交互模式，会直接开始下载/更新，无需手动输入
+- 使用配置文件（`config.yml`）中的默认保存路径和下载设置
+- `--download` 和 `--update` 都会智能检测已下载的章节，并提供继续下载或重新下载的选项
+- 如果书籍已存在，两个命令的行为相同：检测新章节并更新
+- 如果书籍不存在，两个命令都会开始全新下载
+- 只接受 book_id，不支持搜索功能
+
 ### Web UI 服务器模式（--server）
 
 如果你希望在局域网用浏览器操作（搜索、发起下载、查看任务、下载文件/打包下载文件夹），可以启用 Web UI：

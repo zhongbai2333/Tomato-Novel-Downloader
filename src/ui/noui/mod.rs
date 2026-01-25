@@ -15,7 +15,7 @@ use crate::base_system::context::Config;
 
 mod app_update;
 mod config;
-mod download;
+pub(crate) mod download;
 mod update;
 
 fn show_config_menu(config: &mut Config) -> Result<()> {

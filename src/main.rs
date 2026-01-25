@@ -67,6 +67,14 @@ struct Cli {
     /// 数据目录路径（用于存放 config.yml 和 logs 等文件，方便 Docker 挂载）
     #[arg(long)]
     data_dir: Option<String>,
+
+    /// 直接下载指定 book_id 的小说（非交互模式）
+    #[arg(long)]
+    download: Option<String>,
+
+    /// 更新指定 book_id 的小说（非交互模式）
+    #[arg(long)]
+    update: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -107,6 +115,20 @@ fn main() -> Result<()> {
     });
 
     let mut config = load_config_from_data_dir(data_dir)?;
+
+    // Handle command-line download/update modes
+    if cli.download.is_some() || cli.update.is_some() {
+        info!(target: "startup", "当前版本: v{}", VERSION);
+
+        if let Some(book_id) = cli.download {
+            return ui::noui::download::download_book(&book_id, &config);
+        }
+
+        if let Some(book_id) = cli.update {
+            println!("更新指定书籍 book_id={}", book_id);
+            return ui::noui::download::download_book(&book_id, &config);
+        }
+    }
 
     if cli.server {
         let password = cli
