@@ -36,12 +36,6 @@ use tomato_novel_official_api::prewarm_iid;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Handle the --update command (requires book_id)
-fn handle_update_command(book_id: String, config: &Config) -> Result<()> {
-    println!("更新指定书籍 book_id={}", book_id);
-    ui::noui::download::download_book(&book_id, config)
-}
-
 #[derive(Debug, Parser)]
 #[command(name = "tomato-novel-downloader")]
 #[command(about = "Tomato Novel Downloader (Rust TUI)")]
@@ -122,16 +116,18 @@ fn main() -> Result<()> {
 
     let mut config = load_config_from_data_dir(data_dir)?;
 
-    // Handle --download option for direct download
-    if let Some(book_id) = cli.download {
+    // Handle command-line download/update modes
+    if cli.download.is_some() || cli.update.is_some() {
         info!(target: "startup", "当前版本: v{}", VERSION);
-        return ui::noui::download::download_book(&book_id, &config);
-    }
-
-    // Handle --update option for updating a specific novel
-    if let Some(book_id) = cli.update {
-        info!(target: "startup", "当前版本: v{}", VERSION);
-        return handle_update_command(book_id, &config);
+        
+        if let Some(book_id) = cli.download {
+            return ui::noui::download::download_book(&book_id, &config);
+        }
+        
+        if let Some(book_id) = cli.update {
+            println!("更新指定书籍 book_id={}", book_id);
+            return ui::noui::download::download_book(&book_id, &config);
+        }
     }
 
     if cli.server {
