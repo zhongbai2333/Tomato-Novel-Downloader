@@ -75,6 +75,10 @@ struct Cli {
     /// 更新指定 book_id 的小说（非交互模式）
     #[arg(long)]
     update: Option<String>,
+
+    /// 非交互模式下失败章节重试一次
+    #[arg(long, default_value_t = false)]
+    retry_failed: bool,
 }
 
 fn main() -> Result<()> {
@@ -91,6 +95,10 @@ fn main() -> Result<()> {
     if cli.self_update {
         let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
         return Ok(());
+    }
+
+    if cli.download.is_some() && cli.update.is_some() {
+        return Err(anyhow!("--download 和 --update 不能同时使用"));
     }
 
     // 启动时强制热更新（仅当 SHA256 不同且 tag 相同）。
@@ -120,13 +128,13 @@ fn main() -> Result<()> {
     if cli.download.is_some() || cli.update.is_some() {
         info!(target: "startup", "当前版本: v{}", VERSION);
 
-        if let Some(book_id) = cli.download {
-            return ui::noui::download::download_book(&book_id, &config);
+        if let Some(book_id) = cli.download.as_deref() {
+            return ui::noui::download_book_non_interactive(book_id, &config, cli.retry_failed);
         }
 
-        if let Some(book_id) = cli.update {
+        if let Some(book_id) = cli.update.as_deref() {
             println!("更新指定书籍 book_id={}", book_id);
-            return ui::noui::download::download_book(&book_id, &config);
+            return ui::noui::download_book_non_interactive(book_id, &config, cli.retry_failed);
         }
     }
 

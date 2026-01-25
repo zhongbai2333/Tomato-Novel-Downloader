@@ -64,7 +64,49 @@ pub(super) fn search_and_pick(_keyword: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+struct DownloadOptions {
+    interactive: bool,
+    retry_failed_once: bool,
+}
+
+impl DownloadOptions {
+    fn interactive() -> Self {
+        Self {
+            interactive: true,
+            retry_failed_once: false,
+        }
+    }
+
+    fn non_interactive(retry_failed_once: bool) -> Self {
+        Self {
+            interactive: false,
+            retry_failed_once,
+        }
+    }
+}
+
+pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
+    download_book_with_options(book_id, config, DownloadOptions::interactive())
+}
+
+pub(super) fn download_book_non_interactive(
+    book_id: &str,
+    config: &Config,
+    retry_failed_once: bool,
+) -> Result<()> {
+    download_book_with_options(
+        book_id,
+        config,
+        DownloadOptions::non_interactive(retry_failed_once),
+    )
+}
+
+fn download_book_with_options(
+    book_id: &str,
+    config: &Config,
+    options: DownloadOptions,
+) -> Result<()> {
     let start_time = Instant::now();
 
     let plan = dl::prepare_download_plan(config, book_id, dl::BookMeta::default())
@@ -119,10 +161,14 @@ pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
     );
 
     let mut range: Option<dl::ChapterRange> = None;
-    let mode = if downloaded_ok > 0 || failed_count > 0 {
-        select_download_mode(failed_count > 0)?
+    let mode = if options.interactive {
+        if downloaded_ok > 0 || failed_count > 0 {
+            select_download_mode(failed_count > 0)?
+        } else {
+            DownloadMode::RangeOrAll
+        }
     } else {
-        DownloadMode::RangeOrAll
+        DownloadMode::Resume
     };
 
     match mode {
@@ -135,7 +181,11 @@ pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
             println!("将重新下载全部章节");
         }
         DownloadMode::RangeIgnoreHistory | DownloadMode::RangeOrAll => {
-            range = prompt_range(total)?;
+            range = if options.interactive {
+                prompt_range(total)?
+            } else {
+                None
+            };
             if matches!(mode, DownloadMode::RangeIgnoreHistory) {
                 manager.downloaded.clear();
             }
@@ -169,6 +219,7 @@ pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
 
     println!("\n开始下载...");
     let mut last_reporter: Option<dl::ProgressReporter> = None;
+    let mut retry_budget = if options.retry_failed_once { 1 } else { 0 };
     loop {
         // If we are starting a new stage (retry), clear previous stage bars first.
         if let Some(mut prev) = last_reporter.take() {
@@ -200,13 +251,22 @@ pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
             break;
         }
 
-        let ans = super::read_line("是否重新下载错误章节？[Y/n]: ")?;
-        let ans = ans.trim().to_ascii_lowercase();
-        if ans == "n" {
-            println!("失败章节已保留在缓存/状态文件中。\n");
-            break;
+        if options.interactive {
+            let ans = super::read_line("是否重新下载错误章节？[Y/n]: ")?;
+            let ans = ans.trim().to_ascii_lowercase();
+            if ans == "n" {
+                println!("失败章节已保留在缓存/状态文件中。\n");
+                break;
+            }
+            println!("\n重新下载失败章节: {} 章...", pending.len());
+        } else {
+            if retry_budget == 0 {
+                println!("失败章节已保留在缓存/状态文件中。\n");
+                break;
+            }
+            retry_budget -= 1;
+            println!("\n重新下载失败章节: {} 章...", pending.len());
         }
-        println!("\n重新下载失败章节: {} 章...", pending.len());
     }
 
     let mut reporter =
