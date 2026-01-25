@@ -22,9 +22,10 @@ pub(crate) async fn api_preview(
     }
 
     let cfg = state.config.lock().unwrap().clone();
+    let book_id_for_plan = book_id.clone();
 
     let plan = tokio::task::spawn_blocking(move || {
-        dl::prepare_download_plan(&cfg, &book_id, dl::BookMeta::default())
+        dl::prepare_download_plan(&cfg, &book_id_for_plan, dl::BookMeta::default())
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
