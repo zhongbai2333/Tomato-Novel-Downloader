@@ -14,6 +14,8 @@ use crate::ui::web::state::{AppState, JobState};
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateJobReq {
     pub(crate) book_id: String,
+    pub(crate) range_start: Option<usize>,
+    pub(crate) range_end: Option<usize>,
 }
 
 pub(crate) async fn list_jobs(State(state): State<AppState>) -> Json<Value> {
@@ -40,6 +42,8 @@ pub(crate) async fn create_job(
 
     let jobs = state.jobs.clone();
     let cfg = state.config.lock().unwrap().clone();
+    let range_start = req.range_start;
+    let range_end = req.range_end;
 
     thread::spawn(move || {
         jobs.set_running(handle.id);
@@ -61,10 +65,22 @@ pub(crate) async fn create_job(
         let id = handle.id;
         let jobs_cb = jobs.clone();
 
+        // Build chapter range if specified
+        let range = if let (Some(start), Some(end)) = (range_start, range_end) {
+            let total = plan.chapters.len();
+            if start > 0 && end > 0 && start <= end && end <= total {
+                Some(dl::ChapterRange { start, end })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let result = dl::download_with_plan(
             &cfg,
             plan,
-            None,
+            range,
             Some(Box::new(move |snap| jobs_cb.set_progress(id, snap))),
             Some(handle.cancel.clone()),
         );

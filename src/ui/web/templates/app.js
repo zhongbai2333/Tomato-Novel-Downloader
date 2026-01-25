@@ -286,7 +286,214 @@ async function doSearch(q) {
   }
 }
 
+let currentPreviewBookId = null;
+let currentPreviewData = null;
+
+function showPreviewModal(show) {
+  const modal = document.getElementById('previewModal');
+  if (!modal) return;
+  modal.classList.toggle('hidden', !show);
+  document.body.style.overflow = show ? 'hidden' : '';
+}
+
+async function openPreview(bookId) {
+  currentPreviewBookId = bookId;
+  currentPreviewData = null;
+  showPreviewModal(true);
+  
+  const loading = document.getElementById('previewLoading');
+  const data = document.getElementById('previewData');
+  const rangeInput = document.getElementById('previewRangeInput');
+  const rangeHint = document.getElementById('previewRangeHint');
+  
+  if (loading) loading.classList.remove('hidden');
+  if (data) data.classList.add('hidden');
+  if (rangeInput) rangeInput.value = '';
+  if (rangeHint) rangeHint.textContent = '';
+  
+  try {
+    const preview = await j(`/api/preview/${encodeURIComponent(bookId)}`);
+    currentPreviewData = preview;
+    
+    if (loading) loading.classList.add('hidden');
+    if (data) data.classList.remove('hidden');
+    
+    // Update preview content
+    const title = document.getElementById('previewTitle');
+    const origTitle = document.getElementById('previewOrigTitle');
+    const author = document.getElementById('previewAuthor');
+    const stats = document.getElementById('previewStats');
+    const desc = document.getElementById('previewDesc');
+    const tags = document.getElementById('previewTags');
+    const chapters = document.getElementById('previewChapters');
+    const cover = document.getElementById('previewCover');
+    
+    if (title) title.textContent = preview.book_name || '未知书名';
+    
+    if (origTitle) {
+      if (preview.original_book_name && preview.original_book_name !== preview.book_name) {
+        origTitle.textContent = `原名: ${preview.original_book_name}`;
+        origTitle.classList.remove('hidden');
+      } else {
+        origTitle.classList.add('hidden');
+      }
+    }
+    
+    if (author) {
+      author.textContent = preview.author ? `作者: ${preview.author}` : '作者: 未知';
+    }
+    
+    if (stats) {
+      const parts = [];
+      if (preview.chapter_count) parts.push(`章节: ${preview.chapter_count}`);
+      if (preview.finished !== null && preview.finished !== undefined) {
+        parts.push(`状态: ${preview.finished ? '完结' : '连载'}`);
+      }
+      if (preview.word_count) {
+        const words = Number(preview.word_count);
+        const wStr = words >= 10000 ? `${(words / 10000).toFixed(1)}万` : `${words}`;
+        parts.push(`字数: ${wStr}字`);
+      }
+      if (preview.score) parts.push(`评分: ${preview.score.toFixed(1)}`);
+      if (preview.read_count_text || preview.read_count) {
+        parts.push(`阅读: ${preview.read_count_text || preview.read_count}`);
+      }
+      stats.innerHTML = parts.map(p => `<span>${esc(p)}</span>`).join('');
+    }
+    
+    if (desc) {
+      const description = preview.description || '暂无简介';
+      desc.textContent = description;
+    }
+    
+    if (tags) {
+      if (preview.tags && preview.tags.length > 0) {
+        tags.innerHTML = preview.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('');
+        tags.classList.remove('hidden');
+      } else {
+        tags.classList.add('hidden');
+      }
+    }
+    
+    if (chapters) {
+      const chapterInfo = [];
+      if (preview.chapter_count) {
+        chapterInfo.push(`总章节数: ${preview.chapter_count}`);
+      }
+      if (preview.first_chapter_title) {
+        chapterInfo.push(`首章: ${preview.first_chapter_title}`);
+      }
+      if (preview.last_chapter_title) {
+        chapterInfo.push(`末章: ${preview.last_chapter_title}`);
+      }
+      if (preview.category) {
+        chapterInfo.push(`分类: ${preview.category}`);
+      }
+      chapters.innerHTML = chapterInfo.map(i => `<div>${esc(i)}</div>`).join('');
+    }
+    
+    if (cover) {
+      const coverUrl = preview.detail_cover_url || preview.cover_url;
+      if (coverUrl) {
+        cover.src = coverUrl;
+        cover.classList.remove('hidden');
+      } else {
+        cover.classList.add('hidden');
+      }
+    }
+    
+    if (rangeHint && preview.chapter_count) {
+      rangeHint.textContent = `例如: 1-10 下载第1到第10章，1-${preview.chapter_count} 下载全部`;
+    }
+    
+  } catch (err) {
+    if (loading) loading.textContent = `加载失败: ${err}`;
+    console.error('Preview load error:', err);
+  }
+}
+
+async function confirmPreview() {
+  if (!currentPreviewBookId || !currentPreviewData) {
+    showPreviewModal(false);
+    return;
+  }
+  
+  const rangeInput = document.getElementById('previewRangeInput');
+  const rangeHint = document.getElementById('previewRangeHint');
+  const rangeText = rangeInput ? rangeInput.value.trim() : '';
+  
+  let rangeStart = null;
+  let rangeEnd = null;
+  
+  if (rangeText) {
+    const parts = rangeText.split('-').map(p => p.trim());
+    if (parts.length === 2) {
+      const start = parseInt(parts[0], 10);
+      const end = parseInt(parts[1], 10);
+      const total = currentPreviewData.chapter_count || 0;
+      
+      if (isNaN(start) || isNaN(end) || start <= 0 || end <= 0 || start > end || end > total) {
+        if (rangeHint) {
+          rangeHint.textContent = `范围无效，请输入正确的范围 (1-${total})`;
+          rangeHint.style.color = 'red';
+        }
+        return;
+      }
+      
+      rangeStart = start;
+      rangeEnd = end;
+    } else if (rangeText) {
+      if (rangeHint) {
+        rangeHint.textContent = '格式应为 start-end，例如 1-10';
+        rangeHint.style.color = 'red';
+      }
+      return;
+    }
+  }
+  
+  showPreviewModal(false);
+  
+  try {
+    const payload = { book_id: currentPreviewBookId };
+    if (rangeStart !== null && rangeEnd !== null) {
+      payload.range_start = rangeStart;
+      payload.range_end = rangeEnd;
+    }
+    
+    await j('/api/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    await refreshJobs();
+    
+    const hint = document.getElementById('searchHint');
+    if (hint) {
+      if (rangeStart && rangeEnd) {
+        hint.textContent = `已创建下载任务：${currentPreviewBookId} (章节 ${rangeStart}-${rangeEnd})`;
+      } else {
+        hint.textContent = `已创建下载任务：${currentPreviewBookId}`;
+      }
+    }
+  } catch (err) {
+    alert(`创建任务失败: ${err}`);
+  }
+}
+
+function cancelPreview() {
+  showPreviewModal(false);
+  currentPreviewBookId = null;
+  currentPreviewData = null;
+}
+
 async function startDownload(bookId) {
+  // Open preview modal instead of directly downloading
+  await openPreview(bookId);
+  return null;
+}
+
+async function startDownloadDirect(bookId) {
   const job = await j('/api/jobs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -481,6 +688,21 @@ function wire() {
       try { await refreshLibrary(); } catch (err) { alert(err); }
     }
   });
+  
+  // Wire up preview modal buttons
+  const previewConfirm = document.getElementById('previewConfirm');
+  if (previewConfirm) {
+    previewConfirm.addEventListener('click', async () => {
+      try { await confirmPreview(); } catch (err) { alert(err); }
+    });
+  }
+  
+  const previewCancel = document.getElementById('previewCancel');
+  if (previewCancel) {
+    previewCancel.addEventListener('click', () => {
+      cancelPreview();
+    });
+  }
 }
 
 async function boot() {

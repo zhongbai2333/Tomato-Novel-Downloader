@@ -181,6 +181,40 @@
       </div>
     </div>
 
+    <div id="previewModal" class="modal hidden">
+      <div class="modalCard previewCard">
+        <h3>书籍预览</h3>
+        <div id="previewContent">
+          <div id="previewLoading" class="k">加载中...</div>
+          <div id="previewData" class="hidden">
+            <div class="previewHeader">
+              <img id="previewCover" src="" alt="封面" class="previewCover hidden" />
+              <div class="previewInfo">
+                <h4 id="previewTitle">书名</h4>
+                <div id="previewOrigTitle" class="k hidden"></div>
+                <div id="previewAuthor" class="k"></div>
+                <div id="previewStats" class="previewStats"></div>
+              </div>
+            </div>
+            <div id="previewDesc" class="previewDesc"></div>
+            <div id="previewTags" class="previewTags hidden"></div>
+            <div id="previewChapters" class="previewChapters"></div>
+            <div class="previewRange">
+              <label>
+                <span class="k">下载范围（可选）:</span>
+                <input id="previewRangeInput" type="text" placeholder="留空下载全部，或输入 1-10 下载第1到第10章" />
+              </label>
+              <div id="previewRangeHint" class="k small"></div>
+            </div>
+            <div class="previewActions">
+              <button id="previewConfirm" type="button" class="primary">确认下载</button>
+              <button id="previewCancel" type="button">取消</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script src="/assets/app.js"></script>
   </body>
 </html>

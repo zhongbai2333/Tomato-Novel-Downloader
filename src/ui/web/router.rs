@@ -31,6 +31,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/download/*path", get(routes::download::download_file))
         .route("/download-zip/*path", get(routes::download::download_zip))
         .route("/api/search", get(routes::search::api_search))
+        .route("/api/preview/:book_id", get(routes::preview::api_preview))
         .route(
             "/api/jobs",
             get(routes::jobs::list_jobs).post(routes::jobs::create_job),

@@ -18,6 +18,8 @@ input{flex:1;min-width:180px;padding:8px 10px;border-radius:8px;border:1px solid
 select{padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg)}
 button{padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:#f8f8f8;cursor:pointer}
 button:hover{background:#f2f2f2}
+button.primary{background:#0b5fff;color:#fff;border-color:#0b5fff}
+button.primary:hover{background:#0a53e6}
 .table{width:100%;border-collapse:collapse;margin-top:8px}
 .table th,.table td{border-bottom:1px solid #eee;padding:8px 6px;text-align:left;vertical-align:top}
 .table th{color:var(--muted);font-weight:600}
@@ -27,6 +29,23 @@ button:hover{background:#f2f2f2}
 
 .prewrap{white-space:pre-wrap;word-break:break-word}
 
-.modal{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:18px;z-index:1000}
-.modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:18px;z-index:1000}
+.modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px;max-height:90vh;overflow-y:auto}
 .hidden{display:none}
+
+.previewCard{width:min(720px, 100%)}
+.previewHeader{display:flex;gap:14px;margin-bottom:12px}
+.previewCover{width:120px;height:160px;object-fit:cover;border-radius:8px;border:1px solid var(--border)}
+.previewInfo{flex:1}
+.previewInfo h4{margin:0 0 8px 0}
+.previewStats{display:flex;flex-wrap:wrap;gap:8px;font-size:14px;color:var(--muted);margin-top:8px}
+.previewStats>span{padding:4px 0}
+.previewDesc{margin-bottom:12px;padding:10px;background:#f9f9f9;border-radius:8px;font-size:14px;line-height:1.6}
+.previewTags{margin-bottom:12px}
+.previewTags .badge{margin-right:6px;margin-bottom:6px;display:inline-block}
+.previewChapters{margin-bottom:12px;padding:10px;background:#f9f9f9;border-radius:8px;font-size:14px}
+.previewRange{margin-bottom:12px}
+.previewRange label{display:flex;flex-direction:column;gap:6px}
+.previewRange input{width:100%}
+.previewActions{display:flex;gap:10px;justify-content:flex-end}
+
