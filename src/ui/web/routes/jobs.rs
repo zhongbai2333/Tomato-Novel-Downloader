@@ -36,7 +36,7 @@ pub(crate) async fn create_job(
     if book_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     // Validate range parameters if provided
     if let (Some(start), Some(end)) = (req.range_start, req.range_end) {
         if start < 1 || end < 1 || start > end {
