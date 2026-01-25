@@ -64,7 +64,7 @@ pub(super) fn search_and_pick(_keyword: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-pub(super) fn download_book(book_id: &str, config: &Config) -> Result<()> {
+pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
     let start_time = Instant::now();
 
     let plan = dl::prepare_download_plan(config, book_id, dl::BookMeta::default())
