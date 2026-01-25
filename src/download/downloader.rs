@@ -701,6 +701,26 @@ pub struct DownloadResult {
     pub canceled: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadMode {
+    Resume,
+    Full,
+    FailedOnly,
+    RangeIgnoreHistory,
+}
+
+pub enum RetryFailed {
+    Never,
+    Decide(Box<dyn FnMut(usize) -> bool + Send>),
+}
+
+pub struct DownloadFlowOptions {
+    pub mode: DownloadMode,
+    pub range: Option<ChapterRange>,
+    pub retry_failed: RetryFailed,
+    pub stage_callback: Option<Box<dyn FnMut(DownloadResult) + Send>>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct BookMeta {
     pub book_name: Option<String>,
@@ -851,6 +871,23 @@ impl ProgressReporter {
         self.snapshot.comment_saved =
             (self.snapshot.comment_saved + 1).min(self.snapshot.comment_total);
         self.emit();
+    }
+
+    pub(crate) fn reset_for_retry(&mut self, total: usize, pending_len: usize) {
+        self.snapshot.group_done = 0;
+        self.snapshot.group_total = pending_len.div_ceil(25);
+        self.snapshot.saved_chapters = total.saturating_sub(pending_len);
+        self.snapshot.chapter_total = total;
+        self.snapshot.save_phase = SavePhase::TextSave;
+        self.emit();
+
+        if let Some(cli) = self.cli.as_ref() {
+            cli.download_bar
+                .set_length(self.snapshot.group_total as u64);
+            cli.download_bar.set_position(0);
+            cli.save_bar.set_length(pending_len as u64);
+            cli.save_bar.set_position(0);
+        }
     }
 
     fn cli_download_bar(&self) -> Option<ProgressBar> {
@@ -1363,31 +1400,96 @@ pub fn download_with_plan(
     progress: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>,
     cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<()> {
+    download_with_plan_flow(
+        config,
+        plan,
+        None,
+        DownloadFlowOptions {
+            mode: DownloadMode::Resume,
+            range,
+            retry_failed: RetryFailed::Never,
+            stage_callback: None,
+        },
+        progress,
+        cancel_flag,
+    )
+}
+
+pub fn download_with_plan_flow(
+    config: &Config,
+    plan: DownloadPlan,
+    manager: Option<BookManager>,
+    options: DownloadFlowOptions,
+    progress: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> Result<()> {
     info!(target: "download", book_id = %plan.book_id, "启动下载");
+
+    let DownloadFlowOptions {
+        mode,
+        range,
+        mut retry_failed,
+        mut stage_callback,
+    } = options;
 
     let chosen_chapters = apply_range(&plan.chapters, range);
     if chosen_chapters.is_empty() {
         return Err(anyhow!("范围无效或章节为空"));
     }
 
-    let mut manager = init_manager_from_plan(config, &plan)?;
-    let _ = manager.load_existing_status(&manager.book_id.clone(), &manager.book_name.clone());
+    let mut manager = if let Some(manager) = manager {
+        manager
+    } else {
+        let mut manager = init_manager_from_plan(config, &plan)?;
+        let _ = manager.load_existing_status(&manager.book_id.clone(), &manager.book_name.clone());
+        manager
+    };
 
-    let pending = pending_resume(&manager, &chosen_chapters);
+    if matches!(mode, DownloadMode::Full | DownloadMode::RangeIgnoreHistory) {
+        manager.downloaded.clear();
+    }
+
+    let mut pending = match mode {
+        DownloadMode::FailedOnly => pending_failed(&manager, &chosen_chapters),
+        _ => pending_resume(&manager, &chosen_chapters),
+    };
+
     let mut reporter = make_reporter(config, &chosen_chapters, &pending, progress);
 
-    let book_name = manager.book_name.clone();
-    download_chapters_into_manager(
-        config,
-        &plan.book_id,
-        &book_name,
-        &mut manager,
-        &chosen_chapters,
-        &pending,
-        Some(&plan._raw),
-        &mut reporter,
-        cancel_flag.as_ref(),
-    )?;
+    loop {
+        let book_name = manager.book_name.clone();
+        let result = download_chapters_into_manager(
+            config,
+            &plan.book_id,
+            &book_name,
+            &mut manager,
+            &chosen_chapters,
+            &pending,
+            Some(&plan._raw),
+            &mut reporter,
+            cancel_flag.as_ref(),
+        )?;
+
+        if let Some(cb) = stage_callback.as_mut() {
+            cb(result);
+        }
+
+        pending = pending_failed(&manager, &chosen_chapters);
+        if pending.is_empty() {
+            break;
+        }
+
+        let should_retry = match retry_failed {
+            RetryFailed::Never => false,
+            RetryFailed::Decide(ref mut f) => f(pending.len()),
+        };
+
+        if !should_retry {
+            break;
+        }
+
+        reporter.reset_for_retry(chosen_chapters.len(), pending.len());
+    }
 
     finalize_from_manager(
         &mut manager,
@@ -2112,7 +2214,7 @@ fn search_metadata(_book_id: &str) -> Option<BookMeta> {
     None
 }
 
-fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<ChapterRef> {
+pub(crate) fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<ChapterRef> {
     let total = chapters.len();
     match range {
         None => chapters.to_vec(),

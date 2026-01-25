@@ -193,14 +193,14 @@ fn download_book_with_options(
         DownloadMode::Resume | DownloadMode::FailedOnly => {}
     }
 
-    let chosen_chapters = apply_range(&plan.chapters, range);
+    let chosen_chapters = dl::apply_range(&plan.chapters, range);
     if chosen_chapters.is_empty() {
         println!("范围无效或章节为空\n");
         let _ = manager.cleanup_status_folder();
         return Ok(());
     }
 
-    let mut pending = match mode {
+    let pending = match mode {
         DownloadMode::FailedOnly => dl::pending_failed(&manager, &chosen_chapters),
         _ => dl::pending_resume(&manager, &chosen_chapters),
     };
@@ -218,71 +218,65 @@ fn download_book_with_options(
     }
 
     println!("\n开始下载...");
-    let mut last_reporter: Option<dl::ProgressReporter> = None;
-    let mut retry_budget = if options.retry_failed_once { 1 } else { 0 };
-    loop {
-        // If we are starting a new stage (retry), clear previous stage bars first.
-        if let Some(mut prev) = last_reporter.take() {
-            prev.finish_cli_bars();
-        }
-        let mut reporter = dl::make_reporter(config, &chosen_chapters, &pending, None);
-        let book_name = manager.book_name.clone();
-        let result = dl::download_chapters_into_manager(
-            config,
-            &plan.book_id,
-            &book_name,
-            &mut manager,
-            &chosen_chapters,
-            &pending,
-            Some(&plan._raw),
-            &mut reporter,
-            None,
-        )?;
-        println!(
-            "\n下载完成（阶段）成功: {} 章 | 失败: {} 章 | 取消: {} 章",
-            result.success, result.failed, result.canceled
-        );
+    let save_dir = manager.default_save_dir();
 
-        // Keep the reporter (and its CLI progress bars) for finalize/audiobook.
-        last_reporter = Some(reporter);
-
-        pending = dl::pending_failed(&manager, &chosen_chapters);
-        if pending.is_empty() {
-            break;
-        }
-
-        if options.interactive {
-            let ans = super::read_line("是否重新下载错误章节？[Y/n]: ")?;
-            let ans = ans.trim().to_ascii_lowercase();
+    let retry_failed = if options.interactive {
+        dl::RetryFailed::Decide(Box::new(|pending_len| {
+            let ans = super::read_line("是否重新下载错误章节？[Y/n]: ")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_else(|_| "n".to_string());
             if ans == "n" {
                 println!("失败章节已保留在缓存/状态文件中。\n");
-                break;
+                return false;
             }
-            println!("\n重新下载失败章节: {} 章...", pending.len());
-        } else {
-            if retry_budget == 0 {
-                println!("失败章节已保留在缓存/状态文件中。\n");
-                break;
+            println!("\n重新下载失败章节: {} 章...", pending_len);
+            true
+        }))
+    } else if options.retry_failed_once {
+        let mut retried = false;
+        dl::RetryFailed::Decide(Box::new(move |pending_len| {
+            if retried {
+                return false;
             }
-            retry_budget -= 1;
-            println!("\n重新下载失败章节: {} 章...", pending.len());
-        }
-    }
+            retried = true;
+            println!("\n重新下载失败章节: {} 章...", pending_len);
+            true
+        }))
+    } else {
+        dl::RetryFailed::Never
+    };
 
-    let mut reporter =
-        last_reporter.unwrap_or_else(|| dl::make_reporter(config, &chosen_chapters, &[], None));
-    dl::finalize_from_manager(
-        &mut manager,
-        &chosen_chapters,
-        Some(&plan._raw),
-        Some(&mut reporter),
+    let exec_mode = match mode {
+        DownloadMode::Full => dl::DownloadMode::Full,
+        DownloadMode::FailedOnly => dl::DownloadMode::FailedOnly,
+        DownloadMode::RangeIgnoreHistory => dl::DownloadMode::RangeIgnoreHistory,
+        _ => dl::DownloadMode::Resume,
+    };
+
+    dl::download_with_plan_flow(
+        config,
+        plan,
+        Some(manager),
+        dl::DownloadFlowOptions {
+            mode: exec_mode,
+            range,
+            retry_failed,
+            stage_callback: Some(Box::new(|result| {
+                println!(
+                    "\n下载完成（阶段）成功: {} 章 | 失败: {} 章 | 取消: {} 章",
+                    result.success, result.failed, result.canceled
+                );
+            })),
+        },
+        None,
         None,
     )?;
+
     println!(
         "\n下载完成！用时 {:.1} 秒",
         start_time.elapsed().as_secs_f32()
     );
-    println!("已保存到 {}", manager.default_save_dir().display());
+    println!("已保存到 {}", save_dir.display());
     Ok(())
 }
 
@@ -349,29 +343,6 @@ fn prompt_range(total: usize) -> Result<Option<dl::ChapterRange>> {
     }
     println!("已选择章节范围: {}~{}", start, end);
     Ok(Some(dl::ChapterRange { start, end }))
-}
-
-fn apply_range(chapters: &[ChapterRef], range: Option<dl::ChapterRange>) -> Vec<ChapterRef> {
-    let total = chapters.len();
-    match range {
-        None => chapters.to_vec(),
-        Some(r) => {
-            if r.start == 0 || r.start > r.end {
-                return Vec::new();
-            }
-            let start_idx = r.start.saturating_sub(1);
-            let end_idx = r.end.min(total).saturating_sub(1);
-            if start_idx >= chapters.len() {
-                return Vec::new();
-            }
-            chapters
-                .iter()
-                .skip(start_idx)
-                .take(end_idx.saturating_sub(start_idx) + 1)
-                .cloned()
-                .collect()
-        }
-    }
 }
 
 fn count_download_state(

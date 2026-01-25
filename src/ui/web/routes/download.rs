@@ -16,18 +16,8 @@ pub(crate) async fn download_file(
     State(state): State<AppState>,
     AxumPath(path): AxumPath<String>,
 ) -> Result<Response, StatusCode> {
-    if path.is_empty() {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
     let base = state.library_root.as_ref();
-    let base_canon = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
-
-    let target = base.join(&path);
-    let target_canon = std::fs::canonicalize(&target).map_err(|_| StatusCode::NOT_FOUND)?;
-    if !target_canon.starts_with(&base_canon) {
-        return Err(StatusCode::FORBIDDEN);
-    }
+    let (_target, target_canon) = resolve_target(base, &path)?;
 
     let meta = std::fs::metadata(&target_canon).map_err(|_| StatusCode::NOT_FOUND)?;
     if !meta.is_file() {
@@ -76,22 +66,30 @@ fn is_allowed_ext(ext: &str) -> bool {
     matches!(ext, "epub" | "txt" | "mp3" | "wav")
 }
 
-pub(crate) async fn download_zip(
-    State(state): State<AppState>,
-    AxumPath(path): AxumPath<String>,
-) -> Result<Response, StatusCode> {
+fn resolve_target(
+    base: &std::path::Path,
+    path: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), StatusCode> {
     if path.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let base = state.library_root.as_ref();
     let base_canon = std::fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
-
-    let target = base.join(&path);
+    let target = base.join(path);
     let target_canon = std::fs::canonicalize(&target).map_err(|_| StatusCode::NOT_FOUND)?;
     if !target_canon.starts_with(&base_canon) {
         return Err(StatusCode::FORBIDDEN);
     }
+
+    Ok((target, target_canon))
+}
+
+pub(crate) async fn download_zip(
+    State(state): State<AppState>,
+    AxumPath(path): AxumPath<String>,
+) -> Result<Response, StatusCode> {
+    let base = state.library_root.as_ref();
+    let (target, target_canon) = resolve_target(base, &path)?;
 
     let meta = std::fs::metadata(&target_canon).map_err(|_| StatusCode::NOT_FOUND)?;
     if !meta.is_dir() {
