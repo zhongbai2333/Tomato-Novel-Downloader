@@ -15,7 +15,7 @@ use crate::base_system::context::Config;
 
 mod app_update;
 mod config;
-pub(crate) mod download;
+mod download;
 mod update;
 
 fn show_config_menu(config: &mut Config) -> Result<()> {
@@ -26,8 +26,16 @@ fn search_and_pick(keyword: &str) -> Result<Option<String>> {
     download::search_and_pick(keyword)
 }
 
-fn download_book(book_id: &str, config: &Config) -> Result<()> {
+pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
     download::download_book(book_id, config)
+}
+
+pub(crate) fn download_book_non_interactive(
+    book_id: &str,
+    config: &Config,
+    retry_failed: bool,
+) -> Result<()> {
+    download::download_book_non_interactive(book_id, config, retry_failed)
 }
 
 pub fn run(config: &mut Config) -> Result<()> {
