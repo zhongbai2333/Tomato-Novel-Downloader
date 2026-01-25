@@ -29,11 +29,13 @@ button.primary:hover{background:#0a53e6}
 
 .prewrap{white-space:pre-wrap;word-break:break-word}
 
-.modal{position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;padding:18px;z-index:1000}
-.modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px;max-height:90vh;overflow-y:auto}
+.modal{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:18px;z-index:1000}
+.modal.preview{background:rgba(0,0,0,0.5)}
+.modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px}
 .hidden{display:none}
 
-.previewCard{width:min(720px, 100%)}
+.previewCard{width:min(720px, 100%);max-height:90vh;overflow-y:auto}
+.error{color:#d32f2f}
 .previewHeader{display:flex;gap:14px;margin-bottom:12px}
 .previewCover{width:120px;height:160px;object-fit:cover;border-radius:8px;border:1px solid var(--border)}
 .previewInfo{flex:1}

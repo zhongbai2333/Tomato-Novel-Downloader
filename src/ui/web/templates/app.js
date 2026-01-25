@@ -354,11 +354,18 @@ async function openPreview(bookId) {
         const wStr = words >= 10000 ? `${(words / 10000).toFixed(1)}万` : `${words}`;
         parts.push(`字数: ${wStr}字`);
       }
-      if (preview.score) parts.push(`评分: ${preview.score.toFixed(1)}`);
+      if (preview.score !== null && preview.score !== undefined) {
+        parts.push(`评分: ${preview.score.toFixed(1)}`);
+      }
       if (preview.read_count_text || preview.read_count) {
         parts.push(`阅读: ${preview.read_count_text || preview.read_count}`);
       }
-      stats.innerHTML = parts.map(p => `<span>${esc(p)}</span>`).join('');
+      stats.textContent = '';
+      parts.forEach(p => {
+        const span = document.createElement('span');
+        span.textContent = p;
+        stats.appendChild(span);
+      });
     }
     
     if (desc) {
@@ -368,7 +375,13 @@ async function openPreview(bookId) {
     
     if (tags) {
       if (preview.tags && preview.tags.length > 0) {
-        tags.innerHTML = preview.tags.map(t => `<span class="badge">${esc(t)}</span>`).join('');
+        tags.textContent = '';
+        preview.tags.forEach(t => {
+          const badge = document.createElement('span');
+          badge.className = 'badge';
+          badge.textContent = t;
+          tags.appendChild(badge);
+        });
         tags.classList.remove('hidden');
       } else {
         tags.classList.add('hidden');
@@ -389,12 +402,17 @@ async function openPreview(bookId) {
       if (preview.category) {
         chapterInfo.push(`分类: ${preview.category}`);
       }
-      chapters.innerHTML = chapterInfo.map(i => `<div>${esc(i)}</div>`).join('');
+      chapters.textContent = '';
+      chapterInfo.forEach(info => {
+        const div = document.createElement('div');
+        div.textContent = info;
+        chapters.appendChild(div);
+      });
     }
     
     if (cover) {
       const coverUrl = preview.detail_cover_url || preview.cover_url;
-      if (coverUrl) {
+      if (coverUrl && (coverUrl.startsWith('http://') || coverUrl.startsWith('https://'))) {
         cover.src = coverUrl;
         cover.classList.remove('hidden');
       } else {
@@ -426,24 +444,29 @@ async function confirmPreview() {
   let rangeEnd = null;
   
   if (rangeText) {
+    const total = currentPreviewData.chapter_count || 0;
+    
+    if (total === 0) {
+      if (rangeHint) {
+        rangeHint.textContent = '章节数未知，无法使用范围下载';
+        rangeHint.classList.add('error');
+      }
+      return;
+    }
+    
     const parts = rangeText.split('-').map(p => p.trim());
     if (parts.length === 2) {
-      const start = parseInt(parts[0], 10);
-      const end = parseInt(parts[1], 10);
-      const total = currentPreviewData.chapter_count || 0;
+      const startPart = parts[0];
+      const endPart = parts[1];
       
-      if (total === 0) {
-        if (rangeHint) {
-          rangeHint.textContent = '章节数未知，无法使用范围下载';
-          rangeHint.style.color = 'red';
-        }
-        return;
-      }
+      // Support partial ranges like TUI: "1-" means 1 to end, "-50" means 1 to 50
+      const start = startPart === '' ? 1 : parseInt(startPart, 10);
+      const end = endPart === '' ? total : parseInt(endPart, 10);
       
       if (isNaN(start) || isNaN(end) || start < 1 || end < 1 || start > end || end > total) {
         if (rangeHint) {
           rangeHint.textContent = `范围无效，请输入正确的范围 (1-${total})`;
-          rangeHint.style.color = 'red';
+          rangeHint.classList.add('error');
         }
         return;
       }
@@ -453,10 +476,15 @@ async function confirmPreview() {
     } else if (rangeText) {
       if (rangeHint) {
         rangeHint.textContent = '格式应为 start-end，例如 1-10';
-        rangeHint.style.color = 'red';
+        rangeHint.classList.add('error');
       }
       return;
     }
+  }
+  
+  // Clear any error state
+  if (rangeHint) {
+    rangeHint.classList.remove('error');
   }
   
   showPreviewModal(false);
@@ -694,6 +722,22 @@ function wire() {
       const p = (t.getAttribute('data-path') || '').toString();
       libraryPath = p;
       try { await refreshLibrary(); } catch (err) { alert(err); }
+    }
+  });
+  
+  // Add Escape key support for modals
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Esc') {
+      const previewModal = document.getElementById('previewModal');
+      if (previewModal && !previewModal.classList.contains('hidden')) {
+        cancelPreview();
+        return;
+      }
+      
+      const loginModal = document.getElementById('loginModal');
+      if (loginModal && !loginModal.classList.contains('hidden')) {
+        showLogin(false);
+      }
     }
   });
   

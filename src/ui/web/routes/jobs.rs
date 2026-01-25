@@ -36,6 +36,16 @@ pub(crate) async fn create_job(
     if book_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    
+    // Validate range parameters if provided
+    if let (Some(start), Some(end)) = (req.range_start, req.range_end) {
+        if start < 1 || end < 1 || start > end {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    } else if req.range_start.is_some() || req.range_end.is_some() {
+        // Both range_start and range_end must be provided together
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     let handle = state.jobs.create(book_id.clone());
     let book_id_for_resp = book_id.clone();
