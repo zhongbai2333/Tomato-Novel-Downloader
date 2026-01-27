@@ -20,7 +20,7 @@ WORKDIR /workspace/Tomato-Novel-Downloader
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --no-default-features --features official-api,tts,clipboard
+    cargo build --release --no-default-features --features official-api,tts
 
 FROM debian:bookworm-slim
 
