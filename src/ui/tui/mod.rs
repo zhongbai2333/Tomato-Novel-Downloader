@@ -720,6 +720,10 @@ const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 const LOG_HEIGHT: u16 = 7;
 
+#[cfg(feature = "docker")]
+const ABOUT_BUTTONS: &[&str] = &["打开Github仓库", "返回"];
+
+#[cfg(not(feature = "docker"))]
 const ABOUT_BUTTONS: &[&str] = &[
     "打开Github仓库",
     "检查程序更新",

@@ -33,7 +33,7 @@ WORKDIR /workspace/Tomato-Novel-Downloader
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --target $(cat /tmp/target) --no-default-features --features official-api,tts-native
+    cargo build --release --target $(cat /tmp/target) --no-default-features --features official-api,tts-native,docker
 
 RUN mkdir -p /workspace/out \
     && cp /workspace/Tomato-Novel-Downloader/target/$(cat /tmp/target)/release/tomato-novel-downloader /workspace/out/tomato-novel-downloader

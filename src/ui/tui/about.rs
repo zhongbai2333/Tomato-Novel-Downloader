@@ -16,17 +16,28 @@ pub(super) fn handle_event_about(app: &mut App, event: Event) -> Result<()> {
                     open_github_repo(app)?;
                 }
                 Some(1) => {
-                    check_app_update(app)?;
+                    if cfg!(feature = "docker") {
+                        app.view = View::Home;
+                        app.status = "返回主菜单".to_string();
+                    } else {
+                        check_app_update(app)?;
+                    }
                 }
                 Some(2) => {
-                    request_self_update(app)?;
+                    if !cfg!(feature = "docker") {
+                        request_self_update(app)?;
+                    }
                 }
                 Some(3) => {
-                    dismiss_app_update(app)?;
+                    if !cfg!(feature = "docker") {
+                        dismiss_app_update(app)?;
+                    }
                 }
                 Some(4) => {
-                    app.view = View::Home;
-                    app.status = "返回主菜单".to_string();
+                    if !cfg!(feature = "docker") {
+                        app.view = View::Home;
+                        app.status = "返回主菜单".to_string();
+                    }
                 }
                 _ => {}
             },
@@ -100,7 +111,9 @@ pub(super) fn draw_about(frame: &mut ratatui::Frame, app: &mut App) {
     text.push_str(&format!("\n当前版本: v{}\n", env!("CARGO_PKG_VERSION")));
 
     text.push_str("\n===== 程序更新 =====\n");
-    if let Some(rep) = &app.app_update_report {
+    if cfg!(feature = "docker") {
+        text.push_str("Docker 构建已禁用程序自更新，请通过重新拉取镜像进行升级。\n");
+    } else if let Some(rep) = &app.app_update_report {
         text.push_str(&format!("当前: {}\n", rep.current_tag));
         text.push_str(&format!("最新: {}\n", rep.latest.tag_name));
         if rep.is_new_version {
@@ -221,20 +234,31 @@ fn handle_mouse_about(app: &mut App, me: event::MouseEvent) -> Result<()> {
                 }
                 1 => {
                     app.about_btn_state.select(Some(1));
-                    check_app_update(app)?;
+                    if cfg!(feature = "docker") {
+                        app.view = View::Home;
+                        app.status = "返回主菜单".to_string();
+                    } else {
+                        check_app_update(app)?;
+                    }
                 }
                 2 => {
-                    app.about_btn_state.select(Some(2));
-                    request_self_update(app)?;
+                    if !cfg!(feature = "docker") {
+                        app.about_btn_state.select(Some(2));
+                        request_self_update(app)?;
+                    }
                 }
                 3 => {
-                    app.about_btn_state.select(Some(3));
-                    dismiss_app_update(app)?;
+                    if !cfg!(feature = "docker") {
+                        app.about_btn_state.select(Some(3));
+                        dismiss_app_update(app)?;
+                    }
                 }
                 4 => {
-                    app.about_btn_state.select(Some(4));
-                    app.view = View::Home;
-                    app.status = "返回主菜单".to_string();
+                    if !cfg!(feature = "docker") {
+                        app.about_btn_state.select(Some(4));
+                        app.view = View::Home;
+                        app.status = "返回主菜单".to_string();
+                    }
                 }
                 _ => {}
             }

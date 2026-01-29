@@ -10,6 +10,21 @@ use crate::base_system::app_update;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) async fn api_app_update() -> Result<Json<Value>, StatusCode> {
+    if cfg!(feature = "docker") {
+        let current_tag = format!("v{VERSION}");
+        return Ok(Json(json!({
+            "current": VERSION,
+            "current_tag": current_tag,
+            "latest_tag": current_tag,
+            "latest_name": "Docker build",
+            "latest_body": "Docker 构建已禁用程序自更新，请通过重新拉取镜像进行升级。",
+            "latest_url": Value::Null,
+            "published_at": Value::Null,
+            "has_update": false,
+            "docker_build": true,
+        })));
+    }
+
     let latest = app_update::fetch_latest_release_async()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -35,10 +50,15 @@ pub(crate) async fn api_app_update() -> Result<Json<Value>, StatusCode> {
         "latest_url": latest.html_url,
         "published_at": latest.published_at,
         "has_update": has_update,
+        "docker_build": false,
     })))
 }
 
 pub(crate) async fn api_self_update() -> Result<Json<Value>, StatusCode> {
+    if cfg!(feature = "docker") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     // 先返回响应，再启动自更新；否则进程 exit 可能导致客户端收不到响应。
     thread::spawn(|| {
         thread::sleep(Duration::from_millis(600));

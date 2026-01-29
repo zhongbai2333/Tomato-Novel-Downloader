@@ -27,6 +27,9 @@ clipboard = []
 # Desktop 剪贴板后端（arboard）。Android 下不启用。
 clipboard-arboard = ["dep:arboard"]
 
+# Docker 专用构建：禁用程序自更新/热更新逻辑，提示通过重新拉取镜像升级。
+docker = []
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }

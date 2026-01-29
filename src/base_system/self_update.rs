@@ -41,6 +41,14 @@ pub enum SelfUpdateOutcome {
 ///
 /// 例外：当检测到是 `cargo run`（开发态）运行时，不执行强制热更新。
 pub fn check_hotfix_and_apply(current_version: &str) -> Result<SelfUpdateOutcome> {
+    if cfg!(feature = "docker") {
+        warn!(
+            target: "self_update",
+            "Docker 构建已禁用热更新/自更新，请通过重新拉取镜像升级"
+        );
+        return Ok(SelfUpdateOutcome::Skipped);
+    }
+
     if is_cargo_run_like() {
         info!(target: "self_update", "检测到 cargo run/开发态运行，跳过强制热更新检查");
         return Ok(SelfUpdateOutcome::UpToDate);
@@ -92,6 +100,14 @@ struct MatchedReleaseAsset {
 }
 
 pub fn check_for_updates(current_version: &str, auto_yes: bool) -> Result<SelfUpdateOutcome> {
+    if cfg!(feature = "docker") {
+        warn!(
+            target: "self_update",
+            "Docker 构建已禁用自更新，请通过重新拉取镜像升级"
+        );
+        return Ok(SelfUpdateOutcome::Skipped);
+    }
+
     info!(target: "self_update", "正在检查程序更新…");
 
     let current_tag = format!("v{current_version}");

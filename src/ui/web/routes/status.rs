@@ -12,6 +12,7 @@ pub(crate) async fn api_status(State(state): State<AppState>) -> Json<Value> {
 
     Json(json!({
         "version": VERSION,
+        "docker_build": cfg!(feature = "docker"),
         "prewarm_in_progress": crate::prewarm_state::is_prewarm_in_progress(),
         "save_dir": state.library_root.to_string_lossy(),
         "bind_addr": bind_addr,

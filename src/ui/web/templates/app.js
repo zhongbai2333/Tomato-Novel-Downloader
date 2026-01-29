@@ -1,4 +1,5 @@
 let loginPromise = null;
+let isDockerBuild = false;
 
 function showLogin(show) {
   const modal = document.getElementById('loginModal');
@@ -133,11 +134,32 @@ function showAppUpdateBanner(show) {
   el.classList.toggle('hidden', !show);
 }
 
+function applyDockerUpdateUi() {
+  if (!isDockerBuild) return;
+  const hint = document.getElementById('appUpdateHint');
+  if (hint) hint.textContent = 'Docker 构建已禁用程序自更新，请通过重新拉取镜像升级。';
+  showAppUpdateBanner(false);
+  const btn = document.getElementById('appUpdateCheck');
+  if (btn) btn.disabled = true;
+  const selfBtn = document.getElementById('appSelfUpdate');
+  if (selfBtn) selfBtn.disabled = true;
+  const dismissBtn = document.getElementById('appUpdateDismiss');
+  if (dismissBtn) dismissBtn.disabled = true;
+}
+
 async function refreshAppUpdate(manual) {
   const hint = document.getElementById('appUpdateHint');
   const latestEl = document.getElementById('appUpdateLatest');
   const bodyEl = document.getElementById('appUpdateBody');
   const linkEl = document.getElementById('appUpdateLink');
+
+  if (isDockerBuild) {
+    applyDockerUpdateUi();
+    if (latestEl) latestEl.textContent = '';
+    if (bodyEl) bodyEl.textContent = 'Docker 构建已禁用程序自更新，请通过重新拉取镜像升级。';
+    if (linkEl) linkEl.style.pointerEvents = 'none';
+    return { latestTag: '', hasUpdate: false, dockerBuild: true };
+  }
 
   if (hint) hint.textContent = manual ? '检查中…' : '';
 
@@ -183,6 +205,8 @@ async function refreshStatus() {
   document.getElementById('saveDir').textContent = data.save_dir || '';
   document.getElementById('bind').textContent = data.bind_addr || '';
   document.getElementById('locked').textContent = data.locked ? 'locked' : 'unlocked';
+  isDockerBuild = !!data.docker_build;
+  applyDockerUpdateUi();
 }
 
 async function refreshConfig() {
@@ -760,14 +784,18 @@ function wire() {
 async function boot() {
   wire();
   await refreshStatus();
-  await refreshAppUpdate(false).catch(() => {});
+  if (!isDockerBuild) {
+    await refreshAppUpdate(false).catch(() => {});
+  }
   await refreshConfig();
   await refreshUpdates();
   await refreshJobs();
   await refreshLibrary();
   setInterval(() => refreshJobs().catch(() => {}), 1500);
   setInterval(() => refreshStatus().catch(() => {}), 5000);
-  setInterval(() => refreshAppUpdate(false).catch(() => {}), 6 * 60 * 60 * 1000);
+  if (!isDockerBuild) {
+    setInterval(() => refreshAppUpdate(false).catch(() => {}), 6 * 60 * 60 * 1000);
+  }
 }
 
 boot().catch(err => {

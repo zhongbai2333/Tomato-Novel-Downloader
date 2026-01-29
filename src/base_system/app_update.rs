@@ -123,6 +123,10 @@ pub fn check_update_report_blocking_with_timeout(
     current_version: &str,
     timeout: Duration,
 ) -> Result<UpdateCheckReport> {
+    if cfg!(feature = "docker") {
+        return Ok(docker_update_report(current_version));
+    }
+
     let current_tag = normalize_tag(current_version);
 
     let client = build_blocking_client(timeout)?;
@@ -155,7 +159,33 @@ pub fn check_update_report_blocking_with_timeout(
     })
 }
 
+fn docker_update_report(current_version: &str) -> UpdateCheckReport {
+    let current_tag = normalize_tag(current_version);
+    UpdateCheckReport {
+        current_tag: current_tag.clone(),
+        latest: LatestRelease {
+            tag_name: current_tag.clone(),
+            name: Some("Docker build".to_string()),
+            body: Some("Docker 构建已禁用程序自更新，请通过重新拉取镜像进行升级。".to_string()),
+            html_url: None,
+            published_at: None,
+        },
+        is_new_version: false,
+        is_dismissed: false,
+    }
+}
+
 pub async fn fetch_latest_release_async() -> Result<LatestRelease> {
+    if cfg!(feature = "docker") {
+        return Ok(LatestRelease {
+            tag_name: normalize_tag(env!("CARGO_PKG_VERSION")),
+            name: Some("Docker build".to_string()),
+            body: Some("Docker 构建已禁用程序自更新，请通过重新拉取镜像进行升级。".to_string()),
+            html_url: None,
+            published_at: None,
+        });
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
