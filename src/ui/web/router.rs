@@ -27,6 +27,14 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/api/config",
             get(routes::auth::get_config).post(routes::auth::set_config),
         )
+        .route(
+            "/api/config/raw",
+            get(routes::auth::get_config_raw).post(routes::auth::set_config_raw),
+        )
+        .route(
+            "/api/config/full",
+            get(routes::auth::get_config_full).post(routes::auth::set_config_full),
+        )
         .route("/api/library", get(routes::library::api_library))
         .route("/download/*path", get(routes::download::download_file))
         .route("/download-zip/*path", get(routes::download::download_zip))

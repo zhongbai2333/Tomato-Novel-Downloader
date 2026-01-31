@@ -53,6 +53,14 @@ pub struct Config {
     pub audiobook_format: String,
     #[serde(default = "default_audiobook_concurrency")]
     pub audiobook_concurrency: usize,
+    #[serde(default = "default_audiobook_tts_provider")]
+    pub audiobook_tts_provider: String,
+    #[serde(default = "default_string")]
+    pub audiobook_tts_api_url: String,
+    #[serde(default = "default_string")]
+    pub audiobook_tts_api_token: String,
+    #[serde(default = "default_string")]
+    pub audiobook_tts_model: String,
 
     // 路径配置
     #[serde(default)]
@@ -142,6 +150,10 @@ impl Default for Config {
             audiobook_pitch: default_audiobook_pitch(),
             audiobook_format: default_audiobook_format(),
             audiobook_concurrency: default_audiobook_concurrency(),
+            audiobook_tts_provider: default_audiobook_tts_provider(),
+            audiobook_tts_api_url: default_string(),
+            audiobook_tts_api_token: default_string(),
+            audiobook_tts_model: default_string(),
             save_path: String::new(),
             use_official_api: default_true(),
             api_endpoints: Vec::new(),
@@ -174,7 +186,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 38] = [
+        static FIELDS: [FieldMeta; 42] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -246,6 +258,22 @@ impl ConfigSpec for Config {
             FieldMeta {
                 name: "audiobook_concurrency",
                 description: "Edge TTS 有声小说并发生成的最大章节数",
+            },
+            FieldMeta {
+                name: "audiobook_tts_provider",
+                description: "TTS 服务类型，可选 edge/third_party",
+            },
+            FieldMeta {
+                name: "audiobook_tts_api_url",
+                description: "第三方 TTS API 地址（可填写本地服务，如 http://localhost:8000）",
+            },
+            FieldMeta {
+                name: "audiobook_tts_api_token",
+                description: "第三方 TTS API Token（如无可留空）",
+            },
+            FieldMeta {
+                name: "audiobook_tts_model",
+                description: "第三方 TTS 模型名称或 ID",
             },
             FieldMeta {
                 name: "save_path",
@@ -560,6 +588,14 @@ fn default_audiobook_format() -> String {
 
 fn default_audiobook_concurrency() -> usize {
     24
+}
+
+fn default_audiobook_tts_provider() -> String {
+    "edge".to_string()
+}
+
+fn default_string() -> String {
+    String::new()
 }
 
 fn default_segment_comments_top_n() -> usize {

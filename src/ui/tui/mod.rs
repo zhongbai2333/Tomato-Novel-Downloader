@@ -53,8 +53,8 @@ use crate::download::downloader::{BookMeta, ChapterRange, DownloadPlan, Progress
 use crate::prewarm_state;
 
 pub(super) use config_model::{
-    ConfigCategory, ConfigEntry, apply_cfg_edit, build_config_categories, cfg_field_is_bool,
-    current_cfg_value, start_cfg_edit,
+    AUDIOBOOK_VOICE_PRESETS, ConfigCategory, ConfigEntry, apply_cfg_edit, build_config_categories,
+    cfg_combo_presets, cfg_field_is_bool, cfg_field_is_combo, current_cfg_value, start_cfg_edit,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +87,12 @@ pub(super) enum MenuAction {
 enum ConfigFocus {
     Category,
     Entry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConfigComboFocus {
+    List,
+    Input,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,9 +201,13 @@ pub(super) struct App {
     cfg_editing: Option<(usize, usize)>,
     cfg_edit_buffer: String,
     cfg_bool_state: ListState,
+    cfg_combo_state: ListState,
+    cfg_combo_focus: ConfigComboFocus,
     last_config_layout: Option<[Rect; 3]>,
     last_config_button: Option<Rect>,
     last_config_bool_area: Option<Rect>,
+    last_config_combo_list_area: Option<Rect>,
+    last_config_combo_input_area: Option<Rect>,
 
     // segment comments confirmation modal (to avoid accidental enable)
     segment_comments_confirm_open: bool,
@@ -305,6 +315,8 @@ impl App {
         cfg_button_state.select(None);
         let mut cfg_bool_state = ListState::default();
         cfg_bool_state.select(Some(0));
+        let mut cfg_combo_state = ListState::default();
+        cfg_combo_state.select(Some(0));
         let mut preview_buttons = ListState::default();
         preview_buttons.select(Some(0));
 
@@ -335,9 +347,13 @@ impl App {
             cfg_editing: None,
             cfg_edit_buffer: String::new(),
             cfg_bool_state,
+            cfg_combo_state,
+            cfg_combo_focus: ConfigComboFocus::List,
             last_config_layout: None,
             last_config_button: None,
             last_config_bool_area: None,
+            last_config_combo_list_area: None,
+            last_config_combo_input_area: None,
             segment_comments_confirm_open: false,
             segment_comments_confirm_ctx: None,
             segment_comments_confirm_state,

@@ -104,11 +104,13 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
-                let editing_bool = app
+                let entry = app
                     .cfg_categories
                     .get(cat_idx)
-                    .and_then(|c| c.entries.get(entry_idx))
-                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+                    .and_then(|c| c.entries.get(entry_idx));
+                let editing_bool = entry.is_some_and(|e| super::cfg_field_is_bool(e.field));
+                let combo_presets = entry.and_then(|e| super::cfg_combo_presets(e.field));
+                let editing_combo = combo_presets.is_some();
                 match key.code {
                     KeyCode::Esc => {
                         app.cfg_editing = None;
@@ -144,6 +146,14 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
                                 return Ok(());
                             }
                         }
+                        if editing_combo
+                            && app.cfg_combo_focus == ConfigComboFocus::List
+                            && let Some(presets) = combo_presets
+                            && let Some(sel) = app.cfg_combo_state.selected()
+                            && let Some(preset) = presets.get(sel)
+                        {
+                            app.cfg_edit_buffer = preset.name.to_string();
+                        }
                         if let Err(err) = super::apply_cfg_edit(app, cat_idx, entry_idx) {
                             app.status = format!("保存失败: {err}");
                         } else {
@@ -157,6 +167,49 @@ pub(super) fn handle_event_config(app: &mut App, event: Event) -> Result<()> {
                         let cur = app.cfg_bool_state.selected().unwrap_or(0);
                         let next = if cur == 0 { 1 } else { 0 };
                         app.cfg_bool_state.select(Some(next));
+                    }
+                    KeyCode::Up | KeyCode::Down if editing_combo => {
+                        if let Some(presets) = combo_presets
+                            && app.cfg_combo_focus == ConfigComboFocus::List
+                            && !presets.is_empty()
+                        {
+                            let cur = app.cfg_combo_state.selected().unwrap_or(0);
+                            let next = if matches!(key.code, KeyCode::Up) {
+                                cur.saturating_sub(1)
+                            } else {
+                                (cur + 1).min(presets.len().saturating_sub(1))
+                            };
+                            app.cfg_combo_state.select(Some(next));
+                            if let Some(preset) = presets.get(next) {
+                                app.cfg_edit_buffer = preset.name.to_string();
+                            }
+                        }
+                    }
+                    KeyCode::Tab if editing_combo => {
+                        app.cfg_combo_focus = match app.cfg_combo_focus {
+                            ConfigComboFocus::List => ConfigComboFocus::Input,
+                            ConfigComboFocus::Input => ConfigComboFocus::List,
+                        };
+                    }
+                    KeyCode::Backspace if editing_combo => {
+                        if app.cfg_combo_focus == ConfigComboFocus::Input {
+                            app.cfg_edit_buffer.pop();
+                        }
+                    }
+                    KeyCode::Char(c) if editing_combo => {
+                        if app.cfg_combo_focus == ConfigComboFocus::List {
+                            app.cfg_combo_focus = ConfigComboFocus::Input;
+                            if let Some(presets) = combo_presets
+                                && let Some(sel) = app.cfg_combo_state.selected()
+                                && let Some(preset) = presets.get(sel)
+                                && app.cfg_edit_buffer.trim() == preset.name
+                            {
+                                app.cfg_edit_buffer.clear();
+                            }
+                        }
+                        if app.cfg_combo_focus == ConfigComboFocus::Input {
+                            app.cfg_edit_buffer.push(c);
+                        }
                     }
                     KeyCode::Backspace if !editing_bool => {
                         app.cfg_edit_buffer.pop();
@@ -238,11 +291,13 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
 
             // When editing a bool, wheel toggles the True/False selector.
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
-                let editing_bool = app
+                let entry = app
                     .cfg_categories
                     .get(cat_idx)
-                    .and_then(|c| c.entries.get(entry_idx))
-                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+                    .and_then(|c| c.entries.get(entry_idx));
+                let editing_bool = entry.is_some_and(|e| super::cfg_field_is_bool(e.field));
+                let combo_presets = entry.and_then(|e| super::cfg_combo_presets(e.field));
+                let editing_combo = combo_presets.is_some();
                 if editing_bool
                     && let Some(bool_area) = app.last_config_bool_area
                     && pos_in(bool_area, me.column, me.row)
@@ -251,6 +306,27 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
                     let next = if cur == 0 { 1 } else { 0 };
                     app.cfg_bool_state.select(Some(next));
                     app.cfg_edit_buffer = if next == 0 { "true" } else { "false" }.to_string();
+                    return Ok(());
+                }
+
+                if editing_combo
+                    && let Some(list_area) = app.last_config_combo_list_area
+                    && pos_in(list_area, me.column, me.row)
+                    && let Some(presets) = combo_presets
+                    && !presets.is_empty()
+                {
+                    let cur = app.cfg_combo_state.selected().unwrap_or(0);
+                    let next = if up {
+                        cur.saturating_sub(1)
+                    } else {
+                        (cur + 1).min(presets.len().saturating_sub(1))
+                    };
+                    app.cfg_combo_state.select(Some(next));
+                    if app.cfg_combo_focus == ConfigComboFocus::List
+                        && let Some(preset) = presets.get(next)
+                    {
+                        app.cfg_edit_buffer = preset.name.to_string();
+                    }
                     return Ok(());
                 }
             }
@@ -287,11 +363,13 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
         }
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
-                let editing_bool = app
+                let entry = app
                     .cfg_categories
                     .get(cat_idx)
-                    .and_then(|c| c.entries.get(entry_idx))
-                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+                    .and_then(|c| c.entries.get(entry_idx));
+                let editing_bool = entry.is_some_and(|e| super::cfg_field_is_bool(e.field));
+                let combo_presets = entry.and_then(|e| super::cfg_combo_presets(e.field));
+                let editing_combo = combo_presets.is_some();
 
                 if editing_bool
                     && let Some(bool_area) = app.last_config_bool_area
@@ -330,6 +408,33 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
                         }
                     }
                     return Ok(());
+                }
+
+                if editing_combo {
+                    if let Some(list_area) = app.last_config_combo_list_area
+                        && pos_in(list_area, me.column, me.row)
+                        && let Some(presets) = combo_presets
+                        && let Some(idx) = super::list_index_from_mouse_row(
+                            list_area,
+                            me.row,
+                            &app.cfg_combo_state,
+                            presets.len(),
+                        )
+                    {
+                        app.cfg_combo_state.select(Some(idx));
+                        app.cfg_combo_focus = ConfigComboFocus::List;
+                        if let Some(preset) = presets.get(idx) {
+                            app.cfg_edit_buffer = preset.name.to_string();
+                        }
+                        return Ok(());
+                    }
+
+                    if let Some(input_area) = app.last_config_combo_input_area
+                        && pos_in(input_area, me.column, me.row)
+                    {
+                        app.cfg_combo_focus = ConfigComboFocus::Input;
+                        return Ok(());
+                    }
                 }
 
                 // 编辑中时，点击其他区域不触发选择/跳转
@@ -403,11 +508,13 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
             }
 
             if let Some((cat_idx, entry_idx)) = app.cfg_editing {
-                let editing_bool = app
+                let entry = app
                     .cfg_categories
                     .get(cat_idx)
-                    .and_then(|c| c.entries.get(entry_idx))
-                    .is_some_and(|e| super::cfg_field_is_bool(e.field));
+                    .and_then(|c| c.entries.get(entry_idx));
+                let editing_bool = entry.is_some_and(|e| super::cfg_field_is_bool(e.field));
+                let combo_presets = entry.and_then(|e| super::cfg_combo_presets(e.field));
+                let editing_combo = combo_presets.is_some();
 
                 if editing_bool
                     && let Some(bool_area) = app.last_config_bool_area
@@ -417,6 +524,21 @@ pub(super) fn handle_mouse_config(app: &mut App, me: event::MouseEvent) -> Resul
                     if idx < 2 {
                         app.cfg_bool_state.select(Some(idx));
                     }
+                    return Ok(());
+                }
+
+                if editing_combo
+                    && let Some(list_area) = app.last_config_combo_list_area
+                    && pos_in(list_area, me.column, me.row)
+                    && let Some(presets) = combo_presets
+                    && let Some(idx) = super::list_index_from_mouse_row(
+                        list_area,
+                        me.row,
+                        &app.cfg_combo_state,
+                        presets.len(),
+                    )
+                {
+                    app.cfg_combo_state.select(Some(idx));
                     return Ok(());
                 }
 
@@ -676,6 +798,14 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
                 .and_then(|c| c.entries.get(entry_idx))
         })
         .is_some_and(|e| super::cfg_field_is_bool(e.field));
+    let editing_combo = app
+        .cfg_editing
+        .and_then(|(cat_idx, entry_idx)| {
+            app.cfg_categories
+                .get(cat_idx)
+                .and_then(|c| c.entries.get(entry_idx))
+        })
+        .is_some_and(|e| super::cfg_field_is_combo(e.field));
 
     if app.cfg_editing.is_some() && editing_bool {
         let status_layout = Layout::default()
@@ -706,8 +836,75 @@ pub(super) fn draw_config(frame: &mut ratatui::Frame, app: &mut App) {
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title("状态"));
         frame.render_widget(messages, status_layout[1]);
+        app.last_config_combo_list_area = None;
+        app.last_config_combo_input_area = None;
+    } else if app.cfg_editing.is_some() && editing_combo {
+        let status_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(5), Constraint::Min(3)])
+            .split(footer[1]);
+
+        let presets = app
+            .cfg_editing
+            .and_then(|(cat_idx, entry_idx)| {
+                app.cfg_categories
+                    .get(cat_idx)
+                    .and_then(|c| c.entries.get(entry_idx))
+            })
+            .and_then(|e| super::cfg_combo_presets(e.field))
+            .unwrap_or(super::AUDIOBOOK_VOICE_PRESETS);
+
+        let list_items: Vec<ListItem> = if presets.is_empty() {
+            vec![ListItem::new("无预设")]
+        } else {
+            presets.iter().map(|p| ListItem::new(p.label)).collect()
+        };
+
+        let list_highlight = if app.cfg_combo_focus == ConfigComboFocus::List {
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::LightCyan)
+        };
+
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("发音人预设(↑↓/Tab 切换)"),
+            )
+            .highlight_style(list_highlight)
+            .highlight_symbol(">> ");
+        app.last_config_combo_list_area = Some(status_layout[0]);
+        frame.render_stateful_widget(list, status_layout[0], &mut app.cfg_combo_state);
+
+        let input_title = if app.cfg_combo_focus == ConfigComboFocus::Input {
+            "自定义输入(Enter 保存)"
+        } else {
+            "自定义输入(Tab 进入)"
+        };
+        let input_border = if app.cfg_combo_focus == ConfigComboFocus::Input {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        let input = Paragraph::new(app.cfg_edit_buffer.clone())
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(input_title)
+                    .border_style(input_border),
+            );
+        app.last_config_combo_input_area = Some(status_layout[1]);
+        frame.render_widget(input, status_layout[1]);
+
+        app.last_config_bool_area = None;
     } else {
         app.last_config_bool_area = None;
+        app.last_config_combo_list_area = None;
+        app.last_config_combo_input_area = None;
 
         if app.cfg_editing.is_some() {
             msg_lines.push(Line::from("编辑中: 回车保存，Esc 取消。"));

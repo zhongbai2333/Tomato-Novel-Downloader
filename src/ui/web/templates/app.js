@@ -239,6 +239,286 @@ async function saveConfig() {
   });
 }
 
+async function refreshRawConfig() {
+  const data = await j('/api/config/raw');
+  const ta = document.getElementById('cfgRaw');
+  const msg = document.getElementById('cfgRawMsg');
+  if (ta) ta.value = (data.yaml || '').toString();
+  if (msg) msg.textContent = data.generated ? '已生成默认配置（未找到配置文件）' : '';
+}
+
+async function saveRawConfig() {
+  const ta = document.getElementById('cfgRaw');
+  const yaml = (ta?.value || '').toString();
+  await j('/api/config/raw', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ yaml })
+  });
+}
+
+let currentFullConfig = null;
+
+const FULL_CONFIG_SCHEMA = [
+  {
+    title: '基础与格式',
+    fields: [
+      { key: 'save_path', label: '保存路径', type: 'text' },
+      { key: 'novel_format', label: '小说格式', type: 'select', options: [
+        { value: 'txt', label: 'txt' },
+        { value: 'epub', label: 'epub' }
+      ] },
+      { key: 'first_line_indent_em', label: '首行缩进(em)', type: 'number', parse: 'float', step: '0.1', min: '0' },
+      { key: 'bulk_files', label: '散装文件保存', type: 'bool' },
+      { key: 'auto_clear_dump', label: '自动清理缓存', type: 'bool' },
+      { key: 'auto_open_downloaded_files', label: '下载完成后自动打开', type: 'bool' },
+      { key: 'allow_overwrite_files', label: '允许覆盖已存在文件', type: 'bool' },
+      { key: 'preferred_book_name_field', label: '优先书名字段', type: 'select', options: [
+        { value: 'book_name', label: '默认书名' },
+        { value: 'original_book_name', label: '原始书名' },
+        { value: 'book_short_name', label: '短书名' }
+      ] },
+      { key: 'old_cli', label: '旧版 CLI UI', type: 'bool' },
+    ]
+  },
+  {
+    title: '网络与调度',
+    fields: [
+      { key: 'max_workers', label: '最大线程数', type: 'number', parse: 'int', min: '1' },
+      { key: 'request_timeout', label: '请求超时(s)', type: 'number', parse: 'int', min: '1' },
+      { key: 'max_retries', label: '最大重试次数', type: 'number', parse: 'int', min: '0' },
+      { key: 'min_connect_timeout', label: '最小连接超时(s)', type: 'number', parse: 'float', step: '0.1', min: '0' },
+      { key: 'min_wait_time', label: '最小等待时间(ms)', type: 'number', parse: 'int', min: '0' },
+      { key: 'max_wait_time', label: '最大等待时间(ms)', type: 'number', parse: 'int', min: '0' },
+    ]
+  },
+  {
+    title: 'API',
+    fields: [
+      { key: 'use_official_api', label: '使用官方 API', type: 'bool' },
+      { key: 'api_endpoints', label: 'API 列表', type: 'list', placeholder: '每行一条或用逗号分隔' },
+    ]
+  },
+  {
+    title: '段评',
+    fields: [
+      { key: 'enable_segment_comments', label: '启用段评', type: 'bool' },
+      { key: 'segment_comments_top_n', label: '每段评论数上限', type: 'number', parse: 'int', min: '1' },
+      { key: 'segment_comments_workers', label: '段评并发线程数', type: 'number', parse: 'int', min: '1' },
+    ]
+  },
+  {
+    title: '媒体下载',
+    fields: [
+      { key: 'download_comment_images', label: '下载评论图片', type: 'bool' },
+      { key: 'download_comment_avatars', label: '下载评论头像', type: 'bool' },
+      { key: 'media_download_workers', label: '媒体下载线程数', type: 'number', parse: 'int', min: '1' },
+      { key: 'blocked_media_domains', label: '阻止的图片域名', type: 'list', placeholder: '每行一个域名' },
+      { key: 'force_convert_images_to_jpeg', label: '强制转成 JPEG', type: 'bool' },
+      { key: 'jpeg_retry_convert', label: '失败重试再转 JPEG', type: 'bool' },
+      { key: 'jpeg_quality', label: 'JPEG 质量(0-100)', type: 'number', parse: 'int', min: '0', max: '100' },
+      { key: 'convert_heic_to_jpeg', label: 'HEIC 转 JPEG', type: 'bool' },
+      { key: 'keep_heic_original', label: '保留 HEIC 原图', type: 'bool' },
+      { key: 'media_limit_per_chapter', label: '单章节媒体上限', type: 'number', parse: 'int', min: '0' },
+      { key: 'media_max_dimension_px', label: '媒体最大尺寸(px)', type: 'number', parse: 'int', min: '0' },
+    ]
+  },
+  {
+    title: '有声书',
+    fields: [
+      { key: 'enable_audiobook', label: '启用有声书', type: 'bool' },
+      { key: 'audiobook_voice', label: '发音人', type: 'voice' },
+      { key: 'audiobook_tts_provider', label: 'TTS 服务类型', type: 'select', options: [
+        { value: 'edge', label: 'edge' },
+        { value: 'third_party', label: 'third_party' }
+      ] },
+      { key: 'audiobook_tts_api_url', label: '第三方 TTS API 地址', type: 'text' },
+      { key: 'audiobook_tts_api_token', label: '第三方 TTS Token', type: 'text' },
+      { key: 'audiobook_tts_model', label: '第三方 TTS 模型', type: 'text' },
+      { key: 'audiobook_rate', label: '语速调整', type: 'text' },
+      { key: 'audiobook_volume', label: '音量调整', type: 'text' },
+      { key: 'audiobook_pitch', label: '音调调整', type: 'text' },
+      { key: 'audiobook_format', label: '输出格式', type: 'select', options: [
+        { value: 'mp3', label: 'mp3' },
+        { value: 'wav', label: 'wav' }
+      ] },
+      { key: 'audiobook_concurrency', label: '并发生成章节数', type: 'number', parse: 'int', min: '1' },
+    ]
+  },
+];
+
+const AUDIOBOOK_VOICE_PRESETS = [
+  { value: 'zh-CN-XiaoxiaoNeural', label: 'zh-CN-XiaoxiaoNeural (女)' },
+  { value: 'zh-CN-XiaoyiNeural', label: 'zh-CN-XiaoyiNeural (女)' },
+  { value: 'zh-CN-YunjianNeural', label: 'zh-CN-YunjianNeural (男)' },
+  { value: 'zh-CN-YunxiNeural', label: 'zh-CN-YunxiNeural (男)' },
+  { value: 'zh-CN-YunxiaNeural', label: 'zh-CN-YunxiaNeural (男)' },
+  { value: 'zh-CN-YunyangNeural', label: 'zh-CN-YunyangNeural (男)' },
+  { value: 'zh-CN-liaoning-XiaobeiNeural', label: 'zh-CN-liaoning-XiaobeiNeural (女)' },
+  { value: 'zh-CN-shaanxi-XiaoniNeural', label: 'zh-CN-shaanxi-XiaoniNeural (女)' },
+  { value: 'zh-HK-HiuGaaiNeural', label: 'zh-HK-HiuGaaiNeural (女)' },
+  { value: 'zh-HK-HiuMaanNeural', label: 'zh-HK-HiuMaanNeural (女)' },
+  { value: 'zh-HK-WanLungNeural', label: 'zh-HK-WanLungNeural (男)' },
+  { value: 'zh-TW-HsiaoChenNeural', label: 'zh-TW-HsiaoChenNeural (女)' },
+];
+
+function showConfigModal(show) {
+  const modal = document.getElementById('configModal');
+  if (!modal) return;
+  modal.classList.toggle('hidden', !show);
+  document.body.style.overflow = show ? 'hidden' : '';
+}
+
+function renderFullConfigForm(cfg) {
+  const body = document.getElementById('configFullBody');
+  if (!body) return;
+  body.innerHTML = '';
+
+  for (const section of FULL_CONFIG_SCHEMA) {
+    const header = document.createElement('div');
+    header.className = 'configSection';
+    header.innerHTML = `<h4>${esc(section.title)}</h4>`;
+    body.appendChild(header);
+
+    for (const field of section.fields) {
+      const row = document.createElement('label');
+      row.className = 'row';
+
+      const label = document.createElement('span');
+      label.className = 'k';
+      label.textContent = field.label;
+      row.appendChild(label);
+
+      let input;
+      if (field.type === 'bool') {
+        input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = !!cfg[field.key];
+      } else if (field.type === 'voice') {
+        input = document.createElement('div');
+        input.className = 'voiceRow';
+        const select = document.createElement('select');
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '自定义...';
+        select.appendChild(emptyOpt);
+        for (const opt of AUDIOBOOK_VOICE_PRESETS) {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          select.appendChild(o);
+        }
+
+        const text = document.createElement('input');
+        text.type = 'text';
+        text.value = (cfg[field.key] ?? '').toString();
+        text.placeholder = '输入或选择发音人';
+        text.dataset.key = field.key;
+        text.dataset.type = 'text';
+        text.dataset.voiceInput = '1';
+
+        const current = (cfg[field.key] ?? '').toString();
+        const preset = AUDIOBOOK_VOICE_PRESETS.find(p => p.value === current);
+        select.value = preset ? preset.value : '';
+
+        select.addEventListener('change', () => {
+          if (select.value) text.value = select.value;
+        });
+
+        input.appendChild(select);
+        input.appendChild(text);
+      } else if (field.type === 'select') {
+        input = document.createElement('select');
+        for (const opt of field.options || []) {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          input.appendChild(o);
+        }
+        input.value = (cfg[field.key] ?? '').toString();
+      } else if (field.type === 'list') {
+        input = document.createElement('textarea');
+        input.value = Array.isArray(cfg[field.key]) ? cfg[field.key].join('\n') : '';
+        input.placeholder = field.placeholder || '';
+      } else if (field.type === 'number') {
+        input = document.createElement('input');
+        input.type = 'number';
+        if (field.step) input.step = field.step;
+        if (field.min) input.min = field.min;
+        if (field.max) input.max = field.max;
+        input.value = (cfg[field.key] ?? '').toString();
+      } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = (cfg[field.key] ?? '').toString();
+        if (field.placeholder) input.placeholder = field.placeholder;
+      }
+
+      if (field.type !== 'voice') {
+        input.dataset.key = field.key;
+        input.dataset.type = field.type;
+        if (field.parse) input.dataset.parse = field.parse;
+      }
+
+      if (field.type === 'list') {
+        input.classList.add('cfgList');
+      }
+
+      row.appendChild(input);
+      body.appendChild(row);
+    }
+  }
+}
+
+async function openFullConfigModal() {
+  const msg = document.getElementById('cfgFullMsg');
+  if (msg) msg.textContent = '加载中…';
+  const cfg = await j('/api/config/full');
+  currentFullConfig = cfg || {};
+  renderFullConfigForm(currentFullConfig);
+  if (msg) msg.textContent = '';
+  showConfigModal(true);
+}
+
+function collectFullConfig() {
+  const out = { ...(currentFullConfig || {}) };
+  const body = document.getElementById('configFullBody');
+  if (!body) return out;
+  const inputs = body.querySelectorAll('[data-key]');
+  for (const el of inputs) {
+    const key = el.dataset.key;
+    const type = el.dataset.type;
+    if (!key || !type) continue;
+    if (type === 'bool') {
+      out[key] = !!el.checked;
+    } else if (type === 'list') {
+      const raw = (el.value || '').toString();
+      out[key] = raw
+        .split(/[\n,;]/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+    } else if (type === 'number') {
+      const raw = (el.value || '').toString().trim();
+      if (!raw) continue;
+      const parse = el.dataset.parse || 'int';
+      const val = parse === 'float' ? parseFloat(raw) : parseInt(raw, 10);
+      if (!Number.isNaN(val)) out[key] = val;
+    } else {
+      out[key] = (el.value || '').toString();
+    }
+  }
+  return out;
+}
+
+async function saveFullConfig() {
+  const cfg = collectFullConfig();
+  await j('/api/config/full', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(cfg)
+  });
+}
+
 async function refreshLibrary() {
   const qs = libraryPath ? `?path=${encodeURIComponent(libraryPath)}` : '';
   const data = await j(`/api/library${qs}`);
@@ -731,6 +1011,77 @@ function wire() {
     });
   }
 
+  const cfgRawReload = document.getElementById('cfgRawReload');
+  if (cfgRawReload) {
+    cfgRawReload.addEventListener('click', async () => {
+      const msg = document.getElementById('cfgRawMsg');
+      if (msg) msg.textContent = '加载中…';
+      try {
+        await refreshRawConfig();
+        if (msg) msg.textContent = '已加载';
+      } catch (err) {
+        if (msg) msg.textContent = '加载失败';
+        alert(err);
+      }
+    });
+  }
+
+  const cfgRawSave = document.getElementById('cfgRawSave');
+  if (cfgRawSave) {
+    cfgRawSave.addEventListener('click', async () => {
+      const msg = document.getElementById('cfgRawMsg');
+      if (msg) msg.textContent = '保存中…';
+      try {
+        await saveRawConfig();
+        await refreshConfig();
+        await refreshRawConfig();
+        if (msg) msg.textContent = '已保存';
+      } catch (err) {
+        if (msg) msg.textContent = '保存失败';
+        alert(err);
+      }
+    });
+  }
+
+  const cfgFullOpen = document.getElementById('cfgFullOpen');
+  if (cfgFullOpen) {
+    cfgFullOpen.addEventListener('click', async () => {
+      try {
+        await openFullConfigModal();
+      } catch (err) {
+        alert(err);
+      }
+    });
+  }
+
+  const cfgFullSave = document.getElementById('cfgFullSave');
+  if (cfgFullSave) {
+    cfgFullSave.addEventListener('click', async () => {
+      const msg = document.getElementById('cfgFullMsg');
+      if (msg) msg.textContent = '保存中…';
+      try {
+        await saveFullConfig();
+        await refreshConfig();
+        await refreshRawConfig();
+        if (msg) msg.textContent = '已保存';
+        showConfigModal(false);
+      } catch (err) {
+        if (msg) msg.textContent = '保存失败';
+        alert(err);
+      }
+    });
+  }
+
+  const cfgFullClose = document.getElementById('cfgFullClose');
+  if (cfgFullClose) {
+    cfgFullClose.addEventListener('click', () => showConfigModal(false));
+  }
+
+  const cfgFullCancel = document.getElementById('cfgFullCancel');
+  if (cfgFullCancel) {
+    cfgFullCancel.addEventListener('click', () => showConfigModal(false));
+  }
+
   document.addEventListener('click', async (e) => {
     const t = e.target;
     if (t && t.classList && t.classList.contains('startDownload')) {
@@ -758,12 +1109,19 @@ function wire() {
         return;
       }
       
+      const cfgModal = document.getElementById('configModal');
+      if (cfgModal && !cfgModal.classList.contains('hidden')) {
+        showConfigModal(false);
+        return;
+      }
+
       const loginModal = document.getElementById('loginModal');
       if (loginModal && !loginModal.classList.contains('hidden')) {
         showLogin(false);
       }
     }
   });
+
   
   // Wire up preview modal buttons
   const previewConfirm = document.getElementById('previewConfirm');
@@ -788,6 +1146,7 @@ async function boot() {
     await refreshAppUpdate(false).catch(() => {});
   }
   await refreshConfig();
+  await refreshRawConfig();
   await refreshUpdates();
   await refreshJobs();
   await refreshLibrary();

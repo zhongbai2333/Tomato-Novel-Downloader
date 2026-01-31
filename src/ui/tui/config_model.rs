@@ -38,6 +38,10 @@ pub(in crate::ui) enum ConfigField {
     AudiobookPitch,
     AudiobookFormat,
     AudiobookConcurrency,
+    AudiobookTtsProvider,
+    AudiobookTtsApiUrl,
+    AudiobookTtsApiToken,
+    AudiobookTtsModel,
     SegmentCommentsTopN,
     SegmentCommentsWorkers,
     DownloadCommentImages,
@@ -63,6 +67,74 @@ pub(in crate::ui) struct ConfigEntry {
 pub(in crate::ui) struct ConfigCategory {
     pub(in crate::ui) title: &'static str,
     pub(in crate::ui) entries: Vec<ConfigEntry>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::ui) struct VoicePreset {
+    pub(in crate::ui) name: &'static str,
+    pub(in crate::ui) label: &'static str,
+}
+
+pub(in crate::ui) const AUDIOBOOK_VOICE_PRESETS: &[VoicePreset] = &[
+    VoicePreset {
+        name: "zh-CN-XiaoxiaoNeural",
+        label: "zh-CN-XiaoxiaoNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-CN-XiaoyiNeural",
+        label: "zh-CN-XiaoyiNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-CN-YunjianNeural",
+        label: "zh-CN-YunjianNeural (男)",
+    },
+    VoicePreset {
+        name: "zh-CN-YunxiNeural",
+        label: "zh-CN-YunxiNeural (男)",
+    },
+    VoicePreset {
+        name: "zh-CN-YunxiaNeural",
+        label: "zh-CN-YunxiaNeural (男)",
+    },
+    VoicePreset {
+        name: "zh-CN-YunyangNeural",
+        label: "zh-CN-YunyangNeural (男)",
+    },
+    VoicePreset {
+        name: "zh-CN-liaoning-XiaobeiNeural",
+        label: "zh-CN-liaoning-XiaobeiNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-CN-shaanxi-XiaoniNeural",
+        label: "zh-CN-shaanxi-XiaoniNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-HK-HiuGaaiNeural",
+        label: "zh-HK-HiuGaaiNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-HK-HiuMaanNeural",
+        label: "zh-HK-HiuMaanNeural (女)",
+    },
+    VoicePreset {
+        name: "zh-HK-WanLungNeural",
+        label: "zh-HK-WanLungNeural (男)",
+    },
+    VoicePreset {
+        name: "zh-TW-HsiaoChenNeural",
+        label: "zh-TW-HsiaoChenNeural (女)",
+    },
+];
+
+pub(in crate::ui) fn cfg_field_is_combo(field: ConfigField) -> bool {
+    matches!(field, ConfigField::AudiobookVoice)
+}
+
+pub(in crate::ui) fn cfg_combo_presets(field: ConfigField) -> Option<&'static [VoicePreset]> {
+    match field {
+        ConfigField::AudiobookVoice => Some(AUDIOBOOK_VOICE_PRESETS),
+        _ => None,
+    }
 }
 
 pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
@@ -228,6 +300,22 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                     field: ConfigField::AudiobookVoice,
                 },
                 ConfigEntry {
+                    title: "TTS 服务类型(edge/third_party)",
+                    field: ConfigField::AudiobookTtsProvider,
+                },
+                ConfigEntry {
+                    title: "第三方 TTS API 地址",
+                    field: ConfigField::AudiobookTtsApiUrl,
+                },
+                ConfigEntry {
+                    title: "第三方 TTS Token",
+                    field: ConfigField::AudiobookTtsApiToken,
+                },
+                ConfigEntry {
+                    title: "第三方 TTS 模型",
+                    field: ConfigField::AudiobookTtsModel,
+                },
+                ConfigEntry {
                     title: "语速调整",
                     field: ConfigField::AudiobookRate,
                 },
@@ -281,6 +369,10 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
         ConfigField::AudiobookPitch => app.config.audiobook_pitch.clone(),
         ConfigField::AudiobookFormat => app.config.audiobook_format.clone(),
         ConfigField::AudiobookConcurrency => app.config.audiobook_concurrency.to_string(),
+        ConfigField::AudiobookTtsProvider => app.config.audiobook_tts_provider.clone(),
+        ConfigField::AudiobookTtsApiUrl => app.config.audiobook_tts_api_url.clone(),
+        ConfigField::AudiobookTtsApiToken => app.config.audiobook_tts_api_token.clone(),
+        ConfigField::AudiobookTtsModel => app.config.audiobook_tts_model.clone(),
         ConfigField::SegmentCommentsTopN => app.config.segment_comments_top_n.to_string(),
         ConfigField::SegmentCommentsWorkers => app.config.segment_comments_workers.to_string(),
         ConfigField::DownloadCommentImages => app.config.download_comment_images.to_string(),
@@ -363,6 +455,16 @@ pub(in crate::ui) fn start_cfg_edit(app: &mut App) {
             None => Some(0),
         };
         app.cfg_bool_state.select(selected);
+    }
+    if cfg_field_is_combo(entry.field) {
+        app.cfg_combo_focus = super::ConfigComboFocus::List;
+        if let Some(presets) = cfg_combo_presets(entry.field) {
+            let idx = presets
+                .iter()
+                .position(|p| p.name.eq_ignore_ascii_case(&app.cfg_edit_buffer))
+                .or(Some(0));
+            app.cfg_combo_state.select(idx);
+        }
     }
     app.status = format!("正在编辑 [{}]: {}", category.title, entry.title);
 }
@@ -534,6 +636,18 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 return Ok(());
             }
             app.config.audiobook_concurrency = val;
+        }
+        ConfigField::AudiobookTtsProvider => {
+            app.config.audiobook_tts_provider = raw.to_string();
+        }
+        ConfigField::AudiobookTtsApiUrl => {
+            app.config.audiobook_tts_api_url = raw.to_string();
+        }
+        ConfigField::AudiobookTtsApiToken => {
+            app.config.audiobook_tts_api_token = raw.to_string();
+        }
+        ConfigField::AudiobookTtsModel => {
+            app.config.audiobook_tts_model = raw.to_string();
         }
         ConfigField::SegmentCommentsTopN => {
             let val: usize = raw.parse().map_err(|_| anyhow!("请输入整数"))?;

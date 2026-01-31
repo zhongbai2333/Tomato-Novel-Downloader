@@ -27,12 +27,22 @@ button.primary:hover{background:#0a53e6}
 .small{font-size:12px;color:var(--muted)}
 .actions a{margin-right:10px}
 
+.sectionTitle{margin:14px 0 6px 0;font-size:16px}
+.configRaw textarea{width:100%;min-height:320px;resize:vertical;padding:10px 12px;border-radius:8px;border:1px solid var(--border);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5}
+
 .prewrap{white-space:pre-wrap;word-break:break-word}
 
 .modal{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:18px;z-index:1000}
 .modal.preview{background:rgba(0,0,0,0.5)}
 .modalCard{width:min(520px, 100%);border:1px solid var(--border);border-radius:12px;background:var(--card);padding:14px}
 .hidden{display:none}
+
+.configCard{width:min(980px, 100%);max-height:92vh;overflow-y:auto}
+.configModalHeader{justify-content:space-between}
+.configSection{margin-top:12px;padding-top:8px;border-top:1px solid #eee}
+.voiceRow{display:flex;gap:8px;align-items:center;flex:1}
+.voiceRow select{flex:0 0 220px}
+.voiceRow input{flex:1}
 
 .previewCard{width:min(720px, 100%);max-height:90vh;overflow-y:auto}
 .error{color:#d32f2f}

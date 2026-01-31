@@ -209,4 +209,5 @@ async fn run_async(
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+    println!("Stoping Server...");
 }

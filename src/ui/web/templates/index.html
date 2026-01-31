@@ -74,10 +74,11 @@
 
           <div class="row">
             <button type="submit">保存配置</button>
+            <button id="cfgFullOpen" type="button">完整修改</button>
             <span id="configMsg" class="k"></span>
           </div>
         </form>
-        <div class="small">注：这里只开放了与下载输出相关的部分配置；保存会写回 <code>config.yml</code>。</div>
+        <div class="small">注：这里只开放了与下载输出相关的部分配置；完整配置请点击“完整修改”。</div>
       </section>
 
       <section id="search" class="card">
@@ -178,6 +179,32 @@
           <button type="submit">登录</button>
         </form>
         <div id="loginMsg" class="k"></div>
+      </div>
+    </div>
+
+    <div id="configModal" class="modal hidden">
+      <div class="modalCard configCard">
+        <div class="row configModalHeader">
+          <h3>完整配置</h3>
+          <button id="cfgFullClose" type="button">关闭</button>
+        </div>
+        <div class="small">修改后会写回 <code>config.yml</code>，并同步更新 YAML 内容。</div>
+        <div id="configFullBody" class="formCol"></div>
+        <h3 class="sectionTitle">YAML 编辑</h3>
+        <div class="small">支持直接编辑 YAML；保存后会重新生成 <code>config.yml</code>（带注释与统一排序）。</div>
+        <div class="configRaw">
+          <textarea id="cfgRaw" spellcheck="false" placeholder="加载中..."></textarea>
+          <div class="row">
+            <button id="cfgRawReload" type="button">重新加载</button>
+            <button id="cfgRawSave" type="button" class="primary">保存 YAML</button>
+            <span id="cfgRawMsg" class="k"></span>
+          </div>
+        </div>
+        <div class="row">
+          <button id="cfgFullSave" type="button" class="primary">保存</button>
+          <button id="cfgFullCancel" type="button">取消</button>
+          <span id="cfgFullMsg" class="k"></span>
+        </div>
       </div>
     </div>
 
