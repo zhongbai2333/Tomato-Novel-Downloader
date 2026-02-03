@@ -18,6 +18,7 @@ pub(crate) struct BookInfo {
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
     pub chapter_count: Option<usize>,
+    pub finished: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +54,7 @@ pub(crate) type BookInfoParts = (
     Option<String>,
     Option<Vec<String>>,
     Option<usize>,
+    Option<bool>,
 );
 
 impl FanqieWebNetwork {
@@ -122,13 +124,13 @@ impl FanqieWebNetwork {
             Ok(resp) => {
                 if resp.status().as_u16() == 404 {
                     error!("小说ID {} 不存在！", book_id);
-                    return (None, None, None, None, None);
+                    return (None, None, None, None, None, None);
                 }
                 let resp = match resp.error_for_status() {
                     Ok(r) => r,
                     Err(e) => {
                         error!("获取书籍信息失败: {}", e);
-                        return (None, None, None, None, None);
+                        return (None, None, None, None, None, None);
                     }
                 };
 
@@ -141,17 +143,18 @@ impl FanqieWebNetwork {
                             info.description,
                             info.tags,
                             info.chapter_count,
+                            info.finished,
                         )
                     }
                     Err(e) => {
                         error!("获取书籍信息失败: {}", e);
-                        (None, None, None, None, None)
+                        (None, None, None, None, None, None)
                     }
                 }
             }
             Err(e) => {
                 error!("获取书籍信息失败: {}", e);
-                (None, None, None, None, None)
+                (None, None, None, None, None, None)
             }
         }
     }
@@ -265,7 +268,14 @@ impl FanqieWebNetwork {
                 debug!("保存目录缓存失败(忽略): {}", e);
             }
 
-            return Self::parse_chapter_data(&data);
+            if let Some(list) = Self::parse_chapter_data(&data) {
+                return Some(list);
+            }
+
+            last_error = Some("parse chapter list failed".to_string());
+            warn!("获取章节列表失败: 解析章节数组为空");
+            self.sleep_backoff(attempt, retries, &mut backoff, 0.3);
+            continue;
         }
 
         debug!("重试仍失败：{:?}", last_error);
@@ -341,17 +351,72 @@ impl FanqieWebNetwork {
             }
         }
 
-        // 有些接口会是 data.data.list
-        if let Some(arr) = root
-            .get("data")
-            .and_then(|v| v.get("list"))
-            .and_then(Value::as_array)
-        {
-            return Some(arr.clone());
+        // 有些接口会是 data.data.list / data.data.chapterList / data.data.items
+        if let Some(inner) = root.get("data") {
+            for key in [
+                "list",
+                "chapterList",
+                "chapter_list",
+                "items",
+                "item_list",
+                "chapters",
+            ] {
+                if let Some(arr) = inner.get(key).and_then(Value::as_array) {
+                    return Some(arr.clone());
+                }
+            }
         }
 
-        None
+        // 最后兜底：递归扫描 JSON，找到“像章节数组”的最大数组
+        find_chapter_array(root)
     }
+}
+
+fn is_chapter_like_object(map: &serde_json::Map<String, Value>) -> bool {
+    let keys = [
+        "item_id",
+        "itemId",
+        "chapter_id",
+        "chapterId",
+        "catalog_id",
+        "catalogId",
+        "id",
+    ];
+    keys.iter().any(|k| map.contains_key(*k))
+}
+
+fn find_chapter_array(value: &Value) -> Option<Vec<Value>> {
+    fn walk(value: &Value, best: &mut Option<Vec<Value>>) {
+        match value {
+            Value::Array(arr) => {
+                let is_candidate = arr
+                    .iter()
+                    .any(|v| v.as_object().map(is_chapter_like_object).unwrap_or(false));
+                if is_candidate {
+                    let replace = match best {
+                        Some(existing) => arr.len() > existing.len(),
+                        None => true,
+                    };
+                    if replace {
+                        *best = Some(arr.clone());
+                    }
+                }
+                for v in arr {
+                    walk(v, best);
+                }
+            }
+            Value::Object(map) => {
+                for v in map.values() {
+                    walk(v, best);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut best: Option<Vec<Value>> = None;
+    walk(value, &mut best);
+    best
 }
 
 struct ContentParser;
@@ -371,6 +436,7 @@ impl ContentParser {
                 find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
             let chapter_count = find_usize_by_key(&value, ["chapterCount", "chapter_count"]);
             let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"]);
+            let finished = find_finished_by_key(&value);
 
             if book_name.is_some()
                 || author.is_some()
@@ -384,6 +450,40 @@ impl ContentParser {
                     description,
                     tags,
                     chapter_count,
+                    finished,
+                };
+            }
+        }
+
+        // 1.5) 解析 __INITIAL_STATE__
+        if let Some(json_text) = extract_initial_state_json(html)
+            && let Ok(value) = serde_json::from_str::<Value>(&json_text)
+        {
+            let book_name = find_string_by_key(&value, ["bookName", "book_name", "title", "name"]);
+            let author = find_string_by_key(&value, ["authorName", "author", "author_name"]);
+            let description =
+                find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
+            let chapter_count =
+                find_usize_by_key(&value, ["chapterTotal", "chapterCount", "chapter_count"]);
+            let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"])
+                .or_else(|| parse_tags_from_info_label(html));
+            let finished =
+                find_finished_by_key(&value).or_else(|| parse_finished_from_info_label(html));
+
+            if book_name.is_some()
+                || author.is_some()
+                || description.is_some()
+                || chapter_count.is_some()
+                || tags.is_some()
+                || finished.is_some()
+            {
+                return BookInfo {
+                    book_name,
+                    author,
+                    description,
+                    tags,
+                    chapter_count,
+                    finished,
                 };
             }
         }
@@ -397,13 +497,16 @@ impl ContentParser {
             .or_else(|| regex_json_string_field(html, "description"));
         let chapter_count = regex_json_usize_field(html, "chapterCount")
             .or_else(|| regex_json_usize_field(html, "chapter_count"));
+        let tags = parse_tags_from_info_label(html);
+        let finished = parse_finished_from_info_label(html);
 
         BookInfo {
             book_name,
             author,
             description,
-            tags: None,
+            tags,
             chapter_count,
+            finished,
         }
     }
 }
@@ -412,6 +515,13 @@ fn extract_next_data_json(html: &str) -> Option<String> {
     // (?s) 让 . 匹配换行
     let re =
         regex::Regex::new(r#"(?s)<script[^>]*id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>"#).ok()?;
+    let caps = re.captures(html)?;
+    let raw = caps.get(1)?.as_str();
+    Some(raw.trim().to_string())
+}
+
+fn extract_initial_state_json(html: &str) -> Option<String> {
+    let re = regex::Regex::new(r#"(?s)window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;"#).ok()?;
     let caps = re.captures(html)?;
     let raw = caps.get(1)?.as_str();
     Some(raw.trim().to_string())
@@ -442,6 +552,42 @@ fn find_string_array_by_key<const N: usize>(value: &Value, keys: [&str; N]) -> O
         }
     }
     None
+}
+
+fn find_finished_by_key(value: &Value) -> Option<bool> {
+    let keys = [
+        "status",
+        "creationStatus",
+        "creation_status",
+        "serial_status",
+        "finish_status",
+        "finishStatus",
+        "is_finish",
+        "is_finished",
+    ];
+    for key in keys {
+        if let Some(n) = find_first_i64_for_key(value, key)
+            && let Some(b) = map_status_to_finished(key, n)
+        {
+            return Some(b);
+        }
+    }
+    None
+}
+
+fn map_status_to_finished(key: &str, n: i64) -> Option<bool> {
+    match key {
+        "status" | "creationStatus" | "creation_status" | "serial_status" => match n {
+            1 => Some(false),
+            2 => Some(true),
+            _ => None,
+        },
+        _ => match n {
+            1 | 2 => Some(true),
+            0 => Some(false),
+            _ => None,
+        },
+    }
 }
 
 fn find_first_string_for_key(value: &Value, target: &str) -> Option<String> {
@@ -487,6 +633,31 @@ fn find_first_usize_for_key(value: &Value, target: &str) -> Option<usize> {
             None
         }
         Value::Array(arr) => arr.iter().find_map(|v| find_first_usize_for_key(v, target)),
+        _ => None,
+    }
+}
+
+fn find_first_i64_for_key(value: &Value, target: &str) -> Option<i64> {
+    match value {
+        Value::Object(map) => {
+            if let Some(v) = map.get(target) {
+                if let Some(n) = v.as_i64() {
+                    return Some(n);
+                }
+                if let Some(s) = v.as_str()
+                    && let Ok(n) = s.parse::<i64>()
+                {
+                    return Some(n);
+                }
+            }
+            for v in map.values() {
+                if let Some(found) = find_first_i64_for_key(v, target) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        Value::Array(arr) => arr.iter().find_map(|v| find_first_i64_for_key(v, target)),
         _ => None,
     }
 }
@@ -537,6 +708,33 @@ fn regex_json_usize_field(html: &str, field: &str) -> Option<usize> {
     let re = regex::Regex::new(&pattern).ok()?;
     let caps = re.captures(html)?;
     caps.get(1)?.as_str().parse::<usize>().ok()
+}
+
+fn parse_tags_from_info_label(html: &str) -> Option<Vec<String>> {
+    let re =
+        regex::Regex::new(r#"<span[^>]*class=\"info-label-grey\"[^>]*>([^<]+)</span>"#).ok()?;
+    let mut out = Vec::new();
+    for caps in re.captures_iter(html) {
+        let raw = caps.get(1)?.as_str().trim();
+        if !raw.is_empty() {
+            out.push(raw.to_string());
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn parse_finished_from_info_label(html: &str) -> Option<bool> {
+    let re =
+        regex::Regex::new(r#"<span[^>]*class=\"info-label-yellow\"[^>]*>([^<]+)</span>"#).ok()?;
+    let caps = re.captures(html)?;
+    let label = caps.get(1)?.as_str().trim();
+    if label.contains("未完结") || label.contains("连载") {
+        return Some(false);
+    }
+    if label.contains("完结") {
+        return Some(true);
+    }
+    None
 }
 
 fn jitter_seconds(max: f64) -> f64 {

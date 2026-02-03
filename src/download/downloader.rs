@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::{Map, Value};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::base_system::book_paths;
 use crate::base_system::context::Config;
@@ -16,11 +16,10 @@ use crate::base_system::json_extract;
 use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
-#[cfg(not(feature = "official-api"))]
 use crate::network_parser::network::{FanqieWebConfig, FanqieWebNetwork};
 use crate::third_party::content_client::ThirdPartyContentClient;
 use crossbeam_channel as channel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
@@ -1250,12 +1249,35 @@ pub fn prepare_download_plan(
     let (dir_url, _content_urls) = resolve_api_urls(config)?;
     let api_url = dir_url.as_deref();
 
+    // 并行回退：预先尝试 Web 目录/简介（失败不影响主流程）
+    let web_plan = prepare_download_plan_web(config, book_id, meta_hint.clone()).ok();
+
     // 首次获取目录和元数据。
-    let mut dir = directory
-        .fetch_directory_with_cover(book_id, api_url, None)
-        .with_context(|| format!("fetch directory for book_id={book_id}"))?;
+    let mut dir = match directory.fetch_directory_with_cover(book_id, api_url, None) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!(
+                target: "download",
+                book_id,
+                error = %e,
+                "官方 API 获取目录失败，尝试使用 web 回退"
+            );
+            if let Some(plan) = web_plan {
+                return Ok(plan);
+            }
+            return Err(anyhow!(e).context(format!("fetch directory for book_id={book_id}")));
+        }
+    };
 
     if dir.chapters.is_empty() {
+        warn!(
+            target: "download",
+            book_id,
+            "官方 API 目录为空，尝试使用 web 回退"
+        );
+        if let Some(plan) = web_plan {
+            return Ok(plan);
+        }
         return Err(anyhow!("目录为空"));
     }
 
@@ -1269,6 +1291,16 @@ pub fn prepare_download_plan(
         } else {
             merge_meta(merged, search_metadata(book_id).unwrap_or_default())
         };
+
+    if let Some(web_plan) = web_plan.as_ref() {
+        completed_meta = merge_meta(completed_meta, web_plan.meta.clone());
+        completed_meta.tags = merge_tag_lists(&completed_meta.tags, &web_plan.meta.tags);
+        completed_meta.tags =
+            drop_tag_equals_category(&completed_meta.tags, &completed_meta.category);
+        if completed_meta.finished.is_none() {
+            completed_meta.finished = web_plan.meta.finished;
+        }
+    }
 
     // 应用用户配置的书名字段偏好（移到前面，在下载封面之前）
     if let Some(preferred_name) = config.pick_preferred_book_name(&completed_meta) {
@@ -1286,6 +1318,10 @@ pub fn prepare_download_plan(
         }
     }
 
+    if let Some(web_plan) = web_plan.as_ref() {
+        dir.chapters = merge_chapters_with_web(dir.chapters, &web_plan.chapters);
+    }
+
     Ok(DownloadPlan {
         book_id: dir.book_id.clone(),
         meta: completed_meta,
@@ -1294,7 +1330,6 @@ pub fn prepare_download_plan(
     })
 }
 
-#[cfg(not(feature = "official-api"))]
 fn parse_chapter_ref_from_value(v: &Value) -> Option<ChapterRef> {
     let maps = json_extract::collect_maps(v);
     let id = maps.iter().find_map(|m| {
@@ -1329,18 +1364,19 @@ fn parse_chapter_ref_from_value(v: &Value) -> Option<ChapterRef> {
     Some(ChapterRef { id, title })
 }
 
-/// no-official-api：使用 FanqieWebNetwork 拉目录 + 拉书本信息。
-#[cfg(not(feature = "official-api"))]
-pub fn prepare_download_plan(
+/// 使用 FanqieWebNetwork 拉目录 + 拉书本信息（可作为官方 API 的回退路径）。
+fn prepare_download_plan_web(
     config: &Config,
     book_id: &str,
     meta_hint: BookMeta,
 ) -> Result<DownloadPlan> {
-    info!(target: "download", book_id, "准备下载计划（no-official）");
+    info!(target: "download", book_id, "准备下载计划（web fallback）");
 
-    let mut web_cfg = FanqieWebConfig::default();
-    web_cfg.request_timeout = Duration::from_secs(config.request_timeout.max(1));
-    web_cfg.max_retries = config.max_retries.max(1) as usize;
+    let web_cfg = FanqieWebConfig {
+        request_timeout: Duration::from_secs(config.request_timeout.max(1)),
+        max_retries: config.max_retries.max(1) as usize,
+        ..Default::default()
+    };
     let web = FanqieWebNetwork::new(web_cfg).context("init FanqieWebNetwork")?;
 
     let chapter_values = web
@@ -1359,13 +1395,15 @@ pub fn prepare_download_plan(
         return Err(anyhow!("解析章节列表失败（未能提取 item_id/title）"));
     }
 
-    let (book_name, author, description, tags_opt, chapter_count) = web.get_book_info(book_id);
+    let (book_name, author, description, tags_opt, chapter_count, finished) =
+        web.get_book_info(book_id);
     let web_meta = BookMeta {
         book_name,
         author,
         description,
         tags: tags_opt.unwrap_or_default(),
         chapter_count,
+        finished,
         ..BookMeta::default()
     };
 
@@ -1390,6 +1428,17 @@ pub fn prepare_download_plan(
         chapters: std::mem::take(&mut chapters),
         _raw: raw,
     })
+}
+
+/// no-official-api：使用 FanqieWebNetwork 拉目录 + 拉书本信息。
+#[cfg(not(feature = "official-api"))]
+pub fn prepare_download_plan(
+    config: &Config,
+    book_id: &str,
+    meta_hint: BookMeta,
+) -> Result<DownloadPlan> {
+    info!(target: "download", book_id, "准备下载计划（no-official）");
+    prepare_download_plan_web(config, book_id, meta_hint)
 }
 
 /// 使用已准备好的计划执行下载，并支持区间选择。
@@ -2097,6 +2146,69 @@ fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
         category: primary.category.or(fallback.category),
         cover_primary_color: primary.cover_primary_color.or(fallback.cover_primary_color),
     }
+}
+
+fn merge_tag_lists(primary: &[String], fallback: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for tag in primary.iter().chain(fallback.iter()) {
+        let t = tag.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if seen.insert(t.to_string()) {
+            out.push(t.to_string());
+        }
+    }
+    out
+}
+
+fn drop_tag_equals_category(tags: &[String], category: &Option<String>) -> Vec<String> {
+    let Some(cat) = category
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    else {
+        return tags.to_vec();
+    };
+    tags.iter().filter(|t| t.trim() != cat).cloned().collect()
+}
+
+fn merge_chapters_with_web(official: Vec<ChapterRef>, web: &[ChapterRef]) -> Vec<ChapterRef> {
+    if official.is_empty() {
+        return web.to_vec();
+    }
+    if web.is_empty() {
+        return official;
+    }
+
+    let mut web_title_map = HashMap::new();
+    for ch in web {
+        if !ch.id.trim().is_empty() {
+            web_title_map.insert(ch.id.clone(), ch.title.clone());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut merged = Vec::with_capacity(official.len() + web.len().saturating_sub(official.len()));
+
+    for mut ch in official {
+        seen.insert(ch.id.clone());
+        if ch.title.trim().is_empty()
+            && let Some(title) = web_title_map.get(&ch.id)
+        {
+            ch.title = title.clone();
+        }
+        merged.push(ch);
+    }
+
+    for ch in web {
+        if !seen.contains(&ch.id) {
+            merged.push(ch.clone());
+        }
+    }
+
+    merged
 }
 
 /// Merge metadata with special handling for book_name: prefer hint (what user saw) over dir API
