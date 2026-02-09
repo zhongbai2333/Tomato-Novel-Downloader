@@ -17,6 +17,7 @@ enum ConfigValueType {
     Float,
     String,
     List,
+    Selection,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,9 +97,9 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             ty: ConfigValueType::Bool,
         },
         ConfigOption {
-            name: "优先书名字段(默认书名/原始书名/短书名)",
+            name: "优先书名字段",
             field: ConfigField::PreferredBookNameField,
-            ty: ConfigValueType::String,
+            ty: ConfigValueType::Selection,
         },
         ConfigOption {
             name: "是否生成有声小说",
@@ -290,17 +291,30 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
         }
         let opt = OPTS[idx - 1];
         let cur = config_value_display(config, opt.field);
-        let new_text = super::read_line(&format!(
-            "当前 {} = {}\n输入新值(留空取消): ",
-            opt.name, cur
-        ))?;
-        let new_text = new_text.trim();
-        if new_text.is_empty() {
-            println!("已取消修改");
-            continue;
-        }
 
-        apply_config_edit(config, opt, new_text)?;
+        let new_text = if matches!(opt.ty, ConfigValueType::Selection) {
+            // 选项模式：列出可选值让用户选择
+            match show_selection_prompt(opt.field, &cur)? {
+                Some(v) => v,
+                None => {
+                    println!("已取消修改");
+                    continue;
+                }
+            }
+        } else {
+            let input = super::read_line(&format!(
+                "当前 {} = {}\n输入新值(留空取消): ",
+                opt.name, cur
+            ))?;
+            let trimmed = input.trim().to_string();
+            if trimmed.is_empty() {
+                println!("已取消修改");
+                continue;
+            }
+            trimmed
+        };
+
+        apply_config_edit(config, opt, &new_text)?;
 
         // 持久化到 config.yml
         write_with_comments(config, Path::new(<Config as ConfigSpec>::FILE_NAME))
@@ -381,6 +395,9 @@ fn apply_config_edit(config: &mut Config, opt: ConfigOption, text: &str) -> Resu
             set_float(config, opt.field, v)?;
         }
         ConfigValueType::String => {
+            set_string(config, opt.field, text)?;
+        }
+        ConfigValueType::Selection => {
             set_string(config, opt.field, text)?;
         }
         ConfigValueType::List => {
@@ -570,10 +587,13 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
                 if lower == "book_name"
                     || lower == "original_book_name"
                     || lower == "book_short_name"
+                    || lower == "ask_after_download"
                 {
                     lower
                 } else {
-                    return Err(anyhow!("优先书名字段仅支持：默认书名、原始书名、短书名"));
+                    return Err(anyhow!(
+                        "优先书名字段仅支持：默认书名、原始书名、短书名、下载完后选择"
+                    ));
                 }
             };
             config.preferred_book_name_field = field_name;
@@ -598,6 +618,7 @@ fn book_name_field_to_chinese(field: &str) -> &'static str {
         "book_name" => "默认书名",
         "original_book_name" => "原始书名",
         "book_short_name" => "短书名",
+        "ask_after_download" => "下载完后选择",
         _ => "默认书名",
     }
 }
@@ -608,6 +629,41 @@ fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
         "默认书名" => Some("book_name".to_string()),
         "原始书名" => Some("original_book_name".to_string()),
         "短书名" => Some("book_short_name".to_string()),
+        "下载完后选择" => Some("ask_after_download".to_string()),
         _ => None,
+    }
+}
+
+/// 选项模式：展示可选项让用户选择编号
+fn show_selection_prompt(field: ConfigField, current: &str) -> Result<Option<String>> {
+    match field {
+        ConfigField::PreferredBookNameField => {
+            const OPTIONS: &[(&str, &str)] = &[
+                ("默认书名", "book_name"),
+                ("原始书名", "original_book_name"),
+                ("短书名", "book_short_name"),
+                ("下载完后选择", "ask_after_download"),
+            ];
+            println!("\n当前: {}", current);
+            for (idx, (label, _)) in OPTIONS.iter().enumerate() {
+                println!("  {}. {}", idx + 1, label);
+            }
+            println!("  0. 取消");
+            let choice = super::read_line("请选择: ")?;
+            let choice = choice.trim();
+            if choice == "0" || choice.is_empty() {
+                return Ok(None);
+            }
+            let Ok(idx) = choice.parse::<usize>() else {
+                println!("请输入数字编号");
+                return Ok(None);
+            };
+            if idx == 0 || idx > OPTIONS.len() {
+                println!("编号超出范围");
+                return Ok(None);
+            }
+            Ok(Some(OPTIONS[idx - 1].0.to_string()))
+        }
+        _ => Ok(None),
     }
 }

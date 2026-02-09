@@ -269,10 +269,10 @@ fn validate_config(cfg: &Config) -> Result<(), String> {
         return Err("first_line_indent_em must be >= 0".to_string());
     }
     match cfg.preferred_book_name_field.as_str() {
-        "" | "book_name" | "original_book_name" | "book_short_name" => {}
+        "" | "book_name" | "original_book_name" | "book_short_name" | "ask_after_download" => {}
         _ => {
             return Err(
-                "preferred_book_name_field must be book_name/original_book_name/book_short_name"
+                "preferred_book_name_field must be book_name/original_book_name/book_short_name/ask_after_download"
                     .to_string(),
             );
         }

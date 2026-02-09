@@ -114,8 +114,15 @@ struct UpdateEntry {
 #[derive(Debug)]
 enum WorkerMsg {
     SearchDone(Result<Vec<SearchItem>>),
-    DownloadDone { book_id: String, result: Result<()> },
+    DownloadDone {
+        book_id: String,
+        result: Result<()>,
+    },
     DownloadProgress(ProgressSnapshot),
+    AskBookName {
+        options: Vec<crate::download::downloader::BookNameOption>,
+        respond_to: std::sync::mpsc::Sender<Option<String>>,
+    },
     PreviewReady(Box<Result<PendingDownload>>),
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
     AppUpdateChecked(Result<crate::base_system::app_update::UpdateCheckReport>),
@@ -286,6 +293,13 @@ pub(super) struct App {
     // download cancel
     download_cancel_flag: Option<Arc<AtomicBool>>,
     stop_button_area: Option<Rect>,
+
+    // book name modal (post-download)
+    book_name_modal_open: bool,
+    book_name_modal_state: ListState,
+    book_name_modal_options: Vec<crate::download::downloader::BookNameOption>,
+    book_name_modal_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
+    last_book_name_modal_list: Option<Rect>,
 }
 #[derive(Clone, Debug, Default)]
 struct PreviewModalLayout {
@@ -319,6 +333,9 @@ impl App {
         cfg_combo_state.select(Some(0));
         let mut preview_buttons = ListState::default();
         preview_buttons.select(Some(0));
+
+        let mut book_name_modal_state = ListState::default();
+        book_name_modal_state.select(Some(0));
 
         let mut segment_comments_confirm_state = ListState::default();
         // Default to "Cancel" to reduce accidental enable.
@@ -398,6 +415,12 @@ impl App {
             download_progress: None,
             download_cancel_flag: None,
             stop_button_area: None,
+
+            book_name_modal_open: false,
+            book_name_modal_state,
+            book_name_modal_options: Vec::new(),
+            book_name_modal_sender: None,
+            last_book_name_modal_list: None,
         }
     }
 
@@ -535,6 +558,10 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut App) {
         View::Cover => cover::draw_cover(frame, app),
         View::Preview => preview::draw_preview(frame, app),
     }
+
+    if app.book_name_modal_open {
+        render_book_name_modal(frame, app);
+    }
 }
 
 fn handle_event(app: &mut App) -> Result<bool> {
@@ -543,6 +570,10 @@ fn handle_event(app: &mut App) -> Result<bool> {
     }
 
     let evt = event::read().context("read event")?;
+    if app.book_name_modal_open {
+        handle_book_name_modal_event(app, evt)?;
+        return Ok(!app.should_quit);
+    }
     match app.view {
         View::Home => home::handle_event_home(app, evt)?,
         View::Config => config::handle_event_config(app, evt)?,
@@ -557,6 +588,83 @@ fn handle_event(app: &mut App) -> Result<bool> {
 
 fn handle_event_preview(app: &mut App, event: Event) -> Result<()> {
     preview::handle_event_preview(app, event)
+}
+
+fn handle_book_name_modal_event(app: &mut App, event: Event) -> Result<()> {
+    match event {
+        Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                if let Some(tx) = app.book_name_modal_sender.take() {
+                    let _ = tx.send(None);
+                }
+                app.book_name_modal_open = false;
+                app.book_name_modal_options.clear();
+                app.last_book_name_modal_list = None;
+            }
+            KeyCode::Up => {
+                let len = app.book_name_modal_options.len();
+                if len > 0 {
+                    let cur = app.book_name_modal_state.selected().unwrap_or(0);
+                    let next = if cur == 0 { len - 1 } else { cur - 1 };
+                    app.book_name_modal_state.select(Some(next));
+                }
+            }
+            KeyCode::Down => {
+                let len = app.book_name_modal_options.len();
+                if len > 0 {
+                    let cur = app.book_name_modal_state.selected().unwrap_or(0);
+                    let next = (cur + 1) % len;
+                    app.book_name_modal_state.select(Some(next));
+                }
+            }
+            KeyCode::Enter => {
+                let idx = app.book_name_modal_state.selected().unwrap_or(0);
+                let chosen = app
+                    .book_name_modal_options
+                    .get(idx)
+                    .map(|o| o.value.clone());
+                if let Some(tx) = app.book_name_modal_sender.take() {
+                    let _ = tx.send(chosen);
+                }
+                app.book_name_modal_open = false;
+                app.book_name_modal_options.clear();
+                app.last_book_name_modal_list = None;
+            }
+            _ => {}
+        },
+        Event::Mouse(me) if matches!(me.kind, MouseEventKind::Down(MouseButton::Left)) => {
+            if let Some(area) = app.last_book_name_modal_list
+                && pos_in(area, me.column, me.row)
+            {
+                let idx = me.row.saturating_sub(area.y + 1) as usize;
+                if idx < app.book_name_modal_options.len() {
+                    app.book_name_modal_state.select(Some(idx));
+                    let chosen = app
+                        .book_name_modal_options
+                        .get(idx)
+                        .map(|o| o.value.clone());
+                    if let Some(tx) = app.book_name_modal_sender.take() {
+                        let _ = tx.send(chosen);
+                    }
+                    app.book_name_modal_open = false;
+                    app.book_name_modal_options.clear();
+                    app.last_book_name_modal_list = None;
+                }
+            }
+        }
+        Event::Mouse(me) if matches!(me.kind, MouseEventKind::Moved) => {
+            if let Some(area) = app.last_book_name_modal_list
+                && pos_in(area, me.column, me.row)
+            {
+                let idx = me.row.saturating_sub(area.y + 1) as usize;
+                if idx < app.book_name_modal_options.len() {
+                    app.book_name_modal_state.select(Some(idx));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(feature = "official-api")]
@@ -971,6 +1079,66 @@ fn render_prewarm_overlay(frame: &mut ratatui::Frame, app: &App) {
     );
 }
 
+fn render_book_name_modal(frame: &mut ratatui::Frame, app: &mut App) {
+    let area = frame.size();
+    let w = (area.width as f32 * 0.70) as u16;
+    let h: u16 = 12;
+    let modal = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w.max(40).min(area.width.saturating_sub(2)),
+        height: h.min(area.height.saturating_sub(2)).max(8),
+    };
+
+    frame.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("下载完成：选择书名")
+        .border_style(Style::default().fg(Color::Green));
+    frame.render_widget(block, modal);
+
+    let inner = Rect {
+        x: modal.x + 1,
+        y: modal.y + 1,
+        width: modal.width.saturating_sub(2),
+        height: modal.height.saturating_sub(2),
+    };
+
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(3),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let hint = Paragraph::new(vec![Line::from("↑↓ 选择 / Enter 确认 / Esc 保持当前")])
+        .wrap(Wrap { trim: true });
+    frame.render_widget(hint, parts[0]);
+
+    let items: Vec<ListItem> = app
+        .book_name_modal_options
+        .iter()
+        .map(|o| ListItem::new(format!("{}: {}", o.label, o.value)))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("候选书名"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_stateful_widget(list, parts[1], &mut app.book_name_modal_state);
+    app.last_book_name_modal_list = Some(parts[1]);
+
+    let footer = Paragraph::new(Line::from("选择后将用于最终文件名（下载临时目录不变）"))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(footer, parts[2]);
+}
+
 fn style_log_line(line: &str) -> Line<'static> {
     let mut parts = line.split_whitespace();
     let ts = parts.next().unwrap_or("");
@@ -1138,6 +1306,20 @@ fn poll_worker(app: &mut App) -> Result<()> {
                 Ok(pending) => preview::apply_preview_ready(app, pending),
                 Err(err) => preview::apply_preview_error(app, err),
             },
+            WorkerMsg::AskBookName {
+                options,
+                respond_to,
+            } => {
+                if options.is_empty() {
+                    let _ = respond_to.send(None);
+                } else {
+                    app.book_name_modal_open = true;
+                    app.book_name_modal_options = options;
+                    app.book_name_modal_state.select(Some(0));
+                    app.book_name_modal_sender = Some(respond_to);
+                    app.status = "请选择书名（下载已完成）".to_string();
+                }
+            }
             WorkerMsg::UpdateScanned(res) => match res {
                 Ok((updates, no_updates)) => {
                     if updates.is_empty() && no_updates.is_empty() {

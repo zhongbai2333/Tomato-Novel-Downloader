@@ -8,7 +8,9 @@ use std::thread;
 use anyhow::Result;
 use tracing::{debug, info, warn};
 
-use crate::download::downloader::{self, ChapterRange, ProgressSnapshot, SavePhase};
+use crate::download::downloader::{
+    self, ChapterRange, DownloadFlowOptions, DownloadMode, ProgressSnapshot, RetryFailed, SavePhase,
+};
 
 use super::{App, Focus, PendingDownload, View, WorkerMsg, start_spinner};
 
@@ -86,10 +88,30 @@ pub(super) fn start_download_task(
         let progress_cb = move |snap: ProgressSnapshot| {
             let _ = progress_tx.send(WorkerMsg::DownloadProgress(snap));
         };
-        let result = downloader::download_with_plan(
+        let ask_tx = tx.clone();
+        let book_name_asker = move |manager: &crate::book_parser::book_manager::BookManager| {
+            let options = downloader::collect_book_name_options(manager);
+            if options.len() <= 1 {
+                return None;
+            }
+            let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+            let _ = ask_tx.send(WorkerMsg::AskBookName {
+                options,
+                respond_to: resp_tx,
+            });
+            resp_rx.recv().ok().flatten()
+        };
+        let result = downloader::download_with_plan_flow(
             &cfg,
             pending.plan,
-            range,
+            None,
+            DownloadFlowOptions {
+                mode: DownloadMode::Resume,
+                range,
+                retry_failed: RetryFailed::Never,
+                stage_callback: None,
+                book_name_asker: Some(Box::new(book_name_asker)),
+            },
             Some(Box::new(progress_cb)),
             Some(cancel_flag),
         );

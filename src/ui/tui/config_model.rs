@@ -126,13 +126,36 @@ pub(in crate::ui) const AUDIOBOOK_VOICE_PRESETS: &[VoicePreset] = &[
     },
 ];
 
+pub(in crate::ui) const BOOK_NAME_FIELD_PRESETS: &[VoicePreset] = &[
+    VoicePreset {
+        name: "book_name",
+        label: "默认书名",
+    },
+    VoicePreset {
+        name: "original_book_name",
+        label: "原始书名",
+    },
+    VoicePreset {
+        name: "book_short_name",
+        label: "短书名",
+    },
+    VoicePreset {
+        name: "ask_after_download",
+        label: "下载完后选择",
+    },
+];
+
 pub(in crate::ui) fn cfg_field_is_combo(field: ConfigField) -> bool {
-    matches!(field, ConfigField::AudiobookVoice)
+    matches!(
+        field,
+        ConfigField::AudiobookVoice | ConfigField::PreferredBookNameField
+    )
 }
 
 pub(in crate::ui) fn cfg_combo_presets(field: ConfigField) -> Option<&'static [VoicePreset]> {
     match field {
         ConfigField::AudiobookVoice => Some(AUDIOBOOK_VOICE_PRESETS),
+        ConfigField::PreferredBookNameField => Some(BOOK_NAME_FIELD_PRESETS),
         _ => None,
     }
 }
@@ -171,7 +194,7 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                     field: ConfigField::AllowOverwriteFiles,
                 },
                 ConfigEntry {
-                    title: "优先书名字段(默认书名/原始书名/短书名)",
+                    title: "优先书名字段",
                     field: ConfigField::PreferredBookNameField,
                 },
                 ConfigEntry {
@@ -532,10 +555,11 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 if lower == "book_name"
                     || lower == "original_book_name"
                     || lower == "book_short_name"
+                    || lower == "ask_after_download"
                 {
                     lower
                 } else {
-                    app.status = "请输入：默认书名、原始书名 或 短书名".to_string();
+                    app.status = "请选择：默认书名、原始书名、短书名 或 下载完后选择".to_string();
                     return Ok(());
                 }
             };
@@ -752,6 +776,7 @@ fn book_name_field_to_chinese(field: &str) -> &'static str {
         "book_name" => "默认书名",
         "original_book_name" => "原始书名",
         "book_short_name" => "短书名",
+        "ask_after_download" => "下载完后选择",
         _ => "默认书名",
     }
 }
@@ -762,6 +787,7 @@ fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
         "默认书名" => Some("book_name".to_string()),
         "原始书名" => Some("original_book_name".to_string()),
         "短书名" => Some("book_short_name".to_string()),
+        "下载完后选择" => Some("ask_after_download".to_string()),
         _ => None,
     }
 }

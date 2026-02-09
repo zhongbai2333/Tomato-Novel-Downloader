@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::base_system::context::Config;
-use crate::download::downloader::ProgressSnapshot;
+use crate::download::downloader::{BookNameOption, ProgressSnapshot};
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigView {
@@ -52,6 +52,7 @@ pub(crate) struct JobInfo {
     pub(crate) state: JobState,
     pub(crate) progress: Option<ProgressSnapshot>,
     pub(crate) message: Option<String>,
+    pub(crate) book_name_options: Option<Vec<BookNameOption>>,
     pub(crate) created_ms: u64,
     pub(crate) updated_ms: u64,
 }
@@ -66,6 +67,7 @@ pub(crate) struct JobHandle {
 struct JobEntry {
     info: JobInfo,
     cancel: Arc<AtomicBool>,
+    book_name_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +90,7 @@ impl JobStore {
             state: JobState::Queued,
             progress: None,
             message: None,
+            book_name_options: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -98,6 +101,7 @@ impl JobStore {
             JobEntry {
                 info,
                 cancel: cancel.clone(),
+                book_name_sender: None,
             },
         );
 
@@ -119,6 +123,7 @@ impl JobStore {
         self.update(id, |j| {
             j.state = JobState::Running;
             j.message = None;
+            j.book_name_options = None;
         });
     }
 
@@ -139,6 +144,7 @@ impl JobStore {
         self.update(id, |j| {
             j.state = JobState::Done;
             j.message = None;
+            j.book_name_options = None;
         });
     }
 
@@ -146,6 +152,7 @@ impl JobStore {
         self.update(id, |j| {
             j.state = JobState::Failed;
             j.message = Some(msg);
+            j.book_name_options = None;
         });
     }
 
@@ -157,8 +164,43 @@ impl JobStore {
         e.cancel.store(true, Ordering::Relaxed);
         e.info.state = JobState::Canceled;
         e.info.message = Some("cancel requested".to_string());
+        if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(None);
+        }
+        e.info.book_name_options = None;
         e.info.updated_ms = now_ms();
         true
+    }
+
+    pub(crate) fn set_book_name_options(
+        &self,
+        id: u64,
+        options: Vec<BookNameOption>,
+        sender: std::sync::mpsc::Sender<Option<String>>,
+    ) {
+        let mut g = self.inner.lock().unwrap();
+        let Some(e) = g.get_mut(&id) else {
+            return;
+        };
+        e.info.book_name_options = Some(options);
+        e.info.message = Some("等待选择书名".to_string());
+        e.book_name_sender = Some(sender);
+        e.info.updated_ms = now_ms();
+    }
+
+    pub(crate) fn submit_book_name_choice(&self, id: u64, choice: Option<String>) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        let Some(e) = g.get_mut(&id) else {
+            return false;
+        };
+        if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(choice);
+            e.info.book_name_options = None;
+            e.info.message = None;
+            e.info.updated_ms = now_ms();
+            return true;
+        }
+        false
     }
 
     fn update<F: FnOnce(&mut JobInfo)>(&self, id: u64, f: F) {

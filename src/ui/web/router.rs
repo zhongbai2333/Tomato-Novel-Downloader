@@ -45,6 +45,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             get(routes::jobs::list_jobs).post(routes::jobs::create_job),
         )
         .route("/api/jobs/:id/cancel", post(routes::jobs::cancel_job))
+        .route(
+            "/api/jobs/:id/book_name",
+            post(routes::jobs::submit_book_name_choice),
+        )
         .route("/api/updates", get(routes::updates::api_updates));
 
     protected

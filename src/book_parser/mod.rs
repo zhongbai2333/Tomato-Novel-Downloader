@@ -31,6 +31,11 @@ pub mod audio_generator {
 }
 pub mod book_manager;
 pub mod epub_generator;
+pub(crate) mod finalize_epub;
 pub mod finalize_utils;
+pub(crate) mod html_utils;
+pub(crate) mod image_utils;
 pub mod parser;
+pub(crate) mod segment_comments;
+pub(crate) mod segment_shared;
 pub mod segment_utils;

@@ -27,6 +27,12 @@ pub struct BookManager {
     pub score: Option<f32>,
     pub read_count_text: Option<String>,
     pub category: Option<String>,
+    /// 原始书名（用于"下载完后选择"功能）
+    pub original_book_name: Option<String>,
+    /// 短书名（用于"下载完后选择"功能）
+    pub book_short_name: Option<String>,
+    /// 是否已在下载完成后确认过书名
+    pub book_name_selected_after_download: bool,
     pub downloaded: DownloadedMap,
     pub ignore_updates: bool,
     has_download_activity: bool,
@@ -77,6 +83,9 @@ impl BookManager {
             score: None,
             read_count_text: None,
             category: None,
+            original_book_name: None,
+            book_short_name: None,
+            book_name_selected_after_download: false,
             downloaded: HashMap::new(),
             ignore_updates: false,
             has_download_activity: false,

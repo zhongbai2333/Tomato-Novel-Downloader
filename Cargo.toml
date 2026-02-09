@@ -17,7 +17,7 @@ no-official-api = []
 tts = ["dep:msedge-tts"]
 
 # 有声书（TTS - Native）：不依赖 msedge-tts（避免 native-tls/curl/openssl 等原生依赖），适合 musl/android。
-tts-native = ["dep:tungstenite", "dep:uuid"]
+tts-native = ["dep:tungstenite"]
 
 # TUI 粘贴板：默认启用。
 # - Android：默认使用 Termux `termux-clipboard-get`（不依赖原生库）。
@@ -59,7 +59,7 @@ tempfile = "3.10"
 msedge-tts = { git = "https://github.com/icsboyx/msedge-tts", rev = "ed2cc3c87772f66329221975ef6bb8e14c96b641", optional = true }
 # msedge-tts = { path = "../msedge-tts", optional = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
-uuid = { version = "1", features = ["v4"], optional = true }
+uuid = { version = "1", features = ["v4", "v5"] }
 textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }

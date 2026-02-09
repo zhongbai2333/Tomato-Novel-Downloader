@@ -1,13 +1,19 @@
 //! EPUB 生成器。
 
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read as _, Write as _};
 use std::path::Path;
 
 use anyhow::Result;
-use epub_builder::{EpubBuilder, EpubContent, ReferenceType, ZipLibrary};
+use epub_builder::{EpubBuilder, EpubContent, EpubVersion, ReferenceType, ZipLibrary};
 
 use crate::base_system::context::{Config, safe_fs_name};
+
+/// 用于从 book_id 确定性生成 UUID v5 的命名空间。
+/// 这保证同一本书（同 book_id）的 dc:identifier 永远不变。
+const EPUB_UUID_NAMESPACE: uuid::Uuid = uuid::Uuid::from_bytes([
+    0x6b, 0xa7, 0xb8, 0x10, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
+]);
 
 pub struct EpubGenerator {
     book: EpubBuilder<ZipLibrary>,
@@ -16,6 +22,8 @@ pub struct EpubGenerator {
     #[allow(dead_code)]
     file_counter: usize,
     title: String,
+    /// 原始 book_id，用于生成确定性 UUID 并在后处理中替换为 dc:identifier 的值。
+    book_id: String,
 }
 
 impl EpubGenerator {
@@ -30,16 +38,23 @@ impl EpubGenerator {
         let zip = ZipLibrary::new().map_err(|e| anyhow::anyhow!(e.to_string()))?;
         let mut book = EpubBuilder::new(zip).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-        let safe_id = safe_fs_name(identifier, "_", 120);
-        book.metadata("identifier", safe_id).ok();
+        // 使用 EPUB 3.0 格式输出，与 Python 版本一致。
+        book.epub_version(EpubVersion::V30);
+
+        // 使用 UUID v5 从 book_id 确定性生成 dc:identifier，保证同一本书
+        // 无论更新多少次，identifier 都不会改变，阅读器可正确识别/恢复进度。
+        let stable_uuid = uuid::Uuid::new_v5(&EPUB_UUID_NAMESPACE, identifier.as_bytes());
+        book.set_uuid(stable_uuid);
         book.metadata("title", title).ok();
-        book.metadata("language", "zh-CN").ok();
+        book.metadata("lang", "zh").ok();
+
+        // 设置 toc_name 为书名，使 toc.ncx docTitle 和 nav.xhtml title 显示书名
+        // 而非默认的 "Table Of Contents"。
+        book.metadata("toc_name", title).ok();
 
         let author = author.trim();
         if !author.is_empty() {
-            // epub-builder uses Dublin Core style names; `creator` is the standard field.
-            // Keep `author` too for compatibility with older readers/tooling.
-            book.metadata("creator", author).ok();
+            // epub-builder 的 "author" key 会写入 dc:creator 标签。
             book.metadata("author", author).ok();
         }
 
@@ -54,8 +69,9 @@ impl EpubGenerator {
             book.metadata("description", description).ok();
         }
 
-        // A stable default publisher helps some readers display richer info.
-        book.metadata("publisher", "Tomato-Novel-Downloader").ok();
+        // epub-builder 不支持 "publisher" metadata key，
+        // 改用 generator 字段标记来源。
+        book.metadata("generator", "Tomato-Novel-Downloader").ok();
 
         let indent_em = cfg.first_line_indent_em.max(0.0);
         let indent_rule = if indent_em > 0.0 {
@@ -64,7 +80,7 @@ impl EpubGenerator {
             "text-indent:0;".to_string()
         };
         let css = format!(
-            "body {{ color:#000 !important; line-height:1.5; }}
+            "body {{ font-family: serif; color:#000 !important; line-height:1.5; }}
              p {{ color:#000 !important; {} margin:0 0 .8em 0; line-height:1.5; }}
              p.no-indent {{ text-indent:0; }}
              p.img-desc {{ color:#999 !important; font-size:0.75em; text-indent:0; text-align:center; margin:-.4em 0 .9em 0; }}
@@ -93,6 +109,7 @@ impl EpubGenerator {
             style: css,
             file_counter: 0,
             title: title.to_string(),
+            book_id: identifier.to_string(),
         })
     }
 
@@ -170,12 +187,9 @@ impl EpubGenerator {
             }
         }
 
+        // 使用 stylesheet() 而非 add_resource()，防止 epub-builder 自动创建空的 stylesheet.css。
         self.book
-            .add_resource(
-                "styles/main.css",
-                Cursor::new(self.style.clone()),
-                "text/css",
-            )
+            .stylesheet(Cursor::new(self.style.clone()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         for (file_name, html) in &self.chapters {
@@ -190,11 +204,90 @@ impl EpubGenerator {
 
         let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
-        let file = fs::File::create(output_path)?;
+
+        // 先生成到内存缓冲区，然后后处理替换 dc:identifier 为原始 book_id。
+        // epub-builder 强制输出 urn:uuid:xxx 格式，无法通过 API 设置纯文本 identifier。
+        let mut buffer = Vec::new();
         self.book
-            .generate(file)
+            .generate(&mut buffer)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let buffer = self.fixup_epub_identifier(buffer)?;
+        fs::write(output_path, buffer)?;
         Ok(())
+    }
+
+    /// 后处理 EPUB zip：
+    /// 1. 将 content.opf 和 toc.ncx 中的 `urn:uuid:xxx` 替换为原始 book_id
+    /// 2. 在 toc.ncx 的 `<head>` 中补充 `<meta name="dtb:uid" content="{book_id}" />`
+    fn fixup_epub_identifier(&self, epub_bytes: Vec<u8>) -> Result<Vec<u8>> {
+        let stable_uuid = uuid::Uuid::new_v5(&EPUB_UUID_NAMESPACE, self.book_id.as_bytes());
+        let urn_str = format!("urn:uuid:{}", stable_uuid.hyphenated());
+
+        let reader = Cursor::new(epub_bytes);
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| anyhow::anyhow!("failed to read generated epub: {e}"))?;
+
+        // 读取所有条目到内存
+        let mut entries = Vec::with_capacity(archive.len());
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| anyhow::anyhow!("zip entry read error: {e}"))?;
+            let name = entry.name().to_string();
+            let compression = entry.compression();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data)?;
+            entries.push((name, compression, data));
+        }
+        drop(archive);
+
+        // 重写 zip，在 content.opf 和 toc.ncx 中将 urn:uuid:xxx 替换为原始 book_id，
+        // 并在 toc.ncx 中补充 dtb:uid meta。
+        // 同时移除 com.apple.ibooks.display-options.xml，该文件声明 specified-fonts=true
+        // 导致 Calibre/Kindle 转换时误认为 EPUB 内嵌了字体，回退到英文默认字体。
+        let dtb_uid_meta = format!("<meta name=\"dtb:uid\" content=\"{}\" />", self.book_id);
+        let mut out = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut out);
+            for (name, compression, data) in entries {
+                // 跳过 iBooks display-options 文件，避免 Kindle 字体识别问题
+                if name.contains("com.apple.ibooks.display-options") {
+                    continue;
+                }
+                let needs_fixup = name.ends_with("content.opf") || name.ends_with("toc.ncx");
+                let options = zip::write::FileOptions::default().compression_method(compression);
+                writer
+                    .start_file(&name, options)
+                    .map_err(|e| anyhow::anyhow!("zip write error: {e}"))?;
+
+                if needs_fixup {
+                    match String::from_utf8(data) {
+                        Ok(text) => {
+                            let mut fixed = text.replace(&urn_str, &self.book_id);
+                            // 在 toc.ncx 中补充 dtb:uid（epub-builder 模板未包含此项）
+                            if name.ends_with("toc.ncx") && !fixed.contains("dtb:uid") {
+                                fixed = fixed.replace(
+                                    "<meta name=\"dtb:depth\"",
+                                    &format!("{}\n    <meta name=\"dtb:depth\"", dtb_uid_meta),
+                                );
+                            }
+                            writer.write_all(fixed.as_bytes())?;
+                        }
+                        Err(e) => {
+                            writer.write_all(&e.into_bytes())?;
+                        }
+                    }
+                } else {
+                    writer.write_all(&data)?;
+                }
+            }
+            writer
+                .finish()
+                .map_err(|e| anyhow::anyhow!("zip finish error: {e}"))?;
+        }
+
+        Ok(out.into_inner())
     }
 }
 
@@ -219,7 +312,7 @@ fn html_escape(input: &str) -> String {
 fn wrap_chapter_html(title: &str, body: &str) -> String {
     let escaped_title = html_escape(title);
     format!(
-        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/#\" lang=\"zh-CN\" xml:lang=\"zh-CN\">\n  <head>\n    <title>{}</title>\n    <link href=\"styles/main.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
+        "<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: http://www.daisy.org/z3998/2012/vocab/structure/#\" lang=\"zh\" xml:lang=\"zh\">\n  <head>\n    <title>{}</title>\n    <link href=\"stylesheet.css\" rel=\"stylesheet\" type=\"text/css\"/>\n  </head>\n  <body><h1>{}</h1>\n{}\n  </body>\n</html>",
         escaped_title, escaped_title, body
     )
 }

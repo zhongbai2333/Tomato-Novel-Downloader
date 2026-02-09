@@ -267,6 +267,7 @@ fn download_book_with_options(
                     result.success, result.failed, result.canceled
                 );
             })),
+            book_name_asker: None,
         },
         None,
         None,

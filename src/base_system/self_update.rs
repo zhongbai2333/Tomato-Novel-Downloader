@@ -125,7 +125,10 @@ pub fn check_for_updates(current_version: &str, auto_yes: bool) -> Result<SelfUp
             let mut input = String::new();
             print!("是否下载并升级到最新版？[Y/n]: ");
             std::io::stdout().flush().ok();
-            std::io::stdin().read_line(&mut input).ok();
+            if std::io::stdin().read_line(&mut input).is_err() {
+                warn!(target: "self_update", "无法读取用户输入，跳过升级");
+                return Ok(SelfUpdateOutcome::Skipped);
+            }
             let ans = input.trim().to_ascii_lowercase();
             if !(ans.is_empty() || ans == "y" || ans == "yes") {
                 warn!(target: "self_update", "用户取消升级");

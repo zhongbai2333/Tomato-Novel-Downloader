@@ -197,6 +197,8 @@ async function refreshAppUpdate(manual) {
 }
 
 let libraryPath = '';
+let pendingBookNameJobId = null;
+let pendingBookNameOptions = [];
 
 async function refreshStatus() {
   const data = await j('/api/status');
@@ -276,7 +278,8 @@ const FULL_CONFIG_SCHEMA = [
       { key: 'preferred_book_name_field', label: '优先书名字段', type: 'select', options: [
         { value: 'book_name', label: '默认书名' },
         { value: 'original_book_name', label: '原始书名' },
-        { value: 'book_short_name', label: '短书名' }
+        { value: 'book_short_name', label: '短书名' },
+        { value: 'ask_after_download', label: '下载完后选择' }
       ] },
       { key: 'old_cli', label: '旧版 CLI UI', type: 'bool' },
     ]
@@ -865,6 +868,11 @@ async function refreshJobs() {
   if ((data.items || []).length === 0) {
     tbody.innerHTML = '<tr><td colspan="5" class="k">暂无任务</td></tr>';
   }
+
+  const pending = (data.items || []).find(it => (it.book_name_options || []).length > 0);
+  if (pending && !isBookNameModalOpen()) {
+    showBookNameModal(pending);
+  }
 }
 
 async function refreshUpdates() {
@@ -1137,6 +1145,68 @@ function wire() {
       cancelPreview();
     });
   }
+
+  const bookNameConfirm = document.getElementById('bookNameConfirm');
+  const bookNameKeep = document.getElementById('bookNameKeep');
+  if (bookNameConfirm) {
+    bookNameConfirm.addEventListener('click', async () => {
+      const selected = document.querySelector('input[name="bookNameOpt"]:checked');
+      const value = selected ? selected.value : null;
+      await submitBookNameChoice(value);
+    });
+  }
+  if (bookNameKeep) {
+    bookNameKeep.addEventListener('click', async () => {
+      await submitBookNameChoice(null);
+    });
+  }
+}
+
+function isBookNameModalOpen() {
+  const modal = document.getElementById('bookNameModal');
+  return modal && !modal.classList.contains('hidden');
+}
+
+function showBookNameModal(job) {
+  pendingBookNameJobId = job.id;
+  pendingBookNameOptions = job.book_name_options || [];
+  const modal = document.getElementById('bookNameModal');
+  const hint = document.getElementById('bookNameJobHint');
+  const options = document.getElementById('bookNameOptions');
+  if (!modal || !options) return;
+
+  if (hint) {
+    const title = job.title || job.book_id || '';
+    hint.textContent = title ? `《${title}》` : '';
+  }
+
+  options.innerHTML = '';
+  pendingBookNameOptions.forEach((opt, idx) => {
+    const id = `bookNameOpt_${idx}`;
+    const row = document.createElement('label');
+    row.className = 'row';
+    row.innerHTML = `
+      <input type="radio" name="bookNameOpt" id="${id}" value="${esc(opt.value)}" ${idx === 0 ? 'checked' : ''} />
+      <span>${esc(opt.label)}: ${esc(opt.value)}</span>
+    `;
+    options.appendChild(row);
+  });
+
+  modal.classList.remove('hidden');
+}
+
+async function submitBookNameChoice(value) {
+  if (!pendingBookNameJobId) return;
+  await j(`/api/jobs/${encodeURIComponent(pendingBookNameJobId)}/book_name`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ value })
+  });
+  pendingBookNameJobId = null;
+  pendingBookNameOptions = [];
+  const modal = document.getElementById('bookNameModal');
+  if (modal) modal.classList.add('hidden');
+  await refreshJobs();
 }
 
 async function boot() {
