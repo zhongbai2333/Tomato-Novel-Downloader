@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "tomato-novel-downloader"
-version = "2.1.9"
+version = "2.2.0"
 dependencies = [
  "anyhow",
  "arboard",
