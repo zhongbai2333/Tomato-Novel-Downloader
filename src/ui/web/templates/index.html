@@ -7,248 +7,313 @@
     <link rel="stylesheet" href="/assets/app.css" />
   </head>
   <body>
-    <header class="top">
-      <div class="brand">Tomato Novel Downloader</div>
+    <aside class="sidebar">
+      <div class="brand">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+        Tomato DL
+      </div>
       <nav class="nav">
-        <a href="#status" id="navStatus">状态</a>
-        <a href="#config" id="navConfig">配置</a>
-        <a href="#search" id="navSearch">搜索</a>
-        <a href="#updates" id="navUpdates">更新</a>
-        <a href="#jobs" id="navJobs">任务</a>
-        <a href="#library" id="navLibrary">下载库</a>
+        <a href="#status" class="active">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          状态
+        </a>
+        <a href="#search">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          搜索/下载
+        </a>
+        <a href="#jobs">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          任务
+        </a>
+        <a href="#updates">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          更新
+        </a>
+        <a href="#library">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          下载库
+        </a>
+        <a href="#config">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          配置
+        </a>
       </nav>
-    </header>
+      <div class="sidebar-footer">
+        <button id="themeToggle" class="theme-toggle" type="button">
+          <svg id="themeIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <span id="themeLabel">切换主题</span>
+        </button>
+      </div>
+    </aside>
 
-    <main class="wrap">
-      <section id="status" class="card">
-        <h2>状态</h2>
-        <div class="row"><span class="k">版本</span><code id="version">(loading)</code></div>
-        <div class="row"><span class="k">预热</span><code id="prewarm">(loading)</code></div>
-        <div class="row"><span class="k">保存目录</span><code id="saveDir">(loading)</code></div>
-        <div class="row"><span class="k">监听地址</span><code id="bind">(see console)</code></div>
-        <div class="row"><span class="k">锁定模式</span><code id="locked">(loading)</code></div>
-        <div class="row">
-          <button id="appUpdateCheck" type="button">检查程序更新</button>
-          <span id="appUpdateHint" class="k"></span>
-        </div>
-        <div id="appUpdateBanner" class="card hidden">
-          <div class="row"><span class="k">最新版本</span><code id="appUpdateLatest">(loading)</code></div>
-          <div class="row">
-            <a id="appUpdateLink" href="#" target="_blank" rel="noopener">打开 Release</a>
-            <button id="appSelfUpdate" type="button">执行自更新</button>
-            <button id="appUpdateDismiss" type="button">不再提醒</button>
+    <main class="main-content">
+      <!-- ===== Status ===== -->
+      <section id="status" class="section active">
+        <h2>状态概览</h2>
+        <div class="card">
+          <div class="row"><span class="k">版本</span><code id="version">loading</code></div>
+          <div class="row"><span class="k">预热</span><code id="prewarm">loading</code></div>
+          <div class="row"><span class="k">保存目录</span><code id="saveDir">loading</code></div>
+          <div class="row"><span class="k">监听地址</span><code id="bind">see console</code></div>
+          <div class="row"><span class="k">锁定模式</span><code id="locked">loading</code></div>
+          <div class="row" style="margin-top: 16px;">
+            <button id="appUpdateCheck" type="button" class="primary">检查程序更新</button>
+            <span id="appUpdateHint" class="k"></span>
           </div>
-          <div id="appUpdateBody" class="small prewrap"></div>
         </div>
-        <p class="tip">局域网访问：设置 <code>TOMATO_WEB_ADDR=0.0.0.0:18423</code>（IPv6：<code>[::]:18423</code>；同时监听 IPv4+IPv6：<code>0.0.0.0:18423,[::]:18423</code>）然后运行 <code>--server</code>。</p>
-      </section>
 
-      <section id="config" class="card">
-        <h2>配置</h2>
-        <form id="configForm" class="formCol">
-          <label class="row">
-            <span class="k">小说格式</span>
-            <select id="cfgNovelFormat">
-              <option value="txt">txt</option>
-              <option value="epub">epub</option>
-            </select>
-          </label>
-
-          <label class="row">
-            <span class="k">散装保存</span>
-            <input id="cfgBulkFiles" type="checkbox" />
-          </label>
-
-          <label class="row">
-            <span class="k">生成有声</span>
-            <input id="cfgEnableAudiobook" type="checkbox" />
-          </label>
-
-          <label class="row">
-            <span class="k">有声格式</span>
-            <select id="cfgAudiobookFormat">
-              <option value="mp3">mp3</option>
-              <option value="wav">wav</option>
-            </select>
-          </label>
-
-          <div class="row">
-            <button type="submit">保存配置</button>
-            <button id="cfgFullOpen" type="button">完整修改</button>
-            <span id="configMsg" class="k"></span>
+        <div id="appUpdateBanner" class="card hidden" style="border-left: 3px solid var(--primary);">
+          <h3>发现新版本</h3>
+          <div class="row"><span class="k">最新版本</span><code id="appUpdateLatest">loading</code></div>
+          <div class="row" style="margin-top: 12px;">
+            <a id="appUpdateLink" href="#" target="_blank" rel="noopener" style="margin-right: 8px; color: var(--primary); text-decoration: none; font-weight: 500;">打开 Release</a>
+            <button id="appSelfUpdate" type="button" class="primary sm">执行自更新</button>
+            <button id="appUpdateDismiss" type="button" class="sm">不再提醒</button>
           </div>
-        </form>
-        <div class="small">注：这里只开放了与下载输出相关的部分配置；完整配置请点击“完整修改”。</div>
-      </section>
-
-      <section id="search" class="card">
-        <h2>搜索书籍</h2>
-        <form id="searchForm" class="form">
-          <input id="q" name="q" placeholder="输入关键词或 Book ID/链接…" autocomplete="off" />
-          <button type="submit">搜索</button>
-        </form>
-        <div id="searchHint" class="k"></div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>书名</th>
-              <th>作者</th>
-              <th>Book ID</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="searchResults">
-            <tr><td colspan="4" class="k">请输入关键词并搜索</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section id="updates" class="card">
-        <h2>更新小说</h2>
-        <div class="row">
-          <button id="updatesRefresh" type="button">扫描更新</button>
-          <span id="updatesHint" class="k">(loading)</span>
+          <div id="appUpdateBody" class="small" style="margin-top: 12px; white-space: pre-wrap;"></div>
         </div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>书名</th>
-              <th>Book ID</th>
-              <th>本地</th>
-              <th>远端</th>
-              <th>新章节</th>
-              <th>失败章节</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="updatesBody">
-            <tr><td colspan="7" class="k">加载中…</td></tr>
-          </tbody>
-        </table>
-        <div class="small">提示：点击“更新”会创建一个下载任务；下载器会自动跳过已完成章节并重试失败章节。</div>
       </section>
 
-      <section id="jobs" class="card">
+      <!-- ===== Search ===== -->
+      <section id="search" class="section">
+        <h2>搜索/下载</h2>
+        <div class="card">
+          <form id="searchForm" style="display: flex; gap: 10px; align-items: stretch;">
+            <input type="text" id="q" name="q" placeholder="输入关键词、Book ID 或链接…" autocomplete="off" />
+            <button type="submit" class="primary">搜索</button>
+          </form>
+          <div id="searchHint" class="k" style="margin-top: 8px;"></div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>书名</th>
+                <th>作者</th>
+                <th>Book ID</th>
+                <th style="width: 90px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="searchResults">
+              <tr class="empty-row"><td colspan="4">输入关键词开始搜索</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== Jobs ===== -->
+      <section id="jobs" class="section">
         <h2>下载任务</h2>
-        <div class="k">下载会在后台执行，可刷新/切换页面。</div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Job</th>
-              <th>书名</th>
-              <th>状态</th>
-              <th>进度</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="jobsBody">
-            <tr><td colspan="5" class="k">暂无任务</td></tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Job ID</th>
+                <th>书名</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th style="width: 90px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="jobsBody">
+              <tr class="empty-row"><td colspan="5">暂无任务</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
-      <section id="library" class="card">
-        <h2>下载库</h2>
-        <div class="k">默认只列出当前目录的文件与子文件夹（子文件夹展示汇总，可进入查看；也可打包下载整个文件夹为 zip）。</div>
-        <div class="row">
-          <span class="k">当前路径</span><code id="libPath">/</code>
-          <button id="libBack" type="button">返回上级</button>
+      <!-- ===== Updates ===== -->
+      <section id="updates" class="section">
+        <h2>更新小说</h2>
+        <div class="card">
+          <div class="row" style="margin-bottom: 0;">
+            <button id="updatesRefresh" type="button" class="primary">扫描更新</button>
+            <span id="updatesHint" class="k">loading</span>
+          </div>
         </div>
-        <table class="table">
-          <thead>
-            <tr>
-              <th>文件</th>
-              <th>大小</th>
-              <th>修改时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="libraryBody">
-            <tr><td colspan="4" class="k">加载中…</td></tr>
-          </tbody>
-        </table>
+
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>书名</th>
+                <th>Book ID</th>
+                <th>本地</th>
+                <th>远端</th>
+                <th>新章节</th>
+                <th>失败</th>
+                <th style="width: 90px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="updatesBody">
+              <tr class="empty-row"><td colspan="7">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== Library ===== -->
+      <section id="library" class="section">
+        <h2>下载库</h2>
+        <div class="card">
+          <div class="row" style="margin-bottom: 0;">
+            <span class="k">当前路径</span>
+            <code id="libPath">/</code>
+            <button id="libBack" type="button" class="sm">返回上级</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>文件名</th>
+                <th>大小</th>
+                <th>修改时间</th>
+                <th style="width: 120px;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="libraryBody">
+              <tr class="empty-row"><td colspan="4">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== Config ===== -->
+      <section id="config" class="section">
+        <h2>配置</h2>
+
+        <div class="config-tabs">
+          <button class="config-tab active" data-tab="quick">快捷配置</button>
+          <button class="config-tab" data-tab="full">完整配置</button>
+          <button class="config-tab" data-tab="yaml">YAML 编辑</button>
+        </div>
+
+        <!-- Quick Config Panel -->
+        <div id="configPanelQuick" class="config-panel active">
+          <div class="card">
+            <form id="configForm">
+              <div class="config-field">
+                <span class="field-label">小说格式</span>
+                <select id="cfgNovelFormat">
+                  <option value="txt">txt</option>
+                  <option value="epub">epub</option>
+                </select>
+              </div>
+              <div class="config-field">
+                <span class="field-label">散装保存</span>
+                <input id="cfgBulkFiles" type="checkbox" />
+              </div>
+              <div class="config-field">
+                <span class="field-label">生成有声书</span>
+                <input id="cfgEnableAudiobook" type="checkbox" />
+              </div>
+              <div class="config-field">
+                <span class="field-label">有声格式</span>
+                <select id="cfgAudiobookFormat">
+                  <option value="mp3">mp3</option>
+                  <option value="wav">wav</option>
+                </select>
+              </div>
+              <div class="row" style="margin-top: 18px; margin-bottom: 0;">
+                <button type="submit" class="primary">保存</button>
+                <span id="configMsg" class="k"></span>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Full Config Panel -->
+        <div id="configPanelFull" class="config-panel">
+          <div class="card">
+            <div id="configFullBody" class="formCol"></div>
+            <div class="row" style="margin-top: 18px; justify-content: flex-end; margin-bottom: 0;">
+              <span id="cfgFullMsg" class="k"></span>
+              <button id="cfgFullSave" type="button" class="primary">保存完整配置</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- YAML Panel -->
+        <div id="configPanelYaml" class="config-panel">
+          <div class="card">
+            <div class="configRaw">
+              <textarea id="cfgRaw" spellcheck="false" placeholder="加载中..."></textarea>
+              <div class="row" style="margin-bottom: 0;">
+                <button id="cfgRawReload" type="button" class="sm">重新加载</button>
+                <button id="cfgRawSave" type="button" class="primary sm">保存 YAML</button>
+                <span id="cfgRawMsg" class="k"></span>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
 
+    <!-- ===== Login Modal ===== -->
     <div id="loginModal" class="modal hidden">
       <div class="modalCard">
-        <h3>需要密码</h3>
-        <div class="k">该 Web UI 已启用锁定模式，请输入密码登录。</div>
-        <form id="loginForm" class="form">
-          <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" />
-          <button type="submit">登录</button>
+        <div class="modalHeader">
+          <h3>需要密码</h3>
+        </div>
+        <p class="k" style="margin-bottom: 16px;">该 Web UI 已启用锁定模式，请输入密码登录。</p>
+        <form id="loginForm" class="formCol">
+          <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" style="max-width: none;" />
+          <button type="submit" class="primary">登录</button>
         </form>
-        <div id="loginMsg" class="k"></div>
+        <div id="loginMsg" class="error" style="margin-top: 10px;"></div>
       </div>
     </div>
 
-    <div id="configModal" class="modal hidden">
-      <div class="modalCard configCard">
-        <div class="row configModalHeader">
-          <h3>完整配置</h3>
-          <button id="cfgFullClose" type="button">关闭</button>
-        </div>
-        <div class="small">修改后会写回 <code>config.yml</code>，并同步更新 YAML 内容。</div>
-        <div id="configFullBody" class="formCol"></div>
-        <h3 class="sectionTitle">YAML 编辑</h3>
-        <div class="small">支持直接编辑 YAML；保存后会重新生成 <code>config.yml</code>（带注释与统一排序）。</div>
-        <div class="configRaw">
-          <textarea id="cfgRaw" spellcheck="false" placeholder="加载中..."></textarea>
-          <div class="row">
-            <button id="cfgRawReload" type="button">重新加载</button>
-            <button id="cfgRawSave" type="button" class="primary">保存 YAML</button>
-            <span id="cfgRawMsg" class="k"></span>
-          </div>
-        </div>
-        <div class="row">
-          <button id="cfgFullSave" type="button" class="primary">保存</button>
-          <button id="cfgFullCancel" type="button">取消</button>
-          <span id="cfgFullMsg" class="k"></span>
-        </div>
-      </div>
-    </div>
-
-    <div id="previewModal" class="modal preview hidden">
+    <!-- ===== Preview Modal ===== -->
+    <div id="previewModal" class="modal hidden">
       <div class="modalCard previewCard">
-        <h3>书籍预览</h3>
+        <div class="modalHeader">
+          <h3>书籍预览</h3>
+          <button id="previewClose" type="button" class="sm">关闭</button>
+        </div>
         <div id="previewContent">
-          <div id="previewLoading" class="k">加载中...</div>
+          <div id="previewLoading" class="k" style="text-align: center; padding: 40px;">加载中...</div>
           <div id="previewData" class="hidden">
             <div class="previewHeader">
               <img id="previewCover" alt="封面" class="previewCover hidden" />
               <div class="previewInfo">
                 <h4 id="previewTitle">书名</h4>
-                <div id="previewOrigTitle" class="k hidden"></div>
+                <div id="previewOrigTitle" class="k hidden" style="margin-bottom: 6px;"></div>
                 <div id="previewAuthor" class="k"></div>
                 <div id="previewStats" class="previewStats"></div>
               </div>
             </div>
             <div id="previewDesc" class="previewDesc"></div>
-            <div id="previewTags" class="previewTags hidden"></div>
-            <div id="previewChapters" class="previewChapters"></div>
-            <div class="previewRange">
-              <label>
-                <span class="k">下载范围（可选）:</span>
-                <input id="previewRangeInput" type="text" placeholder="留空下载全部，或输入范围如 1-50" />
-              </label>
-              <div id="previewRangeHint" class="k small"></div>
+            <div id="previewTags" class="previewTags hidden" style="margin-bottom: 14px;"></div>
+            <div id="previewChapters" class="previewDesc"></div>
+
+            <div style="margin-top: 16px;">
+              <label class="k" style="display: block; margin-bottom: 6px;">下载范围（可选）</label>
+              <input id="previewRangeInput" type="text" placeholder="留空下载全部，或输入范围如 1-50" style="max-width: none;" />
+              <div id="previewRangeHint" class="small" style="margin-top: 4px;"></div>
             </div>
+
             <div class="previewActions">
-              <button id="previewConfirm" type="button" class="primary">确认下载</button>
               <button id="previewCancel" type="button">取消</button>
+              <button id="previewConfirm" type="button" class="primary">确认下载</button>
             </div>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- ===== Book Name Modal ===== -->
     <div id="bookNameModal" class="modal hidden">
       <div class="modalCard">
-        <h3>下载完成：选择书名</h3>
-        <div id="bookNameJobHint" class="k"></div>
-        <div id="bookNameOptions" class="formCol"></div>
-        <div class="row">
-          <button id="bookNameKeep" type="button">保持当前</button>
+        <div class="modalHeader">
+          <h3>下载完成：选择书名</h3>
+        </div>
+        <p id="bookNameJobHint" class="k" style="margin-bottom: 16px;"></p>
+        <div id="bookNameOptions" class="formCol" style="margin-bottom: 20px;"></div>
+        <div class="row" style="justify-content: flex-end; margin-bottom: 0;">
           <button id="bookNameConfirm" type="button" class="primary">确认</button>
         </div>
       </div>

@@ -51,7 +51,11 @@ pub(crate) async fn create_job(
     let book_id_for_resp = book_id.clone();
 
     let jobs = state.jobs.clone();
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let range_start = req.range_start;
     let range_end = req.range_end;
 

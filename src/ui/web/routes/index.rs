@@ -14,6 +14,10 @@ pub(crate) async fn asset_css() -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/css; charset=utf-8"),
     );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
     resp
 }
 
@@ -23,6 +27,10 @@ pub(crate) async fn asset_js() -> Response {
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/javascript; charset=utf-8"),
+    );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
     );
     resp
 }

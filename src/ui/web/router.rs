@@ -82,27 +82,25 @@ async fn auth_and_log_mw(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
 
-            let provided_cookie = req
+            let session_cookie = req
                 .headers()
                 .get(axum::http::header::COOKIE)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|raw| {
-                    raw.split(';')
-                        .map(|p| p.trim())
-                        .find_map(|p| p.strip_prefix("tomato_pw="))
-                })
-                .unwrap_or("");
+                .and_then(|raw| cookie_value(raw, "tomato_session"));
 
-            let provided = if !provided_header.is_empty() {
-                provided_header
-            } else {
-                provided_cookie
-            };
+            let mut authorized = session_cookie
+                .map(|token| auth.verify_session_token(token))
+                .unwrap_or(false);
 
-            let mut h = Sha256::new();
-            h.update(provided.as_bytes());
-            let out = h.finalize();
-            if out.as_slice() != auth.password_sha256 {
+            // 向后兼容：允许请求头密码（便于脚本/旧客户端）。
+            if !authorized && !provided_header.is_empty() {
+                let mut h = Sha256::new();
+                h.update(provided_header.as_bytes());
+                let out = h.finalize();
+                authorized = out.as_slice() == auth.password_sha256;
+            }
+
+            if !authorized {
                 info!(target: "web_access", ip = %ip, method = %method, path = %path, status = 401, "unauthorized");
                 return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
             }
@@ -112,4 +110,12 @@ async fn auth_and_log_mw(
     let resp = next.run(req).await;
     info!(target: "web_access", ip = %ip, method = %method, path = %path, status = %resp.status().as_u16(), "ok");
     resp
+}
+
+fn cookie_value<'a>(raw_cookie: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    raw_cookie
+        .split(';')
+        .map(|p| p.trim())
+        .find_map(|p| p.strip_prefix(&prefix))
 }

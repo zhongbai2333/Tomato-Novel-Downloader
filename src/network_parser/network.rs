@@ -7,9 +7,38 @@ use reqwest::header::{
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, warn};
+
+// 编译一次复用的正则缓存
+fn re_next_data() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        regex::Regex::new(r#"(?s)<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>"#).unwrap()
+    })
+}
+
+fn re_initial_state() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        regex::Regex::new(r#"(?s)window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;"#).unwrap()
+    })
+}
+
+fn re_info_label_grey() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        regex::Regex::new(r#"<span[^>]*class="info-label-grey"[^>]*>([^<]+)</span>"#).unwrap()
+    })
+}
+
+fn re_info_label_yellow() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        regex::Regex::new(r#"<span[^>]*class="info-label-yellow"[^>]*>([^<]+)</span>"#).unwrap()
+    })
+}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BookInfo {
@@ -512,17 +541,13 @@ impl ContentParser {
 }
 
 fn extract_next_data_json(html: &str) -> Option<String> {
-    // (?s) 让 . 匹配换行
-    let re =
-        regex::Regex::new(r#"(?s)<script[^>]*id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>"#).ok()?;
-    let caps = re.captures(html)?;
+    let caps = re_next_data().captures(html)?;
     let raw = caps.get(1)?.as_str();
     Some(raw.trim().to_string())
 }
 
 fn extract_initial_state_json(html: &str) -> Option<String> {
-    let re = regex::Regex::new(r#"(?s)window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;"#).ok()?;
-    let caps = re.captures(html)?;
+    let caps = re_initial_state().captures(html)?;
     let raw = caps.get(1)?.as_str();
     Some(raw.trim().to_string())
 }
@@ -711,8 +736,7 @@ fn regex_json_usize_field(html: &str, field: &str) -> Option<usize> {
 }
 
 fn parse_tags_from_info_label(html: &str) -> Option<Vec<String>> {
-    let re =
-        regex::Regex::new(r#"<span[^>]*class=\"info-label-grey\"[^>]*>([^<]+)</span>"#).ok()?;
+    let re = re_info_label_grey();
     let mut out = Vec::new();
     for caps in re.captures_iter(html) {
         let raw = caps.get(1)?.as_str().trim();
@@ -724,9 +748,7 @@ fn parse_tags_from_info_label(html: &str) -> Option<Vec<String>> {
 }
 
 fn parse_finished_from_info_label(html: &str) -> Option<bool> {
-    let re =
-        regex::Regex::new(r#"<span[^>]*class=\"info-label-yellow\"[^>]*>([^<]+)</span>"#).ok()?;
-    let caps = re.captures(html)?;
+    let caps = re_info_label_yellow().captures(html)?;
     let label = caps.get(1)?.as_str().trim();
     if label.contains("未完结") || label.contains("连载") {
         return Some(false);

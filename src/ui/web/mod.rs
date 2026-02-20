@@ -13,7 +13,6 @@ use anyhow::{Result, anyhow};
 use tracing::{info, warn};
 
 use crate::base_system::context::Config;
-use sha2::{Digest, Sha256};
 use state::{AppState, AuthState, ConfigView, JobStore};
 
 pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
@@ -36,14 +35,7 @@ pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
             if p.is_empty() {
                 None
             } else {
-                let mut h = Sha256::new();
-                h.update(p.as_bytes());
-                let out = h.finalize();
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&out);
-                Some(AuthState {
-                    password_sha256: arr,
-                })
+                Some(AuthState::from_password(&p))
             }
         });
 

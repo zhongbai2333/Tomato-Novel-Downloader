@@ -525,7 +525,12 @@ pub fn safe_fs_name(name: &str, replacement: &str, max_len: usize) -> String {
     }
 
     if cleaned.len() > max_len {
-        cleaned.truncate(max_len);
+        // 避免在多字节 UTF-8 字符（如中文）中间截断导致 panic
+        let mut end = max_len;
+        while !cleaned.is_char_boundary(end) && end > 0 {
+            end -= 1;
+        }
+        cleaned.truncate(end);
         while cleaned.ends_with(' ') || cleaned.ends_with('.') {
             cleaned.pop();
         }

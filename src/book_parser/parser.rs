@@ -3,8 +3,62 @@
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::base_system::context::Config;
+
+// 编译一次复用的正则表达式缓存
+fn re_breaks() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?is)<br\s*/?>|</p\s*>|</div\s*>|</section\s*>|</h[1-6]\s*>").unwrap()
+    })
+}
+
+fn re_open_p() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?is)<p\b[^>]*>").unwrap())
+}
+
+fn re_para() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?is)<p[^>]*>(.*?)</p>").unwrap())
+}
+
+fn re_strip_tags() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"<[^>]+>").unwrap())
+}
+
+fn re_strip_header() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"<header[^>]*>.*?</header>").unwrap())
+}
+
+fn re_strip_script() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"<script[^>]*>.*?</script>").unwrap())
+}
+
+fn re_strip_style() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"<style[^>]*>.*?</style>").unwrap())
+}
+
+fn re_strip_comments() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?s)<!--.*?-->").unwrap())
+}
+
+fn re_extract_body() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?is)<body[^>]*>(.*?)</body>").unwrap())
+}
+
+fn re_br_normalize() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?i)<br\s*/?>").unwrap())
+}
 
 pub struct ContentParser;
 
@@ -63,12 +117,8 @@ impl ContentParser {
     pub fn clean_plain(raw: &str) -> String {
         // Many chapters come as XHTML fragments (<p>, <br>, etc.).
         // If we strip tags directly, paragraphs collapse into a single line.
-        let re_breaks =
-            Regex::new(r"(?is)<br\s*/?>|</p\s*>|</div\s*>|</section\s*>|</h[1-6]\s*>").unwrap();
-        let re_open_p = Regex::new(r"(?is)<p\b[^>]*>").unwrap();
-
-        let normalized = re_breaks.replace_all(raw, "\n");
-        let normalized = re_open_p.replace_all(&normalized, "\n");
+        let normalized = re_breaks().replace_all(raw, "\n");
+        let normalized = re_open_p().replace_all(&normalized, "\n");
         let normalized = normalized.replace("\r\n", "\n").replace('\r', "\n");
 
         let without_tags = Self::strip_tags(&normalized);
@@ -110,7 +160,7 @@ impl ContentParser {
         let mut paragraphs = Vec::new();
 
         // 尝试提取已有段落，清理标签，保留基本文本。
-        let re_para = Regex::new(r"(?is)<p[^>]*>(.*?)</p>").unwrap();
+        let re_para = re_para();
         for cap in re_para.captures_iter(&body) {
             let inner = cap.get(1).map(|m| m.as_str()).unwrap_or("");
             let cleaned = Self::sanitize_paragraph(inner);
@@ -134,37 +184,31 @@ impl ContentParser {
 
     fn strip_tags(raw: &str) -> String {
         // 粗暴去标签，避免引入额外 HTML 解析库
-        let re = Regex::new(r"<[^>]+>").unwrap();
-        let s = re.replace_all(raw, "");
+        let s = re_strip_tags().replace_all(raw, "");
         s.replace("\r\n", "\n").replace('\r', "\n")
     }
 
     fn strip_header(raw: &str) -> String {
         // 移除 <header>...</header> 以及 <script>...</script>
-        let re_header = Regex::new(r"<header[^>]*>.*?</header>").unwrap();
-        let re_script = Regex::new(r"<script[^>]*>.*?</script>").unwrap();
-        let re_style = Regex::new(r"<style[^>]*>.*?</style>").unwrap();
-        let tmp = re_header.replace_all(raw, "");
-        let tmp = re_script.replace_all(&tmp, "");
-        re_style.replace_all(&tmp, "").to_string()
+        let tmp = re_strip_header().replace_all(raw, "");
+        let tmp = re_strip_script().replace_all(&tmp, "");
+        re_strip_style().replace_all(&tmp, "").to_string()
     }
 
     fn strip_comments(raw: &str) -> String {
-        let re = Regex::new(r"(?s)<!--.*?-->").unwrap();
-        re.replace_all(raw, "").to_string()
+        re_strip_comments().replace_all(raw, "").to_string()
     }
 
     fn extract_body(raw: &str) -> Option<String> {
-        let re = Regex::new(r"(?is)<body[^>]*>(.*?)</body>").ok()?;
-        re.captures(raw)
+        re_extract_body()
+            .captures(raw)
             .and_then(|cap| cap.get(1))
             .map(|m| m.as_str().to_string())
     }
 
     fn sanitize_paragraph(inner: &str) -> String {
         // 保留换行，将 <br> 视为换行，去掉其他标签。
-        let br_normalized = Regex::new(r"(?i)<br\s*/?>").unwrap();
-        let with_newlines = br_normalized.replace_all(inner, "\n");
+        let with_newlines = re_br_normalize().replace_all(inner, "\n");
         let text = Self::strip_tags(&with_newlines);
         let trimmed = text.trim();
         if trimmed.is_empty() {

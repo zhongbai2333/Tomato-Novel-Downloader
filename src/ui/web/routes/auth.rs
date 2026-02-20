@@ -10,7 +10,6 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serde_yaml;
-use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::base_system::config::{ConfigSpec, generate_yaml_with_comments, write_with_comments};
@@ -39,26 +38,27 @@ pub(crate) async fn api_login(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let mut h = Sha256::new();
-    h.update(provided.as_bytes());
-    let out = h.finalize();
-
-    if out.as_slice() != auth.password_sha256 {
+    if !verify_password(auth, provided) {
         info!(target: "web_auth", ip = %addr, ok = false, "login failed");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     info!(target: "web_auth", ip = %addr, ok = true, "login ok");
 
-    // Store password in an HttpOnly cookie so normal link downloads work.
-    // Note: this is intended for LAN/self-host usage.
+    // 使用服务端签名的会话 token，避免在 Cookie 中存储明文密码。
+    let token = auth.issue_session_token();
     let cookie = format!(
-        "tomato_pw={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800",
-        req.password
+        "tomato_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        token,
+        auth.session_ttl_secs()
     );
+    let clear_legacy_cookie = "tomato_pw=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 
     Ok((
-        [(SET_COOKIE, cookie)],
+        [
+            (SET_COOKIE, cookie),
+            (SET_COOKIE, clear_legacy_cookie.to_string()),
+        ],
         Json(json!({"ok": true, "locked": true})),
     )
         .into_response())
@@ -73,7 +73,11 @@ pub(crate) struct WebConfigView {
 }
 
 pub(crate) async fn get_config(State(state): State<AppState>) -> Json<WebConfigView> {
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     Json(WebConfigView {
         novel_format: cfg.novel_format,
         bulk_files: cfg.bulk_files,
@@ -95,7 +99,7 @@ pub(crate) async fn set_config(
     Json(patch): Json<WebConfigPatch>,
 ) -> Result<Json<Value>, StatusCode> {
     let (old_cfg, new_cfg) = {
-        let mut g = state.config.lock().unwrap();
+        let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         let old = g.clone();
 
         if let Some(v) = patch.novel_format {
@@ -128,7 +132,7 @@ pub(crate) async fn set_config(
     let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
     if let Err(e) = write_with_comments(&new_cfg, path) {
         // revert memory changes if persistence fails
-        let mut g = state.config.lock().unwrap();
+        let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
         tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -154,7 +158,11 @@ pub(crate) async fn get_config_raw(
         }));
     }
 
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let yaml = generate_yaml_with_comments(&cfg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(WebConfigRawView {
         yaml,
@@ -179,23 +187,31 @@ pub(crate) async fn set_config_raw(
     normalize_config(&mut cfg);
     validate_config(&cfg).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let old_cfg = state.config.lock().unwrap().clone();
+    let old_cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
     if let Err(e) = write_with_comments(&cfg, path) {
-        let mut g = state.config.lock().unwrap();
+        let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
         tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    let mut g = state.config.lock().unwrap();
+    let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
     *g = cfg;
 
     Ok(Json(json!({"ok": true})))
 }
 
 pub(crate) async fn get_config_full(State(state): State<AppState>) -> Json<Config> {
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     Json(cfg)
 }
 
@@ -206,16 +222,20 @@ pub(crate) async fn set_config_full(
     normalize_config(&mut cfg);
     validate_config(&cfg).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let old_cfg = state.config.lock().unwrap().clone();
+    let old_cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
     if let Err(e) = write_with_comments(&cfg, path) {
-        let mut g = state.config.lock().unwrap();
+        let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
         tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    let mut g = state.config.lock().unwrap();
+    let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
     *g = cfg;
 
     Ok(Json(json!({"ok": true})))
@@ -278,4 +298,12 @@ fn validate_config(cfg: &Config) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn verify_password(auth: &crate::ui::web::state::AuthState, provided: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(provided.as_bytes());
+    let out = h.finalize();
+    out.as_slice() == auth.password_sha256
 }

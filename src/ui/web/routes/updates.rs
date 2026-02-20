@@ -10,7 +10,11 @@ use serde_json::{Value, json};
 use crate::ui::web::state::AppState;
 
 pub(crate) async fn api_updates(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let save_dir = cfg.default_save_dir();
 
     let result = tokio::task::spawn_blocking(move || scan_updates(&save_dir, &cfg))

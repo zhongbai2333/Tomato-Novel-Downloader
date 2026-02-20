@@ -12,6 +12,40 @@ use zip::write::FileOptions;
 
 use crate::ui::web::state::AppState;
 
+fn make_content_disposition(filename: &str) -> Option<header::HeaderValue> {
+    // RFC 5987 filename* for UTF-8 names, plus ASCII fallback for legacy clients.
+    fn is_unreserved(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_')
+    }
+
+    let mut encoded = String::with_capacity(filename.len() * 3);
+    for &b in filename.as_bytes() {
+        if is_unreserved(b) {
+            encoded.push(char::from(b));
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{b:02X}"));
+        }
+    }
+
+    let ascii_fallback = filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    let value = format!(
+        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+        ascii_fallback, encoded
+    );
+    header::HeaderValue::from_str(&value).ok()
+}
+
 pub(crate) async fn download_file(
     State(state): State<AppState>,
     AxumPath(path): AxumPath<String>,
@@ -52,11 +86,10 @@ pub(crate) async fn download_file(
     resp.headers_mut()
         .insert(header::CONTENT_TYPE, header::HeaderValue::from_static(mime));
 
-    if let Some(name) = target_canon.file_name().and_then(|s| s.to_str()) {
-        let value = format!("attachment; filename=\"{}\"", name.replace('"', "_"));
-        if let Ok(hv) = header::HeaderValue::from_str(&value) {
-            resp.headers_mut().insert(header::CONTENT_DISPOSITION, hv);
-        }
+    if let Some(name) = target_canon.file_name().and_then(|s| s.to_str())
+        && let Some(hv) = make_content_disposition(name)
+    {
+        resp.headers_mut().insert(header::CONTENT_DISPOSITION, hv);
     }
 
     Ok(resp)
@@ -124,11 +157,8 @@ pub(crate) async fn download_zip(
         header::HeaderValue::from_static("application/zip"),
     );
 
-    let value = format!(
-        "attachment; filename=\"{}.zip\"",
-        filename.replace('"', "_")
-    );
-    if let Ok(hv) = header::HeaderValue::from_str(&value) {
+    let zip_name = format!("{filename}.zip");
+    if let Some(hv) = make_content_disposition(&zip_name) {
         resp.headers_mut().insert(header::CONTENT_DISPOSITION, hv);
     }
 

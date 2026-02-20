@@ -9,8 +9,15 @@ use crossbeam_channel as channel;
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tracing::{debug, info, warn};
+
+// 编译一次复用的内联图片正则缓存
+fn re_inline_img() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r#"(?is)<img[^>]*?\bsrc\s*=\s*['\"]([^'\"]+)['\"][^>]*>"#).unwrap())
+}
 
 use super::book_manager::BookManager;
 use super::epub_generator::EpubGenerator;
@@ -1082,7 +1089,7 @@ fn embed_inline_images_chapter_named(
     resources_added: &mut HashSet<String>,
     images_dir: &Path,
 ) -> anyhow::Result<String> {
-    let re_img = Regex::new(r#"(?is)<img[^>]*?\bsrc\s*=\s*['\"]([^'\"]+)['\"][^>]*>"#)?;
+    let re_img = re_inline_img();
 
     let mut mapping: HashMap<String, String> = HashMap::new();
     for cap in re_img.captures_iter(html) {

@@ -3,6 +3,31 @@
 //! 转义、清理 EPUB 正文、描述渲染等纯文本操作。
 
 use regex::Regex;
+use std::sync::OnceLock;
+
+// 编译一次复用的正则缓存
+fn re_epub_token() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?is)(<img\b[^>]*?>)|(<p\b[^>]*?>.*?</p>)|(<h[1-6]\b[^>]*?>.*?</h[1-6]>)")
+            .unwrap()
+    })
+}
+
+fn re_src_attr() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r#"(?is)\bsrc\s*=\s*['"]([^'"]+)['"]"#).unwrap())
+}
+
+fn re_img_tag() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r#"(?is)<img\b[^>]*?>"#).unwrap())
+}
+
+fn re_all_tags() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?is)<[^>]+>").unwrap())
+}
 
 // ── 实体解码 ────────────────────────────────────────────────────
 
@@ -192,12 +217,10 @@ pub(crate) fn description_to_plain_text(description: &str) -> String {
 // ── EPUB 正文清理 ──────────────────────────────────────────────
 
 pub(crate) fn clean_epub_body(html: &str) -> String {
-    let re_token =
-        Regex::new(r"(?is)(<img\b[^>]*?>)|(<p\b[^>]*?>.*?</p>)|(<h[1-6]\b[^>]*?>.*?</h[1-6]>)")
-            .unwrap();
-    let re_src = Regex::new(r#"(?is)\bsrc\s*=\s*['\"]([^'\"]+)['\"]"#).unwrap();
-    let re_img = Regex::new(r#"(?is)<img\b[^>]*?>"#).unwrap();
-    let re_tags = Regex::new(r"(?is)<[^>]+>").unwrap();
+    let re_token = re_epub_token();
+    let re_src = re_src_attr();
+    let re_img = re_img_tag();
+    let re_tags = re_all_tags();
 
     let mut out: Vec<String> = Vec::new();
     for cap in re_token.captures_iter(html) {

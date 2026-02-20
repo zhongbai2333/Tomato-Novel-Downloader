@@ -316,9 +316,8 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
         let marker = if idx == 0 { " (当前)" } else { "" };
         println!("  {}. {}: {}{}", idx + 1, label, name, marker);
     }
-    println!("  0. 保持当前书名");
 
-    print!("请选择 [0]: ");
+    print!("请选择 [1]: ");
     io::stdout().flush().ok();
     let mut line = String::new();
     if io::stdin().lock().read_line(&mut line).is_err() {
@@ -326,15 +325,14 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
     }
 
     let choice = line.trim();
-    if choice.is_empty() || choice == "0" {
-        return None;
-    }
-    let Ok(idx) = choice.parse::<usize>() else {
-        return None;
+    let idx = if choice.is_empty() {
+        1
+    } else {
+        match choice.parse::<usize>() {
+            Ok(i) if i >= 1 && i <= options.len() => i,
+            _ => return None,
+        }
     };
-    if idx == 0 || idx > options.len() {
-        return None;
-    }
 
     let chosen = options[idx - 1].1.clone();
     if chosen == *default_name {

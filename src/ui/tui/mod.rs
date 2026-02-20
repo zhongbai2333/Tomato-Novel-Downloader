@@ -593,14 +593,6 @@ fn handle_event_preview(app: &mut App, event: Event) -> Result<()> {
 fn handle_book_name_modal_event(app: &mut App, event: Event) -> Result<()> {
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                if let Some(tx) = app.book_name_modal_sender.take() {
-                    let _ = tx.send(None);
-                }
-                app.book_name_modal_open = false;
-                app.book_name_modal_options.clear();
-                app.last_book_name_modal_list = None;
-            }
             KeyCode::Up => {
                 let len = app.book_name_modal_options.len();
                 if len > 0 {
@@ -1113,8 +1105,7 @@ fn render_book_name_modal(frame: &mut ratatui::Frame, app: &mut App) {
         ])
         .split(inner);
 
-    let hint = Paragraph::new(vec![Line::from("↑↓ 选择 / Enter 确认 / Esc 保持当前")])
-        .wrap(Wrap { trim: true });
+    let hint = Paragraph::new(vec![Line::from("↑↓ 选择 / Enter 确认")]).wrap(Wrap { trim: true });
     frame.render_widget(hint, parts[0]);
 
     let items: Vec<ListItem> = app

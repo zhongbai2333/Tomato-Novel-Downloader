@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::base_system::context::Config;
 use crate::download::downloader::{BookNameOption, ProgressSnapshot};
@@ -31,6 +33,91 @@ pub(crate) struct AppState {
 #[derive(Clone)]
 pub(crate) struct AuthState {
     pub(crate) password_sha256: [u8; 32],
+    pub(crate) session_secret: [u8; 32],
+}
+
+const SESSION_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+
+impl AuthState {
+    pub(crate) fn from_password(password: &str) -> Self {
+        let mut h = Sha256::new();
+        h.update(password.as_bytes());
+        let out = h.finalize();
+        let mut password_sha256 = [0u8; 32];
+        password_sha256.copy_from_slice(&out);
+
+        let nonce = Uuid::new_v4();
+        let now = now_secs();
+        let mut s = Sha256::new();
+        s.update(password_sha256);
+        s.update(now.to_le_bytes());
+        s.update(nonce.as_bytes());
+        let secret = s.finalize();
+        let mut session_secret = [0u8; 32];
+        session_secret.copy_from_slice(&secret);
+
+        Self {
+            password_sha256,
+            session_secret,
+        }
+    }
+
+    pub(crate) fn issue_session_token(&self) -> String {
+        let exp = now_secs().saturating_add(SESSION_TTL_SECS);
+        let nonce = Uuid::new_v4().simple().to_string();
+        let payload = format!("{exp}.{nonce}");
+        let sig = self.sign_payload(&payload);
+        format!("{payload}.{sig}")
+    }
+
+    pub(crate) fn verify_session_token(&self, token: &str) -> bool {
+        let mut parts = token.split('.');
+        let Some(exp_raw) = parts.next() else {
+            return false;
+        };
+        let Some(nonce_raw) = parts.next() else {
+            return false;
+        };
+        let Some(sig_raw) = parts.next() else {
+            return false;
+        };
+        if parts.next().is_some() {
+            return false;
+        }
+
+        let Ok(exp) = exp_raw.parse::<u64>() else {
+            return false;
+        };
+        if now_secs() > exp {
+            return false;
+        }
+
+        let payload = format!("{exp_raw}.{nonce_raw}");
+        let expected = self.sign_payload(&payload);
+        constant_time_eq(sig_raw.as_bytes(), expected.as_bytes())
+    }
+
+    pub(crate) fn session_ttl_secs(&self) -> u64 {
+        SESSION_TTL_SECS
+    }
+
+    fn sign_payload(&self, payload: &str) -> String {
+        let mut h = Sha256::new();
+        h.update(self.session_secret);
+        h.update(payload.as_bytes());
+        hex::encode(h.finalize())
+    }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -95,7 +182,7 @@ impl JobStore {
             updated_ms: now,
         };
 
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         g.insert(
             id,
             JobEntry {
@@ -109,7 +196,7 @@ impl JobStore {
     }
 
     pub(crate) fn list(&self) -> Vec<JobInfo> {
-        let g = self.inner.lock().unwrap();
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut v: Vec<JobInfo> = g.values().map(|e| e.info.clone()).collect();
         v.sort_by(|a, b| {
             b.updated_ms
@@ -157,7 +244,7 @@ impl JobStore {
     }
 
     pub(crate) fn request_cancel(&self, id: u64) -> bool {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let Some(e) = g.get_mut(&id) else {
             return false;
         };
@@ -178,7 +265,7 @@ impl JobStore {
         options: Vec<BookNameOption>,
         sender: std::sync::mpsc::Sender<Option<String>>,
     ) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let Some(e) = g.get_mut(&id) else {
             return;
         };
@@ -189,7 +276,7 @@ impl JobStore {
     }
 
     pub(crate) fn submit_book_name_choice(&self, id: u64, choice: Option<String>) -> bool {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let Some(e) = g.get_mut(&id) else {
             return false;
         };
@@ -204,7 +291,7 @@ impl JobStore {
     }
 
     fn update<F: FnOnce(&mut JobInfo)>(&self, id: u64, f: F) {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let Some(e) = g.get_mut(&id) else {
             return;
         };
@@ -218,4 +305,11 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

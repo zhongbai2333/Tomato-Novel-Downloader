@@ -68,8 +68,9 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
             _ => continue,
         };
 
-        let (local_total, _local_ok, local_failed) =
-            read_downloaded_counts(&path, &book_id).unwrap_or((0, 0, 0));
+        // 一次性读取 status.json，同时获取下载计数和忽略标志
+        let (counts, is_ignored) = read_status_counts_and_ignore(&path, &book_id);
+        let (local_total, _local_ok, local_failed) = counts.unwrap_or((0, 0, 0));
 
         #[cfg(feature = "official-api")]
         let remote_total = {
@@ -97,9 +98,6 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
 
         let new_count = remote_total.saturating_sub(local_total);
         let has_update = new_count > 0 || local_failed > 0;
-
-        // 从书籍status.json读取忽略更新状态
-        let is_ignored = read_ignore_updates_flag(&path, &book_id);
 
         let row = NovelUpdateRow {
             book_id,
@@ -137,6 +135,44 @@ pub fn scan_novel_updates(save_dir: &Path) -> Result<NovelUpdateScanResult> {
 /// - ok: 成功下载的条目数（content/text 非空）
 /// - failed: total - ok
 pub fn read_downloaded_counts(folder: &Path, book_id: &str) -> Option<(usize, usize, usize)> {
+    let value = read_status_json(folder, book_id)?;
+    counts_from_status(&value)
+}
+
+/// 仅统计成功下载的章节数（content/text 非空）。
+pub fn read_downloaded_ok_count(folder: &Path, book_id: &str) -> Option<usize> {
+    let (_total, ok, _failed) = read_downloaded_counts(folder, book_id)?;
+    Some(ok)
+}
+
+/// 读取书籍的ignore_updates标志
+#[allow(dead_code)]
+pub fn read_ignore_updates_flag(folder: &Path, book_id: &str) -> bool {
+    read_status_json(folder, book_id)
+        .and_then(|v| v.get("ignore_updates")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// 一次性读取下载计数和忽略标志，避免重复读取同一文件。
+pub fn read_status_counts_and_ignore(
+    folder: &Path,
+    book_id: &str,
+) -> (Option<(usize, usize, usize)>, bool) {
+    match read_status_json(folder, book_id) {
+        Some(value) => {
+            let counts = counts_from_status(&value);
+            let ignored = value
+                .get("ignore_updates")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            (counts, ignored)
+        }
+        None => (None, false),
+    }
+}
+
+/// 读取并解析 status.json（或旧格式 chapter_status_<id>.json）。
+fn read_status_json(folder: &Path, book_id: &str) -> Option<Value> {
     let status_new = folder.join("status.json");
     let status_old = folder.join(format!("chapter_status_{}.json", book_id));
     let path = if status_new.exists() {
@@ -146,11 +182,13 @@ pub fn read_downloaded_counts(folder: &Path, book_id: &str) -> Option<(usize, us
     } else {
         return None;
     };
-
     let data = fs::read_to_string(&path).ok()?;
-    let value: Value = serde_json::from_str(&data).ok()?;
-    let downloaded = value.get("downloaded")?.as_object()?;
+    serde_json::from_str(&data).ok()
+}
 
+/// 从已解析的 status JSON 中提取下载计数。
+fn counts_from_status(value: &Value) -> Option<(usize, usize, usize)> {
+    let downloaded = value.get("downloaded")?.as_object()?;
     let total = downloaded.len();
     let mut ok = 0usize;
     for (_cid, pair) in downloaded {
@@ -175,39 +213,4 @@ pub fn read_downloaded_counts(folder: &Path, book_id: &str) -> Option<(usize, us
     }
     let failed = total.saturating_sub(ok);
     Some((total, ok, failed))
-}
-
-/// 仅统计成功下载的章节数（content/text 非空）。
-pub fn read_downloaded_ok_count(folder: &Path, book_id: &str) -> Option<usize> {
-    let (_total, ok, _failed) = read_downloaded_counts(folder, book_id)?;
-    Some(ok)
-}
-
-/// 读取书籍的ignore_updates标志
-pub fn read_ignore_updates_flag(folder: &Path, book_id: &str) -> bool {
-    let status_new = folder.join("status.json");
-    let status_old = folder.join(format!("chapter_status_{}.json", book_id));
-    let path = if status_new.exists() {
-        status_new
-    } else if status_old.exists() {
-        status_old
-    } else {
-        return false;
-    };
-
-    let data = fs::read_to_string(&path).ok();
-    let data = match data {
-        Some(d) => d,
-        None => return false,
-    };
-
-    let value: Value = match serde_json::from_str(&data) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    value
-        .get("ignore_updates")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
 }

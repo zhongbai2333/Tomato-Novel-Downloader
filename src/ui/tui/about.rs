@@ -199,7 +199,12 @@ fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
         }
         out.push_str(line);
         if out.len() >= max_chars {
-            out.truncate(max_chars);
+            // 在字符边界安全截断，避免中文等多字节字符被截断导致 panic
+            let mut end = max_chars;
+            while !out.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            out.truncate(end);
             out.push('…');
             break;
         }

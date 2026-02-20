@@ -21,7 +21,11 @@ pub(crate) async fn api_preview(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let cfg = state.config.lock().unwrap().clone();
+    let cfg = state
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let book_id_for_plan = book_id.clone();
 
     let plan = tokio::task::spawn_blocking(move || {
