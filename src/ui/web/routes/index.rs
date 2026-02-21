@@ -4,7 +4,16 @@ use axum::response::{Html, IntoResponse, Response};
 use crate::ui::web::templates;
 
 pub(crate) async fn index() -> impl IntoResponse {
-    Html(templates::INDEX_HTML)
+    let mut resp = Html(templates::INDEX_HTML).into_response();
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+    resp.headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    resp.headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
+    resp
 }
 
 pub(crate) async fn asset_css() -> Response {
@@ -16,8 +25,12 @@ pub(crate) async fn asset_css() -> Response {
     );
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
+    resp.headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    resp.headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
     resp
 }
 
@@ -30,7 +43,11 @@ pub(crate) async fn asset_js() -> Response {
     );
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
+    resp.headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    resp.headers_mut()
+        .insert(header::EXPIRES, HeaderValue::from_static("0"));
     resp
 }

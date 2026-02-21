@@ -6,7 +6,7 @@ use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
-use axum::response::IntoResponse;
+use axum::response::{AppendHeaders, IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serde_yaml;
@@ -52,13 +52,20 @@ pub(crate) async fn api_login(
         token,
         auth.session_ttl_secs()
     );
+    // 兼容旧前端/旧代理配置：同值下发 auth_token，避免出现“Cookie 已下发但后端不识别”。
+    let compat_cookie = format!(
+        "auth_token={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        token,
+        auth.session_ttl_secs()
+    );
     let clear_legacy_cookie = "tomato_pw=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 
     Ok((
-        [
+        AppendHeaders([
             (SET_COOKIE, cookie),
+            (SET_COOKIE, compat_cookie),
             (SET_COOKIE, clear_legacy_cookie.to_string()),
-        ],
+        ]),
         Json(json!({"ok": true, "locked": true})),
     )
         .into_response())

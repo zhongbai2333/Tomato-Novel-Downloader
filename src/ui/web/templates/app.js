@@ -3,6 +3,10 @@
 let loginPromise = null;
 let isDockerBuild = false;
 
+function fetchWithCreds(url, opts) {
+  return fetch(url, { credentials: 'same-origin', ...(opts || {}) });
+}
+
 // ── Theme ──────────────────────────────────────────────────────────
 
 const THEME_KEY = 'tnd.theme';
@@ -86,7 +90,7 @@ async function requireLogin() {
       e.preventDefault();
       const pw = (document.getElementById('loginPassword')?.value || '').toString();
       try {
-        const res = await fetch('/api/login', {
+        const res = await fetchWithCreds('/api/login', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ password: pw })
@@ -108,10 +112,10 @@ async function requireLogin() {
 // ── HTTP Helper ────────────────────────────────────────────────────
 
 async function j(url, opts) {
-  const res = await fetch(url, opts);
+  const res = await fetchWithCreds(url, opts);
   if (res.status === 401) {
     await requireLogin();
-    const res2 = await fetch(url, opts);
+    const res2 = await fetchWithCreds(url, opts);
     if (!res2.ok) {
       const text = await res2.text().catch(() => '');
       throw new Error(`${res2.status} ${res2.statusText}${text ? `: ${text}` : ''}`);

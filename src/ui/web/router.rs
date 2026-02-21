@@ -86,7 +86,9 @@ async fn auth_and_log_mw(
                 .headers()
                 .get(axum::http::header::COOKIE)
                 .and_then(|v| v.to_str().ok())
-                .and_then(|raw| cookie_value(raw, "tomato_session"));
+                .and_then(|raw| {
+                    cookie_value(raw, "tomato_session").or_else(|| cookie_value(raw, "auth_token"))
+                });
 
             let mut authorized = session_cookie
                 .map(|token| auth.verify_session_token(token))
