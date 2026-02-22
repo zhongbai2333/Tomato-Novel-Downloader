@@ -6,7 +6,7 @@
 #   2. 询问用户安装路径（默认脚本执行路径；Termux 下默认 $HOME）
 #   3. 支持 2 种下载方式：
 #        (1) 直连 GitHub
-#        (2) gh-proxy（https://gh-proxy.org/ + GitHub 下载链接）加速
+#        (2) 项目加速源（https://dl.zhongbai233.com/）加速
 #   4. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh（默认 --server）
 #   5. Linux / macOS (arm64 & Intel x86_64) 下下载对应架构二进制并赋予执行权限
 # 
@@ -26,7 +26,7 @@ set -e
 # 功能：
 #   1. 自动通过 GitHub API 获取 Tomato-Novel-Downloader 最新版本
 #   2. 询问用户安装路径（Termux 下默认 $HOME）
-#   3. 支持 2 种下载方式：直连 / gh-proxy
+#   3. 支持 2 种下载方式：直连 / 项目加速源
 #   4. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh（默认 --server）
 #   5. Linux / macOS 下载对应架构二进制并赋予执行权限
 
@@ -127,12 +127,12 @@ log_info "最新版本：${TAG_NAME}（VERSION=${VERSION}）"
 echo ""
 echo "请选择下载方式（输入序号，默认 1）："
 echo "  1) 直连 GitHub"
-echo "  2) 使用 gh-proxy (https://gh-proxy.org/) 加速"
+echo "  2) 使用项目加速源 (https://dl.zhongbai233.com/) 加速"
 read -r ACCEL_CHOICE
 ACCEL_CHOICE="${ACCEL_CHOICE:-1}"
 case "$ACCEL_CHOICE" in
     1) ACCEL_METHOD="direct" ;;
-    2) ACCEL_METHOD="gh-proxy" ;;
+    2) ACCEL_METHOD="accel" ;;
     *) log_warn "无效输入，使用默认直连。"; ACCEL_METHOD="direct" ;;
 esac
 log_info "选择的下载方式：${ACCEL_METHOD}"
@@ -187,7 +187,7 @@ ORIGINAL_URL="https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases/d
 DOWNLOAD_URL="$ORIGINAL_URL"
 case "$ACCEL_METHOD" in
     direct) ;;
-    gh-proxy) DOWNLOAD_URL="https://gh-proxy.org/${ORIGINAL_URL}" ;;
+    accel) DOWNLOAD_URL="https://dl.zhongbai233.com/release/${TAG_NAME}/${BINARY_NAME}" ;;
 esac
 
 echo ""

@@ -37,6 +37,7 @@
     ```
 
     示例：
+
     ```sh
     Tomato-Novel-Downloader.exe --download 7318247498772674083
     ```
@@ -48,11 +49,13 @@
     ```
 
     示例：
+
     ```sh
     Tomato-Novel-Downloader.exe --update 7318247498772674083
     ```
 
 注意：
+
 - 命令行模式为非交互模式，会直接开始下载/更新，无需手动输入
 - 使用配置文件（`config.yml`）中的默认保存路径和下载设置
 - `--download` 和 `--update` 都会智能检测已下载的章节，并提供继续下载或重新下载的选项
@@ -135,7 +138,7 @@ Web UI 提供的功能（纯 HTML，无需额外前端构建）：
 
 已提供 Web UI 版本的 Docker 镜像：
 
-- 镜像地址：https://hub.docker.com/r/zhongbai233/tomato-novel-downloader-webui
+- 镜像地址：[DockerHub](https://hub.docker.com/r/zhongbai233/tomato-novel-downloader-webui)
 - Tags 说明：
   - `latest`：默认 **glibc** 版本（常规服务器/桌面环境）
   - `latest-musl`：**musl** 版本，适用于 **软路由 / NAS** 等轻量系统
@@ -247,7 +250,7 @@ cargo build --release --no-default-features --features no-official-api
     国内用户可使用：
 
     ```sh
-    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    bash <(curl -sL https://dl.zhongbai233.com/installer.sh)
     ```
 
     安装完成后，推荐用 Web UI 启动（示例）：
@@ -274,7 +277,7 @@ cargo build --release --no-default-features --features no-official-api
     国内用户可使用：
 
     ```sh
-    bash <(curl -sL https://gh-proxy.org/https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    bash <(curl -sL https://dl.zhongbai233.com/installer.sh)
     ```
 
 4. 小说id是什么？在哪里获取？

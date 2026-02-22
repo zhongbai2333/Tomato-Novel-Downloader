@@ -3,7 +3,7 @@
 //! 这是对历史 Python `update.py` 的 Rust 侧移植：
 //! - 通过 GitHub Releases API 获取最新版本
 //! - 选择匹配当前平台/架构的资产
-//! - 可选使用 `https://gh-proxy.org/` 前缀加速（可通过 `TND_DISABLE_ACCEL=1` 禁用）
+//! - 可选使用 `https://dl.zhongbai233.com/` 加速（可通过 `TND_DISABLE_ACCEL=1` 禁用）
 //! - 下载后按需校验 SHA256（若 Release 资产提供 digest）
 //! - Windows 使用临时 .bat 进行替换并重启；Unix 直接替换并重启
 
@@ -328,13 +328,18 @@ fn get_latest_release_asset() -> Result<MatchedReleaseAsset> {
 }
 
 fn get_accelerated_url(original_url: &str) -> String {
-    // 直接使用 gh-proxy 前缀加速：
-    // https://gh-proxy.org/<Github Download URL>
-    // 例如：
-    // https://gh-proxy.org/https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
-    let url = format!("https://gh-proxy.org/{original_url}");
-    info!(target: "self_update", "使用 gh-proxy 加速下载地址: {url}");
-    url
+    // 使用项目自建 Cloudflare 加速：
+    // https://dl.zhongbai233.com/release/<tag>/<asset>
+    // 原始链接格式：
+    // https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>
+    if let Some(tail) = original_url.split("/releases/download/").nth(1) {
+        let url = format!("https://dl.zhongbai233.com/release/{tail}");
+        info!(target: "self_update", "使用加速下载地址: {url}");
+        url
+    } else {
+        warn!(target: "self_update", "无法解析加速链接，回退到原始地址: {original_url}");
+        original_url.to_string()
+    }
 }
 
 fn start_update(matched: &MatchedReleaseAsset) -> Result<()> {
