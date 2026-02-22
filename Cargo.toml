@@ -1,6 +1,6 @@
 [package]
 name = "tomato-novel-downloader"
-version = "2.2.3"
+version = "2.2.4"
 edition = "2024"
 
 [features]
