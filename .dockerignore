@@ -4,6 +4,7 @@ Tomato-Novel-Official-API/target/
 .github/
 logs/
 novels/
-img/
+img/*
+!img/Tomato-downloader-ico.ico
 *.log
 *.tmp
