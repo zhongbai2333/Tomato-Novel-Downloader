@@ -3,7 +3,7 @@ use axum::extract::connect_info::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 
 use sha2::{Digest, Sha256};
 use tracing::info;
@@ -16,6 +16,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/", get(routes::index::index))
         .route("/assets/app.css", get(routes::index::asset_css))
         .route("/assets/app.js", get(routes::index::asset_js))
+        .route("/assets/favicon.ico", get(routes::index::asset_favicon_ico))
         .route("/api/login", post(routes::auth::api_login))
         .route("/api/status", get(routes::status::api_status))
         .route("/api/app_update", get(routes::app_update::api_app_update))
@@ -44,6 +45,7 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/api/jobs",
             get(routes::jobs::list_jobs).post(routes::jobs::create_job),
         )
+        .route("/api/jobs/:id", delete(routes::jobs::delete_job))
         .route("/api/jobs/:id/cancel", post(routes::jobs::cancel_job))
         .route(
             "/api/jobs/:id/book_name",

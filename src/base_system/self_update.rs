@@ -10,6 +10,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -33,6 +34,35 @@ pub enum SelfUpdateOutcome {
     UpdateLaunched,
 }
 
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn catch_update_panic<F>(op_name: &str, f: F) -> Result<SelfUpdateOutcome>
+where
+    F: FnOnce() -> Result<SelfUpdateOutcome>,
+{
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let detail = panic_payload_to_string(payload);
+            warn!(
+                target: "self_update",
+                "捕获到上游 panic（{op_name}）：{detail}；已阻止进程崩溃"
+            );
+            Err(anyhow!(
+                "self-update panic in {op_name}: {detail}（已拦截，程序继续运行）"
+            ))
+        }
+    }
+}
+
 /// 启动/自动检查场景下的“热更新”检查：
 /// - 仅当最新 release tag 与当前版本相同
 /// - 且 release 资产提供 SHA256
@@ -41,6 +71,12 @@ pub enum SelfUpdateOutcome {
 ///
 /// 例外：当检测到是 `cargo run`（开发态）运行时，不执行强制热更新。
 pub fn check_hotfix_and_apply(current_version: &str) -> Result<SelfUpdateOutcome> {
+    catch_update_panic("check_hotfix_and_apply", || {
+        check_hotfix_and_apply_impl(current_version)
+    })
+}
+
+fn check_hotfix_and_apply_impl(current_version: &str) -> Result<SelfUpdateOutcome> {
     if cfg!(feature = "docker") {
         warn!(
             target: "self_update",
@@ -100,6 +136,12 @@ struct MatchedReleaseAsset {
 }
 
 pub fn check_for_updates(current_version: &str, auto_yes: bool) -> Result<SelfUpdateOutcome> {
+    catch_update_panic("check_for_updates", || {
+        check_for_updates_impl(current_version, auto_yes)
+    })
+}
+
+fn check_for_updates_impl(current_version: &str, auto_yes: bool) -> Result<SelfUpdateOutcome> {
     if cfg!(feature = "docker") {
         warn!(
             target: "self_update",

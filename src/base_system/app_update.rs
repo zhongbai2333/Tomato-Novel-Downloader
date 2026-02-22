@@ -6,12 +6,14 @@
 //! - 支持“不再提醒”某个 release tag（本地持久化）
 
 use std::fs;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 const OWNER: &str = "zhongbai2333";
 const REPO: &str = "Tomato-Novel-Downloader";
@@ -36,6 +38,35 @@ pub struct UpdateCheckReport {
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 struct LocalUpdateState {
     dismissed_release_tag: Option<String>,
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "unknown panic payload".to_string()
+}
+
+fn catch_update_panic<F>(op_name: &str, f: F) -> Result<UpdateCheckReport>
+where
+    F: FnOnce() -> Result<UpdateCheckReport>,
+{
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let detail = panic_payload_to_string(payload);
+            warn!(
+                target: "app_update",
+                "捕获到上游 panic（{op_name}）：{detail}；已阻止进程崩溃"
+            );
+            Err(anyhow!(
+                "app-update panic in {op_name}: {detail}（已拦截，程序继续运行）"
+            ))
+        }
+    }
 }
 
 fn state_file_path() -> PathBuf {
@@ -116,10 +147,21 @@ fn fetch_latest_release_blocking(client: &reqwest::blocking::Client) -> Result<R
 }
 
 pub fn check_update_report_blocking(current_version: &str) -> Result<UpdateCheckReport> {
-    check_update_report_blocking_with_timeout(current_version, Duration::from_secs(12))
+    catch_update_panic("check_update_report_blocking", || {
+        check_update_report_blocking_with_timeout_impl(current_version, Duration::from_secs(12))
+    })
 }
 
 pub fn check_update_report_blocking_with_timeout(
+    current_version: &str,
+    timeout: Duration,
+) -> Result<UpdateCheckReport> {
+    catch_update_panic("check_update_report_blocking_with_timeout", || {
+        check_update_report_blocking_with_timeout_impl(current_version, timeout)
+    })
+}
+
+fn check_update_report_blocking_with_timeout_impl(
     current_version: &str,
     timeout: Duration,
 ) -> Result<UpdateCheckReport> {

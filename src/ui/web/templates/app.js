@@ -814,6 +814,7 @@ async function confirmPreview() {
       body: JSON.stringify(payload)
     });
     await refreshJobs();
+    window.location.hash = '#jobs';
     const hint = document.getElementById('searchHint');
     if (hint) {
       hint.textContent = rangeStart && rangeEnd
@@ -880,14 +881,14 @@ async function refreshJobs() {
     let btnHtml;
     switch (vState) {
       case 'done':
-        btnHtml = `<button data-title="${esc(title)}" class="goLibrary sm success">完成</button>`;
+        btnHtml = `<button data-jobid="${esc(it.id)}" data-title="${esc(title)}" class="goLibrary sm success">完成</button>`;
         break;
       case 'failed':
       case 'partial':
-        btnHtml = `<button data-bookid="${esc(it.book_id)}" class="retryJob sm warning">重试</button>`;
+        btnHtml = `<button data-jobid="${esc(it.id)}" data-bookid="${esc(it.book_id)}" class="retryJob sm warning">重试</button>`;
         break;
       case 'canceled':
-        btnHtml = `<button data-bookid="${esc(it.book_id)}" class="retryJob sm">重试</button>`;
+        btnHtml = `<button data-jobid="${esc(it.id)}" data-bookid="${esc(it.book_id)}" class="retryJob sm">重试</button>`;
         break;
       default: // running / queued
         btnHtml = `<button data-jobid="${esc(it.id)}" class="cancelJob sm">取消</button>`;
@@ -949,6 +950,10 @@ async function refreshUpdates() {
 async function cancelJob(id) {
   await j(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   await refreshJobs();
+}
+
+async function clearJob(id) {
+  await j(`/api/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // ── Book Name Modal ────────────────────────────────────────────────
@@ -1195,14 +1200,27 @@ function wire() {
     }
     if (t.classList.contains('cancelJob')) {
       const id = t.getAttribute('data-jobid');
+      if (!confirm('确认取消该任务并从列表中清理吗？')) return;
       try { await cancelJob(id); } catch (err) { alert(err); }
     }
     if (t.classList.contains('retryJob')) {
       const bookId = t.getAttribute('data-bookid');
-      try { await startDownload(bookId); } catch (err) { alert(err); }
+      const jobId = t.getAttribute('data-jobid');
+      try {
+        await startDownloadDirect(bookId);
+        if (jobId) {
+          await clearJob(jobId).catch(() => {});
+        }
+        await refreshJobs();
+      } catch (err) { alert(err); }
     }
     if (t.classList.contains('goLibrary')) {
       const title = t.getAttribute('data-title') || '';
+      const jobId = t.getAttribute('data-jobid');
+      if (jobId) {
+        await clearJob(jobId).catch(() => {});
+        await refreshJobs().catch(() => {});
+      }
       libraryPath = '';
       window.location.hash = '#library';
       await refreshLibrary();

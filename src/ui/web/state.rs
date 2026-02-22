@@ -259,6 +259,29 @@ impl JobStore {
         true
     }
 
+    pub(crate) fn request_cancel_and_remove(&self, id: u64) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = g.remove(&id) else {
+            return false;
+        };
+        e.cancel.store(true, Ordering::Relaxed);
+        if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(None);
+        }
+        true
+    }
+
+    pub(crate) fn remove(&self, id: u64) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mut e) = g.remove(&id) else {
+            return false;
+        };
+        if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(None);
+        }
+        true
+    }
+
     pub(crate) fn set_book_name_options(
         &self,
         id: u64,

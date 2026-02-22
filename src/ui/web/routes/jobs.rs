@@ -156,7 +156,18 @@ pub(crate) async fn cancel_job(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Value>, StatusCode> {
-    if state.jobs.request_cancel(id) {
+    if state.jobs.request_cancel_and_remove(id) {
+        Ok(Json(json!({"ok": true})))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+pub(crate) async fn delete_job(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.jobs.remove(id) {
         Ok(Json(json!({"ok": true})))
     } else {
         Err(StatusCode::NOT_FOUND)
