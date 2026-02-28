@@ -733,6 +733,30 @@ pub(super) fn finalize_epub(
     let mut comment_pages: Vec<(String, String)> = Vec::new();
     let mut comment_page_index = 0usize;
 
+    // #263: 在正文中增加可见目录页（table-of-contents.html），
+    // 并放入 spine 前部，便于在不依赖阅读器侧边栏时快速跳转章节。
+    let toc_entries: Vec<(String, String)> = builds
+        .iter()
+        .enumerate()
+        .map(|(idx, b)| (format!("chapter_{:05}.xhtml", 1 + idx), b.title.clone()))
+        .collect();
+    let toc_volumes: Vec<String> = builds
+        .iter()
+        .map(|b| {
+            volume_title_by_chapter_id
+                .get(&b.chapter_id)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let toc_html = build_inline_toc_html(&toc_entries, &toc_volumes);
+    let _ = epub_gen.add_aux_page_named(
+        "table-of-contents.html".to_string(),
+        "目录",
+        &toc_html,
+        true,
+    );
+
     for (idx, b) in builds.iter().enumerate() {
         let chapter_file = format!("chapter_{:05}.xhtml", 1 + idx);
 
@@ -1153,4 +1177,49 @@ fn embed_inline_images_chapter_named(
         })
         .to_string();
     Ok(rewritten)
+}
+
+fn build_inline_toc_html(
+    toc_entries: &[(String, String)],
+    volumes: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str("<nav epub:type=\"toc\" id=\"inline-toc\">\n");
+    out.push_str("  <p class=\"no-indent\">点击章节标题可跳转到对应正文位置。</p>\n");
+
+    let mut current_volume = String::new();
+    let mut list_open = false;
+
+    for ((file, title), vol_raw) in toc_entries.iter().zip(volumes.iter()) {
+        let vol = Some(vol_raw.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("");
+
+        if vol != current_volume {
+            if list_open {
+                out.push_str("  </ol>\n");
+            }
+            if !vol.is_empty() {
+                out.push_str(&format!("  <h3>{}</h3>\n", escape_html(vol)));
+            }
+            out.push_str("  <ol>\n");
+            list_open = true;
+            current_volume = vol.to_string();
+        }
+
+        out.push_str(&format!(
+            "    <li><a href=\"{}\">{}</a></li>\n",
+            escape_html(file),
+            escape_html(title)
+        ));
+    }
+
+    if list_open {
+        out.push_str("  </ol>\n");
+    } else {
+        out.push_str("  <ol></ol>\n");
+    }
+    out.push_str("</nav>");
+    out
 }
