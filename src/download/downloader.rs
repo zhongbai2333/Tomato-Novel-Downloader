@@ -44,7 +44,7 @@ pub(crate) use super::progress::ProgressReporter;
 
 #[cfg(feature = "official-api")]
 pub struct ChapterDownloader {
-    _book_id: String,
+    book_id: String,
     client: FanqieClient,
     config: Config,
 }
@@ -53,7 +53,7 @@ pub struct ChapterDownloader {
 impl ChapterDownloader {
     pub fn new(book_id: &str, config: Config, client: FanqieClient) -> Self {
         Self {
-            _book_id: book_id.to_string(),
+            book_id: book_id.to_string(),
             client,
             config,
         }
@@ -114,7 +114,12 @@ impl ChapterDownloader {
                 let epub_mode = self.config.novel_format == "epub";
                 let mut decrypt_failures = 0usize;
                 let value = loop {
-                    match fetch_with_cooldown_retry(&self.client, &ids, epub_mode) {
+                    match fetch_with_cooldown_retry(
+                        &self.client,
+                        &ids,
+                        epub_mode,
+                        Some(&self.book_id),
+                    ) {
                         Ok(v) => break v,
                         Err(err) => {
                             let msg = err.to_string();
@@ -233,6 +238,7 @@ impl ChapterDownloader {
                 let tx = tx_res.clone();
                 let cfg = self.config.clone();
                 let cancel = cancel.cloned();
+                let book_id_clone = self.book_id.clone();
                 std::thread::spawn(move || {
                     let client = match FanqieClient::new() {
                         Ok(c) => c,
@@ -259,7 +265,12 @@ impl ChapterDownloader {
                         let epub_mode = cfg.novel_format == "epub";
                         let mut decrypt_failures = 0usize;
                         let value = loop {
-                            match fetch_with_cooldown_retry(&client, &ids, epub_mode) {
+                            match fetch_with_cooldown_retry(
+                                &client,
+                                &ids,
+                                epub_mode,
+                                Some(&book_id_clone),
+                            ) {
                                 Ok(v) => break Ok(v),
                                 Err(err) => {
                                     let msg = err.to_string();

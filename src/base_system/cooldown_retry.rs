@@ -11,11 +11,13 @@ pub fn fetch_with_cooldown_retry(
     #[cfg(feature = "official-api")] client: &FanqieClient,
     ids: &str,
     epub_mode: bool,
+    book_id: Option<&str>,
 ) -> Result<Value> {
     #[cfg(not(feature = "official-api"))]
     {
         let _ = ids;
         let _ = epub_mode;
+        let _ = book_id;
         return Err(anyhow!("no-official-api 构建不支持官方 API cooldown 拉取"));
     }
 
@@ -24,7 +26,7 @@ pub fn fetch_with_cooldown_retry(
     #[cfg(feature = "official-api")]
     for attempt in 0..6 {
         #[cfg(feature = "official-api")]
-        match client.get_contents(ids, epub_mode) {
+        match client.get_contents(ids, epub_mode, book_id) {
             Ok(v) => return Ok(v),
             Err(e) => {
                 let msg = e.to_string();

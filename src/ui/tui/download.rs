@@ -108,7 +108,16 @@ pub(super) fn start_download_task(
             DownloadFlowOptions {
                 mode: DownloadMode::Resume,
                 range,
-                retry_failed: RetryFailed::Never,
+                retry_failed: {
+                    let mut retried = false;
+                    RetryFailed::Decide(Box::new(move |_pending_len| {
+                        if retried {
+                            return false;
+                        }
+                        retried = true;
+                        true
+                    }))
+                },
                 stage_callback: None,
                 book_name_asker: Some(Box::new(book_name_asker)),
             },

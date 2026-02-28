@@ -1179,10 +1179,7 @@ fn embed_inline_images_chapter_named(
     Ok(rewritten)
 }
 
-fn build_inline_toc_html(
-    toc_entries: &[(String, String)],
-    volumes: &[String],
-) -> String {
+fn build_inline_toc_html(toc_entries: &[(String, String)], volumes: &[String]) -> String {
     let mut out = String::new();
     out.push_str("<nav epub:type=\"toc\" id=\"inline-toc\">\n");
     out.push_str("  <p class=\"no-indent\">点击章节标题可跳转到对应正文位置。</p>\n");

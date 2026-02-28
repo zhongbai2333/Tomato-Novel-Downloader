@@ -109,7 +109,16 @@ pub(crate) async fn create_job(
             dl::DownloadFlowOptions {
                 mode: dl::DownloadMode::Resume,
                 range,
-                retry_failed: dl::RetryFailed::Never,
+                retry_failed: {
+                    let mut retried = false;
+                    dl::RetryFailed::Decide(Box::new(move |_pending_len| {
+                        if retried {
+                            return false;
+                        }
+                        retried = true;
+                        true
+                    }))
+                },
                 stage_callback: None,
                 book_name_asker: Some(Box::new(book_name_asker)),
             },
