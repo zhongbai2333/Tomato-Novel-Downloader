@@ -20,37 +20,54 @@ jobs:
       group: issue-assistant-ai-review-${{ github.repository }}
       cancel-in-progress: false
     steps:
-      - name: Start Copilot API proxy in local runner
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.19
+
+      - name: Start Copilot API proxy in local runner (bun)
         shell: bash
         env:
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
+          COPILOT_GH_TOKEN: ${{ secrets.GH_Cpilot_Token }}
+          COPILOT_GH_TOKEN_LEGACY: ${{ secrets.COPILOT_GH_TOKEN }}
         run: |
           set -euo pipefail
 
-          if [ -z "${COPILOT_GH_TOKEN:-}" ]; then
-            echo "Missing repository secret: COPILOT_GH_TOKEN"
+          TOKEN="${COPILOT_GH_TOKEN:-}"
+          if [ -z "$TOKEN" ]; then
+            TOKEN="${COPILOT_GH_TOKEN_LEGACY:-}"
+          fi
+
+          if [ -z "$TOKEN" ]; then
+            echo "Missing repository secret: GH_Cpilot_Token (or legacy COPILOT_GH_TOKEN)"
             exit 1
           fi
 
-          docker build -t local/copilot-api:latest https://github.com/ericc-ch/copilot-api.git#master
+          rm -rf .copilot-api
+          git clone --depth 1 https://github.com/ericc-ch/copilot-api.git .copilot-api
 
-          docker run -d --name copilot-api \
-            -p 4141:4141 \
-            -e GH_TOKEN="$COPILOT_GH_TOKEN" \
-            local/copilot-api:latest \
-            start --port 4141 --rate-limit 10 --wait
+          pushd .copilot-api >/dev/null
+          bun install --frozen-lockfile
+
+          # 按项目要求使用双 start 命令
+          nohup bun run start start --github-token "$TOKEN" --port 4141 --rate-limit 10 --wait \
+            > "$GITHUB_WORKSPACE/copilot-api.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/copilot-api.pid"
+          popd >/dev/null
 
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:4141/v1/models >/dev/null 2>&1; then
               echo "copilot-api is ready"
-              exit 0
+              break
             fi
             sleep 2
           done
 
-          echo "copilot-api failed to become ready in time"
-          docker logs copilot-api || true
-          exit 1
+          if ! curl -fsS http://127.0.0.1:4141/v1/models >/dev/null 2>&1; then
+            echo "copilot-api failed to become ready in time"
+            tail -n 200 "$GITHUB_WORKSPACE/copilot-api.log" || true
+            exit 1
+          fi
 
       - name: Analyze issue with GPT-5-mini
         id: analyze
@@ -333,11 +350,20 @@ jobs:
             const prefix = titlePrefixByType[result.type] || '[Question]';
             result.better_title = `${prefix} ${safeTitleCore}`.slice(0, 200);
 
+            if (!result.summary || !result.summary.trim()) {
+              result.summary = '已完成自动分诊，请查看建议标签与补充项。';
+            }
+
             const labels = [result.type, result.priority];
             if (result.negative !== 'none') labels.push(result.negative);
             if (result.needs_info) labels.push('Needs-Info');
 
             result.labels = labels;
+
+            if (!Array.isArray(result.labels) || result.labels.length < 2) {
+              failAnalysis('normalized-result-missing-labels');
+              return;
+            }
 
             core.setOutput('result', JSON.stringify(result));
             core.setOutput('analyze_ok', 'true');
@@ -351,10 +377,21 @@ jobs:
         shell: bash
         run: |
           set +e
-          docker logs copilot-api > /tmp/copilot-api.log 2>&1 || true
-          docker stop copilot-api >/dev/null 2>&1 || true
-          docker rm copilot-api >/dev/null 2>&1 || true
-          echo "copilot-api container cleaned"
+
+          if [ -f "$GITHUB_WORKSPACE/copilot-api.pid" ]; then
+            PID="$(cat "$GITHUB_WORKSPACE/copilot-api.pid")"
+            if [ -n "$PID" ] && kill -0 "$PID" >/dev/null 2>&1; then
+              kill "$PID" >/dev/null 2>&1 || true
+              sleep 1
+              kill -9 "$PID" >/dev/null 2>&1 || true
+            fi
+          fi
+
+          pkill -f "bun run start start" >/dev/null 2>&1 || true
+
+          echo "----- copilot-api log (tail 200) -----"
+          tail -n 200 "$GITHUB_WORKSPACE/copilot-api.log" || true
+          echo "copilot-api process cleaned"
 
       - name: Publish AI review comment
         if: always() && steps.analyze.outputs.analyze_ok == 'true'
@@ -365,7 +402,56 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issue = context.payload.issue;
-            const result = JSON.parse(process.env.AI_RESULT || '{}');
+            const raw = String(process.env.AI_RESULT || '').trim();
+
+            if (!raw) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: [
+                  '## ⚠️ AI 审查结果为空',
+                  '',
+                  '本次审查执行完成，但未收到可用的结构化结果（AI_RESULT 为空）。',
+                  '请添加 `AI-Rerun` 重试；如持续复现，请检查代理返回格式。'
+                ].join('\n')
+              });
+              return;
+            }
+
+            let result;
+            try {
+              result = JSON.parse(raw);
+            } catch (e) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: [
+                  '## ⚠️ AI 审查结果不可解析',
+                  '',
+                  '本次审查返回了非 JSON 结果，无法生成建议。',
+                  `- 解析错误：\`${String(e?.message || e).replace(/`/g, '\\`')}\``,
+                  '请添加 `AI-Rerun` 重试。'
+                ].join('\n')
+              });
+              return;
+            }
+
+            if (!Array.isArray(result.labels) || result.labels.length < 2) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: [
+                  '## ⚠️ AI 审查结果不完整',
+                  '',
+                  '本次审查返回字段缺失（labels 不完整），已阻止发布无效建议。',
+                  '请添加 `AI-Rerun` 重试。'
+                ].join('\n')
+              });
+              return;
+            }
 
             const marker = '<!-- ai-issue-review:' + JSON.stringify(result).replace(/-->/g, '--＞') + ' -->';
             const lines = [];
