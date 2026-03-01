@@ -147,7 +147,7 @@ jobs:
             ].join('\n');
 
             const baseUrl = process.env.OPENAI_BASE_URL || 'http://127.0.0.1:4141/v1';
-            const model = process.env.OPENAI_MODEL || 'gpt-5-mini';
+            const preferredModel = process.env.OPENAI_MODEL || 'gpt-5-mini';
 
             const headers = {
               'Content-Type': 'application/json'
@@ -157,35 +157,124 @@ jobs:
               headers['Authorization'] = 'Bearer ' + process.env.OPENAI_API_KEY;
             }
 
-            const resp = await fetch(baseUrl + '/chat/completions', {
-              method: 'POST',
-              headers,
-              body: JSON.stringify({
+            const pickModel = async () => {
+              try {
+                const modelsResp = await fetch(baseUrl + '/models', { headers, method: 'GET' });
+                if (!modelsResp.ok) return preferredModel;
+                const modelsData = await modelsResp.json();
+                const ids = Array.isArray(modelsData?.data)
+                  ? modelsData.data.map(m => String(m?.id || '')).filter(Boolean)
+                  : [];
+
+                if (ids.includes(preferredModel)) return preferredModel;
+
+                const candidates = ['gpt-5-mini', 'gpt-4.1', 'gpt-4o', 'o4-mini', 'o3-mini'];
+                for (const c of candidates) {
+                  if (ids.includes(c)) return c;
+                }
+
+                return ids[0] || preferredModel;
+              } catch {
+                return preferredModel;
+              }
+            };
+
+            const model = await pickModel();
+            core.info(`Issue assistant selected model: ${model}`);
+
+            const extractRawContent = (data) => {
+              const choice = data?.choices?.[0] || {};
+              const msg = choice?.message || {};
+
+              if (typeof msg.content === 'string') return msg.content;
+
+              if (Array.isArray(msg.content)) {
+                return msg.content
+                  .map(part => {
+                    if (typeof part === 'string') return part;
+                    if (typeof part?.text === 'string') return part.text;
+                    if (typeof part?.content === 'string') return part.content;
+                    return '';
+                  })
+                  .join('\n')
+                  .trim();
+              }
+
+              if (typeof choice?.text === 'string') return choice.text;
+              return '';
+            };
+
+            const parseJsonObject = (raw) => {
+              const trimmed = String(raw || '').trim();
+              if (!trimmed) throw new Error('empty-content');
+
+              try {
+                return JSON.parse(trimmed);
+              } catch {
+                const cleaned = trimmed
+                  .replace(/^```json\s*/i, '')
+                  .replace(/^```\s*/i, '')
+                  .replace(/```$/i, '')
+                  .trim();
+
+                try {
+                  return JSON.parse(cleaned);
+                } catch {
+                  const first = cleaned.indexOf('{');
+                  const last = cleaned.lastIndexOf('}');
+                  if (first >= 0 && last > first) {
+                    const candidate = cleaned.slice(first, last + 1);
+                    return JSON.parse(candidate);
+                  }
+                  throw new Error('invalid-json-content');
+                }
+              }
+            };
+
+            const doCompletion = async (useJsonResponseFormat) => {
+              const payload = {
                 model,
                 temperature: 0.1,
-                response_format: { type: 'json_object' },
                 messages: [
                   { role: 'system', content: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文。' },
                   { role: 'user', content: prompt }
                 ]
-              })
-            });
+              };
 
-            if (!resp.ok) {
-              const txt = await resp.text();
-              core.setFailed('OpenAI request failed: ' + resp.status + ' ' + txt);
-              return;
-            }
+              if (useJsonResponseFormat) {
+                payload.response_format = { type: 'json_object' };
+              }
 
-            const data = await resp.json();
-            const raw = data?.choices?.[0]?.message?.content || '{}';
+              return fetch(baseUrl + '/chat/completions', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+              });
+            };
 
             let parsed;
-            try {
-              parsed = JSON.parse(raw);
-            } catch {
-              const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
-              parsed = JSON.parse(cleaned);
+            let lastError = null;
+
+            for (const useJsonResponseFormat of [true, false]) {
+              try {
+                const resp = await doCompletion(useJsonResponseFormat);
+                if (!resp.ok) {
+                  const txt = await resp.text();
+                  throw new Error(`completion-${resp.status}: ${txt}`);
+                }
+
+                const data = await resp.json();
+                const raw = extractRawContent(data);
+                parsed = parseJsonObject(raw);
+                break;
+              } catch (e) {
+                lastError = e;
+              }
+            }
+
+            if (!parsed) {
+              core.setFailed('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error'));
+              return;
             }
 
             const result = {
