@@ -65,6 +65,28 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
+            const failAnalysis = (reason) => {
+              const message = String(reason || 'unknown-error').slice(0, 1500);
+              const fallback = {
+                summary: 'AI 审查失败，已回退为人工处理建议。',
+                better_title: String(issue?.title || '未提供标题').slice(0, 200),
+                type: 'Question',
+                negative: 'none',
+                priority: '🟨Medium',
+                needs_info: true,
+                need_more_info_items: ['请补充复现步骤、运行环境与日志压缩包。'],
+                confidence: 0,
+                labels: ['Question', '🟨Medium', 'Needs-Info']
+              };
+
+              core.setOutput('result', JSON.stringify(fallback));
+              core.setOutput('analyze_ok', 'false');
+              core.setOutput('analyze_error', message);
+              core.warning('AI analyze failed: ' + message);
+            };
+
+            try {
+
             let notFixPolicyDoc = '';
             try {
               const fileResp = await github.rest.repos.getContent({
@@ -273,7 +295,7 @@ jobs:
             }
 
             if (!parsed) {
-              core.setFailed('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error'));
+              failAnalysis('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error'));
               return;
             }
 
@@ -318,6 +340,11 @@ jobs:
             result.labels = labels;
 
             core.setOutput('result', JSON.stringify(result));
+            core.setOutput('analyze_ok', 'true');
+            core.setOutput('analyze_error', '');
+            } catch (e) {
+              failAnalysis(e?.message || e);
+            }
 
       - name: Stop Copilot API proxy
         if: always()
@@ -330,7 +357,7 @@ jobs:
           echo "copilot-api container cleaned"
 
       - name: Publish AI review comment
-        if: success()
+        if: always() && steps.analyze.outputs.analyze_ok == 'true'
         uses: actions/github-script@v7
         env:
           AI_RESULT: ${{ steps.analyze.outputs.result }}
@@ -371,12 +398,15 @@ jobs:
             });
 
       - name: Fallback comment when AI review fails
-        if: failure()
+        if: always() && steps.analyze.outputs.analyze_ok != 'true'
         uses: actions/github-script@v7
+        env:
+          ANALYZE_ERROR: ${{ steps.analyze.outputs.analyze_error }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issue = context.payload.issue;
+            const reason = String(process.env.ANALYZE_ERROR || 'unknown-error').slice(0, 1000);
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -386,6 +416,7 @@ jobs:
                 '## ⚠️ AI 审查暂时失败',
                 '',
                 '本次自动审查未成功完成（可能是服务启动失败、网络波动、限流或上游响应异常）。',
+                `- 诊断信息：\`${reason.replace(/`/g, '\\`')}\``,
                 '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
                 '',
                 '维护者也可直接手动打标签处理，不影响正常流程。'
