@@ -7,6 +7,7 @@ on:
       - edited
       - reopened
       - labeled
+      - closed
 
 permissions:
   contents: read
@@ -105,11 +106,11 @@ jobs:
                 better_title: String(issue?.title || '未提供标题').slice(0, 200),
                 type: 'Question',
                 negative: 'none',
-                priority: '🟨Medium',
+                priority: '',
                 needs_info: true,
                 need_more_info_items: ['请补充复现步骤、运行环境与日志压缩包。'],
                 confidence: 0,
-                labels: ['Question', '🟨Medium', 'Needs-Info']
+                labels: ['Question', 'Needs-Info']
               };
 
               core.setOutput('analysis_result', JSON.stringify(fallback));
@@ -192,7 +193,7 @@ jobs:
               '- 🟪Critical: The program has a critical error that prevents it from running',
               '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多2条)、confidence(0-1)。',
               '如果信息明显不足，needs_info 必须为 true。',
-              '若 negative 不是 none，仍需给出 type 与 priority。',
+              '若 negative 不是 none，仍需给出 type。',
               '标题规则：better_title 必须根据 type 自动加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
               '',
               'Issue 标题：',
@@ -377,6 +378,11 @@ jobs:
               confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6)))
             };
 
+            // Question 不设置紧急度标签
+            if (result.type === 'Question') {
+              result.priority = '';
+            }
+
             result.need_more_info_items = result.need_more_info_items
               .map(v => String(v || '').trim())
               .filter(Boolean)
@@ -411,13 +417,14 @@ jobs:
 
             result.summary = result.summary.replace(/[?？]+/g, '。').trim();
 
-            const labels = [result.type, result.priority];
+            const labels = [result.type];
+            if (result.priority) labels.push(result.priority);
             if (result.negative !== 'none') labels.push(result.negative);
             if (result.needs_info) labels.push('Needs-Info');
 
             result.labels = labels;
 
-            if (!Array.isArray(result.labels) || result.labels.length < 2) {
+            if (!Array.isArray(result.labels) || result.labels.length < 1) {
               failAnalysis('normalized-result-missing-labels');
               return;
             }
@@ -519,7 +526,7 @@ jobs:
               return;
             }
 
-            if (!Array.isArray(result.labels) || result.labels.length < 2) {
+            if (!Array.isArray(result.labels) || result.labels.length < 1) {
               const body = [
                 '## ⚠️ AI 审查结果不完整',
                 '',
@@ -710,6 +717,11 @@ jobs:
 
             const desiredLabels = new Set((Array.isArray(aiPayload.labels) ? aiPayload.labels : []).map(normalizeLabel));
 
+            // Question 不允许携带紧急度
+            if (desiredLabels.has('Question')) {
+              for (const p of priorityGroup) desiredLabels.delete(p);
+            }
+
             // Remove conflicting labels first.
             const current = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name));
 
@@ -785,5 +797,60 @@ jobs:
                 repo,
                 issue_number,
                 body: '已根据 `Confirm` 应用 AI 审查标签，流程完成。本次为受理结论，已自动将确认人加入 Assignees。'
+              });
+            }
+
+  close-handler:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Handle close rules by state reason and labels
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = issue.number;
+            const reason = String(issue.state_reason || '').toLowerCase(); // completed | not_planned | reopened
+
+            const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+            const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
+
+            const hasNeedsInfo = hasLabel('Needs-Info');
+            const hasPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'].some(hasLabel);
+            const hasAcceptedType = ['BUG', 'Enhancement', 'Documentation'].some(hasLabel);
+
+            // 1) 保留 Needs-Info 且 Close issue（completed）：移除 Needs-Info，不回复
+            if (hasNeedsInfo && reason === 'completed') {
+              for (const name of ['Needs-Info', 'needs-info']) {
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                } catch {
+                  // ignore absent label
+                }
+              }
+              return;
+            }
+
+            // 2) 保留 Needs-Info 且 Close as not planned：保留 Needs-Info，并回复提示
+            if (hasNeedsInfo && reason === 'not_planned') {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: '由于您并未跟进此Issue，现将此Issue临时关闭，若您还有更多信息，可重启此Issue！'
+              });
+              return;
+            }
+
+            // 3) BUG/Enhancement/Documentation 且已受理（有紧急度标签）后关闭：回复修复完成提示
+            if (hasAcceptedType && hasPriority && reason === 'completed') {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: '感谢您的Issue，现已完成修复，请等待新版本构建并更新！'
               });
             }
