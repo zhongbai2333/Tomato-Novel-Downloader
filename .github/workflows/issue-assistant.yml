@@ -74,6 +74,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           OPENAI_BASE_URL: http://127.0.0.1:4141/v1
+          AI_TEMP_DEBUG: "true"
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -139,57 +140,72 @@ jobs:
             const allowedNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'];
             const allowedPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
 
-            const prompt = [
-              '你是一个 GitHub Issue 分诊助手。',
-              '请根据 issue 标题和内容，输出严格 JSON（不要输出 markdown 代码块）。',
-              '语言要求：所有自然语言字段必须使用简体中文（包括 summary、better_title、need_more_info_items）。',
-              '禁止输出英文句子（专有名词与标签名除外）。',
-              '重复判断规则：只与“当前 Open Issues”比较是否重复，不使用 Closed Issues 做重复判定。',
-              '策略规则：可参考 not-fix 策略样例（AI_NOT_FIX_CASES.md）。若命中策略且 Open 中无重复，可给 WontFix；若 Open 中有同类，给 Duplicate。',
-              '必须只从以下枚举中选择标签：',
-              'type: BUG | Documentation | Enhancement | Question',
-              'negative: Duplicate | WontFix | Invalid | none',
-              'priority: 🟪Critical | 🟥High | 🟨Medium | 🟩Low',
-              'needs_info: true | false',
-              '标签释义（必须严格按此理解）：',
-              '- AI-Rerun: Reuse AI review（人工触发重新审查）',
-              '- BUG: Something isn\'t working',
-              '- Confirm: Agree to AI review operation',
-              '- Documentation: Improvements or additions to documentation',
-              '- Duplicate: This issue or pull request already exists',
-              '- Enhancement: New feature or request',
-              '- Invalid: There is no such issue',
-              '- Needs-Info: Issue requires more information',
-              '- NEW: New Issue',
-              '- Question: Question related to the project',
-              '- WontFix: This will not be worked on',
-              '- 🟥High: High priority',
-              '- 🟨Medium: Medium priority',
-              '- 🟩Low: Low priority',
-              '- 🟪Critical: The program has a critical error that prevents it from running',
-              '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多5条)、confidence(0-1)。',
-              '如果信息明显不足，needs_info 必须为 true。',
-              '若 negative 不是 none，仍需给出 type 与 priority。',
-              '标题规则：better_title 必须根据 type 自动加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
-              '',
-              'Issue 标题：',
-              issue.title,
-              '',
-              'Issue 正文：',
-              body,
-              '',
-              '当前 Open Issues（用于重复判断，仅此列表参与重复判定）：',
-              openIssues.length ? openIssues.join('\n') : '（无）',
-              '',
-              'Not-Fix 策略样例文档（用于策略参考，不直接作为重复目标）：',
-              notFixPolicyDoc || '（未找到 AI_NOT_FIX_CASES.md）'
-            ].join('\n');
+            const buildPrompt = ({ compact }) => {
+              const openIssuesForPrompt = compact ? openIssues.slice(0, 20) : openIssues;
+              const policyDocForPrompt = compact
+                ? String(notFixPolicyDoc || '').slice(0, 2500)
+                : notFixPolicyDoc;
+
+              return [
+                '你是一个 GitHub Issue 分诊助手。',
+                '请根据 issue 标题和内容，输出严格 JSON（不要输出 markdown 代码块）。',
+                '语言要求：所有自然语言字段必须使用简体中文（包括 summary、better_title、need_more_info_items）。',
+                '禁止输出英文句子（专有名词与标签名除外）。',
+                '重复判断规则：只与“当前 Open Issues”比较是否重复，不使用 Closed Issues 做重复判定。',
+                '策略规则：可参考 not-fix 策略样例（AI_NOT_FIX_CASES.md）。若命中策略且 Open 中无重复，可给 WontFix；若 Open 中有同类，给 Duplicate。',
+                compact ? '当前为精简模式：请在保证准确性的前提下优先输出稳定 JSON。' : '当前为完整模式。',
+                '必须只从以下枚举中选择标签：',
+                'type: BUG | Documentation | Enhancement | Question',
+                'negative: Duplicate | WontFix | Invalid | none',
+                'priority: 🟪Critical | 🟥High | 🟨Medium | 🟩Low',
+                'needs_info: true | false',
+                '标签释义（必须严格按此理解）：',
+                '- AI-Rerun: Reuse AI review（人工触发重新审查）',
+                '- BUG: Something isn\'t working',
+                '- Confirm: Agree to AI review operation',
+                '- Documentation: Improvements or additions to documentation',
+                '- Duplicate: This issue or pull request already exists',
+                '- Enhancement: New feature or request',
+                '- Invalid: There is no such issue',
+                '- Needs-Info: Issue requires more information',
+                '- NEW: New Issue',
+                '- Question: Question related to the project',
+                '- WontFix: This will not be worked on',
+                '- 🟥High: High priority',
+                '- 🟨Medium: Medium priority',
+                '- 🟩Low: Low priority',
+                '- 🟪Critical: The program has a critical error that prevents it from running',
+                '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多5条)、confidence(0-1)。',
+                '如果信息明显不足，needs_info 必须为 true。',
+                '若 negative 不是 none，仍需给出 type 与 priority。',
+                '标题规则：better_title 必须根据 type 自动加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
+                '',
+                'Issue 标题：',
+                issue.title,
+                '',
+                'Issue 正文：',
+                body,
+                '',
+                '当前 Open Issues（用于重复判断，仅此列表参与重复判定）：',
+                openIssuesForPrompt.length ? openIssuesForPrompt.join('\n') : '（无）',
+                '',
+                'Not-Fix 策略样例文档（用于策略参考，不直接作为重复目标）：',
+                policyDocForPrompt || '（未找到 AI_NOT_FIX_CASES.md）'
+              ].join('\n');
+            };
 
             const baseUrl = process.env.OPENAI_BASE_URL || 'http://127.0.0.1:4141/v1';
             const preferredModel = process.env.OPENAI_MODEL || 'gpt-5-mini';
 
             const headers = {
               'Content-Type': 'application/json'
+            };
+
+            const tempDebug = String(process.env.AI_TEMP_DEBUG || 'false').toLowerCase() === 'true';
+            const debugLog = (title, data) => {
+              if (!tempDebug) return;
+              const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+              core.info(`[AI-DEBUG] ${title}\n${text}`);
             };
 
             if (process.env.OPENAI_API_KEY) {
@@ -270,13 +286,13 @@ jobs:
               }
             };
 
-            const doCompletion = async (useJsonResponseFormat) => {
+            const doCompletion = async (useJsonResponseFormat, promptText, attemptName) => {
               const payload = {
                 model,
                 temperature: 0.1,
                 messages: [
                   { role: 'system', content: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文。' },
-                  { role: 'user', content: prompt }
+                  { role: 'user', content: promptText }
                 ]
               };
 
@@ -284,35 +300,78 @@ jobs:
                 payload.response_format = { type: 'json_object' };
               }
 
-              return fetch(baseUrl + '/chat/completions', {
+              const sanitizedHeaders = { ...headers };
+              if (sanitizedHeaders.Authorization) {
+                sanitizedHeaders.Authorization = 'Bearer ***';
+              }
+
+              debugLog(`${attemptName} request`, {
+                url: baseUrl + '/chat/completions',
+                headers: sanitizedHeaders,
+                payload
+              });
+
+              const resp = await fetch(baseUrl + '/chat/completions', {
                 method: 'POST',
                 headers,
                 body: JSON.stringify(payload)
               });
+
+              const respText = await resp.text();
+
+              debugLog(`${attemptName} response`, {
+                status: resp.status,
+                ok: resp.ok,
+                headers: Object.fromEntries(resp.headers.entries()),
+                body: respText
+              });
+
+              return { resp, respText };
             };
 
             let parsed;
             let lastError = null;
+            const attemptLogs = [];
 
-            for (const useJsonResponseFormat of [true, false]) {
-              try {
-                const resp = await doCompletion(useJsonResponseFormat);
-                if (!resp.ok) {
-                  const txt = await resp.text();
-                  throw new Error(`completion-${resp.status}: ${txt}`);
+            for (const mode of [{ compact: false, name: 'full' }, { compact: true, name: 'compact' }]) {
+              const promptText = buildPrompt({ compact: mode.compact });
+
+              for (const useJsonResponseFormat of [true, false]) {
+                try {
+                  const attemptName = `${mode.name}/${useJsonResponseFormat ? 'json' : 'plain'}`;
+                  const { resp, respText } = await doCompletion(useJsonResponseFormat, promptText, attemptName);
+                  if (!resp.ok) {
+                    throw new Error(`completion-${resp.status}: ${respText}`);
+                  }
+
+                  let data;
+                  try {
+                    data = JSON.parse(respText);
+                  } catch {
+                    throw new Error('completion-non-json: ' + String(respText || '').slice(0, 1200));
+                  }
+
+                  const raw = extractRawContent(data);
+                  const usage = data?.usage || {};
+                  const finishReason = data?.choices?.[0]?.finish_reason || 'unknown';
+                  attemptLogs.push(`${mode.name}/${useJsonResponseFormat ? 'json' : 'plain'} usage=${JSON.stringify(usage)} finish=${finishReason} rawLen=${raw.length}`);
+                  core.info(`AI attempt ${mode.name}/${useJsonResponseFormat ? 'json' : 'plain'} rawLen=${raw.length} finish=${finishReason}`);
+
+                  parsed = parseJsonObject(raw);
+                  break;
+                } catch (e) {
+                  lastError = e;
+                  attemptLogs.push(`${mode.name}/${useJsonResponseFormat ? 'json' : 'plain'} error=${String(e?.message || e).slice(0, 300)}`);
                 }
+              }
 
-                const data = await resp.json();
-                const raw = extractRawContent(data);
-                parsed = parseJsonObject(raw);
+              if (parsed) {
                 break;
-              } catch (e) {
-                lastError = e;
               }
             }
 
             if (!parsed) {
-              failAnalysis('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error'));
+              failAnalysis('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error') + ' | attempts=' + attemptLogs.join(' ; '));
               return;
             }
 
