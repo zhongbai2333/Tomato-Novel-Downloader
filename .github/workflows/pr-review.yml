@@ -8,7 +8,7 @@ jobs:
   cancel_if_unrelated:
     runs-on: ubuntu-latest
     # 只保留 run-build，其它标签添加则取消
-    if: github.event.label.name != 'run-build'
+    if: github.event.label.name != 'run-build' && github.event.label.name != 'Run-Build' && github.event.label.name != 'RUN-BUILD'
     steps:
       - name: 非目标标签，取消本次 Workflow
         uses: styfle/cancel-workflow-action@0.9.1
@@ -16,7 +16,7 @@ jobs:
           access_token: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR 源分支代码
@@ -91,7 +91,7 @@ jobs:
           path: dist/TomatoNovelDownloader-*
 
   build-linux-arm64:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout PR 源分支代码
@@ -166,7 +166,7 @@ jobs:
           path: dist/TomatoNovelDownloader-*
 
   build-linux-musl:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR 源分支代码
@@ -250,7 +250,7 @@ jobs:
           path: dist/TomatoNovelDownloader-*
 
   build-android-arm64:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR 源分支代码
@@ -352,7 +352,7 @@ jobs:
           path: dist/TomatoNovelDownloader-*
 
   build-windows:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: windows-latest
     steps:
       - name: Checkout PR 源分支代码
@@ -426,7 +426,7 @@ jobs:
           path: dist\TomatoNovelDownloader-*.exe
 
   build-macos:
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: macos-latest
     steps:
       - name: Checkout PR 源分支代码
@@ -502,7 +502,7 @@ jobs:
 
   build-on-label:
     needs: [build-linux, build-linux-musl, build-linux-arm64, build-android-arm64, build-windows, build-macos]
-    if: github.event.label.name == 'run-build'
+    if: github.event.label.name == 'run-build' || github.event.label.name == 'Run-Build' || github.event.label.name == 'RUN-BUILD'
     runs-on: ubuntu-latest
     steps:
       - name: 评论 & 删除标签

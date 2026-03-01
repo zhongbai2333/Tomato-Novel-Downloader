@@ -502,23 +502,53 @@ jobs:
             const tags = releases.map(r => r.tag_name);
             const idx = tags.indexOf(tag);
             const prev = idx < releases.length - 1 ? releases[idx+1] : null;
-            const since = prev ? prev.published_at : null;
             const prevTag = prev ? prev.tag_name : null;
             const compareUrl = prevTag ? `https://github.com/${owner}/${repo}/compare/${prevTag}...${tag}` : '';
-            const params = { owner, repo, state: 'closed', per_page: 100 };
-            if (since) params.since = since;
-            const issuesResp = await github.rest.issues.listForRepo(params);
-            const items = issuesResp.data.filter(item =>
-              !item.labels.some(lbl => ['wontfix', 'duplicate'].includes(lbl.name.toLowerCase()))
-            );
-            const groups = { Fix: [], Update: [], Feature: [] };
-            items.forEach(item => {
-              item.labels.forEach(lbl => {
-                if (lbl.name === 'bug') groups.Fix.push(item);
-                else if (lbl.name === 'update') groups.Update.push(item);
-                else if (lbl.name === 'enhancement') groups.Feature.push(item);
-              });
+
+            const closedStart = prev ? new Date(prev.published_at).toISOString() : null;
+            const closedEnd = new Date().toISOString();
+
+            let query = `repo:${owner}/${repo} is:issue is:closed`;
+            if (closedStart) {
+              query += ` closed:${closedStart}..${closedEnd}`;
+            }
+
+            const issues = await github.paginate(github.rest.search.issuesAndPullRequests, {
+              q: query,
+              per_page: 100
             });
+
+            const negativeLabels = ['wontfix', 'duplicate', 'invalid'];
+
+            const groups = { Fix: [], Update: [], Feature: [] };
+            const seen = new Set();
+
+            for (const item of issues) {
+              if (seen.has(item.number)) continue;
+              seen.add(item.number);
+
+              const labels = (item.labels || []).map(l => typeof l === 'string' ? l : l.name);
+              const labelLowers = labels.map(l => String(l).toLowerCase());
+
+              if (labelLowers.some(l => negativeLabels.includes(l))) continue;
+              if (labelLowers.some(l => ['question'].includes(l))) continue;
+
+              if (labelLowers.some(l => ['bug'].includes(l))) {
+                groups.Fix.push(item);
+                continue;
+              }
+
+              if (labelLowers.some(l => ['enhancement', 'feature'].includes(l))) {
+                groups.Feature.push(item);
+                continue;
+              }
+
+              if (labelLowers.some(l => ['documentation', 'doc', 'update'].includes(l))) {
+                groups.Update.push(item);
+                continue;
+              }
+            }
+
             let body = "# What's Changed\n\n";
             const zh = { Fix: '修复', Update: '更新', Feature: '新增' };
             for (const key of ['Fix','Update','Feature']) {
