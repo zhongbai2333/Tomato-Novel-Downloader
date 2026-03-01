@@ -97,7 +97,7 @@ jobs:
                 labels: ['Question', '🟨Medium', 'Needs-Info']
               };
 
-              core.setOutput('result', JSON.stringify(fallback));
+              core.setOutput('analysis_result', JSON.stringify(fallback));
               core.setOutput('analyze_ok', 'false');
               core.setOutput('analyze_error', message);
               core.warning('AI analyze failed: ' + message);
@@ -151,6 +151,7 @@ jobs:
                 '请根据 issue 标题和内容，输出严格 JSON（不要输出 markdown 代码块）。',
                 '语言要求：所有自然语言字段必须使用简体中文（包括 summary、better_title、need_more_info_items）。',
                 '禁止输出英文句子（专有名词与标签名除外）。',
+                '表达要求：只做客观总结与结论，不要用提问语气，不要反问，不要写“请问/是否/能否/要不要”。',
                 '重复判断规则：只与“当前 Open Issues”比较是否重复，不使用 Closed Issues 做重复判定。',
                 '策略规则：可参考 not-fix 策略样例（AI_NOT_FIX_CASES.md）。若命中策略且 Open 中无重复，可给 WontFix；若 Open 中有同类，给 Duplicate。',
                 compact ? '当前为精简模式：请在保证准确性的前提下优先输出稳定 JSON。' : '当前为完整模式。',
@@ -291,7 +292,7 @@ jobs:
                 model,
                 temperature: 0.1,
                 messages: [
-                  { role: 'system', content: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文。' },
+                  { role: 'system', content: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文；表达必须客观陈述，不使用提问语气。' },
                   { role: 'user', content: promptText }
                 ]
               };
@@ -396,6 +397,11 @@ jobs:
               confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6)))
             };
 
+            result.need_more_info_items = result.need_more_info_items
+              .map(v => String(v || '').replace(/[?？]+/g, '').replace(/^\s*(请问|是否|能否|要不要)\s*/g, '').trim())
+              .filter(Boolean)
+              .slice(0, 5);
+
             const titlePrefixByType = {
               BUG: '[BUG]',
               Enhancement: '[Feature]',
@@ -424,7 +430,7 @@ jobs:
               return;
             }
 
-            core.setOutput('result', JSON.stringify(result));
+            core.setOutput('analysis_result', JSON.stringify(result));
             core.setOutput('analyze_ok', 'true');
             core.setOutput('analyze_error', '');
             } catch (e) {
@@ -456,7 +462,7 @@ jobs:
         if: always() && steps.analyze.outputs.analyze_ok == 'true'
         uses: actions/github-script@v7
         env:
-          AI_RESULT: ${{ steps.analyze.outputs.result }}
+          AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
