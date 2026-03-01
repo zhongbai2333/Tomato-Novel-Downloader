@@ -57,7 +57,7 @@ body:
     validations:
       required: false
 
-  - type: textarea
+  - type: input
     id: env_info
     attributes:
       label: 环境信息（可选）
@@ -73,7 +73,6 @@ body:
       description: |
         请上传程序根目录 `logs/` 下最近一次日志目录的压缩包（zip）。
         也可粘贴关键报错片段。
-      render: text
       placeholder: |
         - 已附 zip：是/否
         - 关键报错：
