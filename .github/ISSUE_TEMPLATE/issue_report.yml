@@ -1,7 +1,7 @@
 name: "Issue 报告"
 description: 反馈 Bug / 使用问题 / 建议（请尽量附 BookID 与日志）
 title: "[Issue] "
-labels: ["new"]
+labels: ["NEW"]
 body:
   - type: markdown
     attributes:
