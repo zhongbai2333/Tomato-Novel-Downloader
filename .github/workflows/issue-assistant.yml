@@ -20,6 +20,26 @@ jobs:
       group: issue-assistant-ai-review-${{ github.repository }}
       cancel-in-progress: false
     steps:
+      - name: Create pending AI review comment
+        id: pending_comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const resp = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: [
+                '## 🤖 AI 审查进行中',
+                '',
+                '正在分析该 Issue 并生成总结、标题优化与标签建议，请稍候…'
+              ].join('\n')
+            });
+
+            core.setOutput('comment_id', String(resp.data.id));
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -435,24 +455,37 @@ jobs:
         uses: actions/github-script@v7
         env:
           AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
+          AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issue = context.payload.issue;
+            const commentId = Number(process.env.AI_COMMENT_ID || 0);
             const raw = String(process.env.AI_RESULT || '').trim();
 
             if (!raw) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: [
-                  '## ⚠️ AI 审查结果为空',
-                  '',
-                  '本次审查执行完成，但未收到可用的结构化结果（AI_RESULT 为空）。',
-                  '请添加 `AI-Rerun` 重试；如持续复现，请检查代理返回格式。'
-                ].join('\n')
-              });
+              const body = [
+                '## ⚠️ AI 审查结果为空',
+                '',
+                '本次审查执行完成，但未收到可用的结构化结果（AI_RESULT 为空）。',
+                '请添加 `AI-Rerun` 重试；如持续复现，请检查代理返回格式。'
+              ].join('\n');
+
+              if (commentId > 0) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: commentId,
+                  body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body
+                });
+              }
               return;
             }
 
@@ -460,33 +493,55 @@ jobs:
             try {
               result = JSON.parse(raw);
             } catch (e) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: [
-                  '## ⚠️ AI 审查结果不可解析',
-                  '',
-                  '本次审查返回了非 JSON 结果，无法生成建议。',
-                  `- 解析错误：\`${String(e?.message || e).replace(/`/g, '\\`')}\``,
-                  '请添加 `AI-Rerun` 重试。'
-                ].join('\n')
-              });
+              const body = [
+                '## ⚠️ AI 审查结果不可解析',
+                '',
+                '本次审查返回了非 JSON 结果，无法生成建议。',
+                `- 解析错误：\`${String(e?.message || e).replace(/`/g, '\\`')}\``,
+                '请添加 `AI-Rerun` 重试。'
+              ].join('\n');
+
+              if (commentId > 0) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: commentId,
+                  body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body
+                });
+              }
               return;
             }
 
             if (!Array.isArray(result.labels) || result.labels.length < 2) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: [
-                  '## ⚠️ AI 审查结果不完整',
-                  '',
-                  '本次审查返回字段缺失（labels 不完整），已阻止发布无效建议。',
-                  '请添加 `AI-Rerun` 重试。'
-                ].join('\n')
-              });
+              const body = [
+                '## ⚠️ AI 审查结果不完整',
+                '',
+                '本次审查返回字段缺失（labels 不完整），已阻止发布无效建议。',
+                '请添加 `AI-Rerun` 重试。'
+              ].join('\n');
+
+              if (commentId > 0) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: commentId,
+                  body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body
+                });
+              }
               return;
             }
 
@@ -513,38 +568,59 @@ jobs:
             lines.push('如需再次触发 AI 重审，可添加标签 `AI-Rerun`。');
             lines.push(marker);
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: lines.join('\n')
-            });
+            if (commentId > 0) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body: lines.join('\n')
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: lines.join('\n')
+              });
+            }
 
       - name: Fallback comment when AI review fails
         if: always() && steps.analyze.outputs.analyze_ok != 'true'
         uses: actions/github-script@v7
         env:
           ANALYZE_ERROR: ${{ steps.analyze.outputs.analyze_error }}
+          AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const issue = context.payload.issue;
             const reason = String(process.env.ANALYZE_ERROR || 'unknown-error').slice(0, 1000);
+            const commentId = Number(process.env.AI_COMMENT_ID || 0);
+            const body = [
+              '## ⚠️ AI 审查暂时失败',
+              '',
+              '本次自动审查未成功完成（可能是服务启动失败、网络波动、限流或上游响应异常）。',
+              `- 诊断信息：\`${reason.replace(/`/g, '\\`')}\``,
+              '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
+              '',
+              '维护者也可直接手动打标签处理，不影响正常流程。'
+            ].join('\\n');
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: [
-                '## ⚠️ AI 审查暂时失败',
-                '',
-                '本次自动审查未成功完成（可能是服务启动失败、网络波动、限流或上游响应异常）。',
-                `- 诊断信息：\`${reason.replace(/`/g, '\\`')}\``,
-                '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
-                '',
-                '维护者也可直接手动打标签处理，不影响正常流程。'
-              ].join('\\n')
-            });
+            if (commentId > 0) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body
+              });
+            }
 
       - name: Remove ai-rerun label after processing
         if: always() && github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')
