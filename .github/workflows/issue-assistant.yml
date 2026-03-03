@@ -4,10 +4,12 @@ on:
   issues:
     types:
       - opened
-      - edited
       - reopened
       - labeled
       - closed
+  issue_comment:
+    types:
+      - created
 
 permissions:
   contents: read
@@ -15,7 +17,7 @@ permissions:
 
 jobs:
   ai-review:
-    if: github.event.action == 'opened' || github.event.action == 'edited' || github.event.action == 'reopened' || (github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun'))
+    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened' || (github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')))
     runs-on: ubuntu-latest
     concurrency:
       group: issue-assistant-ai-review-${{ github.repository }}
@@ -109,8 +111,7 @@ jobs:
                 priority: '',
                 needs_info: true,
                 need_more_info_items: ['请补充复现步骤、运行环境与日志压缩包。'],
-                confidence: 0,
-                labels: ['Question', 'Needs-Info']
+                confidence: 0
               };
 
               core.setOutput('analysis_result', JSON.stringify(fallback));
@@ -191,10 +192,12 @@ jobs:
               '- 🟨Medium: Medium priority',
               '- 🟩Low: Low priority',
               '- 🟪Critical: The program has a critical error that prevents it from running',
-              '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多2条)、confidence(0-1)。',
+              '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多2条)、confidence(0-1)、duplicate_of(number|null)。',
               '如果信息明显不足，needs_info 必须为 true。',
-              '若 negative 不是 none，仍需给出 type。',
-              '标题规则：better_title 必须根据 type 自动加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
+              '重复指向规则：若 negative=Duplicate，duplicate_of 必须填写一个合法的 issue 编号。合法来源有两个：①「当前 Open Issues 列表」中的编号，②「AI_NOT_FIX_CASES.md」中明确提及的锚点编号（如 #90、#230、#265 等）。summary 也必须提及"与 #xxx 重复"。',
+              '优先级：若 Open Issues 中存在同类 issue，优先指向 Open 的那条；若 Open 中无同类但命中 AI_NOT_FIX_CASES.md 中的锚点案例，则 duplicate_of 指向该锚点编号。若两个来源都找不到匹配，则不应判 Duplicate，而应判 WontFix。',
+              '标签互斥规则：negative(Duplicate/WontFix/Invalid) 与 type(BUG/Enhancement/...) 互斥，当 negative 不为 none 时，最终标签只保留 negative，不包含 type 和 priority。',
+              '标题规则：negative=Duplicate 时前缀用 [Duplicate]，negative=WontFix 时用 [WontFix]，negative=Invalid 时用 [Invalid]；其余按 type 加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
               '',
               'Issue 标题：',
               issue.title,
@@ -375,8 +378,39 @@ jobs:
               need_more_info_items: Array.isArray(parsed.need_more_info_items)
                 ? parsed.need_more_info_items.slice(0, 5).map(v => String(v).slice(0, 200))
                 : [],
-              confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6)))
+              confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6))),
+              duplicate_of: (parsed.duplicate_of && Number.isFinite(Number(parsed.duplicate_of))) ? Number(parsed.duplicate_of) : null
             };
+
+            // 服务端校验：duplicate_of 必须存在于 Open Issues 或 AI_NOT_FIX_CASES.md 提及的锚点 issue 中
+            if (result.duplicate_of) {
+              const openIssueNumbers = new Set(openIssuesRaw
+                .filter(i => !i.pull_request && i.number !== issue.number)
+                .map(i => i.number));
+
+              // 从 AI_NOT_FIX_CASES.md 提取所有 issue 编号作为合法锚点
+              const policyIssueNumbers = new Set();
+              if (notFixPolicyDoc) {
+                for (const m of notFixPolicyDoc.matchAll(/#(\d+)/g)) {
+                  policyIssueNumbers.add(Number(m[1]));
+                }
+              }
+
+              const isValidTarget = openIssueNumbers.has(result.duplicate_of) || policyIssueNumbers.has(result.duplicate_of);
+              if (!isValidTarget) {
+                core.warning(`duplicate_of=#${result.duplicate_of} not in Open Issues or AI_NOT_FIX_CASES.md; clearing`);
+                if (result.negative === 'Duplicate') {
+                  result.negative = 'WontFix';
+                }
+                result.duplicate_of = null;
+              }
+            }
+
+            // Duplicate 必须有合法的 duplicate_of，否则降级
+            if (result.negative === 'Duplicate' && !result.duplicate_of) {
+              core.warning('negative=Duplicate but no valid duplicate_of; downgrading to WontFix');
+              result.negative = 'WontFix';
+            }
 
             // Question 不设置紧急度标签
             if (result.type === 'Question') {
@@ -404,11 +438,18 @@ jobs:
               Question: '[Question]',
               Documentation: '[Doc]'
             };
+            const negativePrefixMap = {
+              Duplicate: '[Duplicate]',
+              WontFix: '[WontFix]',
+              Invalid: '[Invalid]'
+            };
             const normalizedTitleCore = String(result.better_title || issue.title || '')
               .replace(/^\s*\[[^\]]+\]\s*/g, '')
               .trim();
             const safeTitleCore = normalizedTitleCore || '未提供标题';
-            const prefix = titlePrefixByType[result.type] || '[Question]';
+            const prefix = (result.negative !== 'none' && negativePrefixMap[result.negative])
+              ? negativePrefixMap[result.negative]
+              : (titlePrefixByType[result.type] || '[Question]');
             result.better_title = `${prefix} ${safeTitleCore}`.slice(0, 200);
 
             if (!result.summary || !result.summary.trim()) {
@@ -417,9 +458,14 @@ jobs:
 
             result.summary = result.summary.replace(/[?？]+/g, '。').trim();
 
-            const labels = [result.type];
-            if (result.priority) labels.push(result.priority);
-            if (result.negative !== 'none') labels.push(result.negative);
+            // 负向标签与 type/priority 互斥：Duplicate/WontFix/Invalid 单独作为标签
+            const labels = [];
+            if (result.negative !== 'none') {
+              labels.push(result.negative);
+            } else {
+              labels.push(result.type);
+              if (result.priority) labels.push(result.priority);
+            }
             if (result.needs_info) labels.push('Needs-Info');
 
             result.labels = labels;
@@ -456,6 +502,63 @@ jobs:
           echo "----- copilot-api log (tail 200) -----"
           tail -n 200 "$GITHUB_WORKSPACE/copilot-api.log" || true
           echo "copilot-api process cleaned"
+
+      - name: Auto add Needs-Info once for low-confidence body review
+        if: always() && steps.analyze.outputs.analyze_ok == 'true' && github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
+        uses: actions/github-script@v7
+        env:
+          AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = issue.number;
+
+            const raw = String(process.env.AI_RESULT || '').trim();
+            if (!raw) return;
+
+            let result;
+            try {
+              result = JSON.parse(raw);
+            } catch {
+              return;
+            }
+
+            const confidence = Number(result?.confidence ?? 0);
+            const needsInfo = Boolean(result?.needs_info);
+            const threshold = 0.75;
+
+            // 仅在低置信度且 AI 判断需要补充信息时自动添加
+            if (!needsInfo || Number.isNaN(confidence) || confidence >= threshold) return;
+
+            // 每个 issue 仅允许自动添加一次：检查历史是否曾经被打过 Needs-Info
+            const events = await github.paginate(github.rest.issues.listEvents, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100
+            });
+
+            const everLabeledNeedsInfo = events.some(e => {
+              const ev = String(e?.event || '').toLowerCase();
+              const ln = String(e?.label?.name || '').toLowerCase();
+              return ev === 'labeled' && ln === 'needs-info';
+            });
+
+            if (everLabeledNeedsInfo) return;
+
+            const currentLabels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+            const hasNeedsInfoNow = currentLabels.some(l => String(l).toLowerCase() === 'needs-info');
+            if (hasNeedsInfoNow) return;
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: ['Needs-Info']
+            });
 
       - name: Publish AI review comment
         if: always() && steps.analyze.outputs.analyze_ok == 'true'
@@ -557,6 +660,9 @@ jobs:
             lines.push('## 🤖 AI 审查结果');
             lines.push('');
             lines.push('- **总结**: ' + (result.summary || '（无）'));
+            if (result.duplicate_of) {
+              lines.push('- **重复于**: #' + result.duplicate_of);
+            }
             lines.push('- **建议标题**: ' + (result.better_title || issue.title));
             lines.push('- **建议标签**: ' + (Array.isArray(result.labels) && result.labels.length ? result.labels.map(v => '`' + v + '`').join(' ') : '（无）'));
             lines.push('- **是否需要补充信息**: ' + (result.needs_info ? '是' : '否'));
@@ -611,7 +717,7 @@ jobs:
               '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
               '',
               '维护者也可直接手动打标签处理，不影响正常流程。'
-            ].join('\\n');
+            ].join('\n');
 
             if (commentId > 0) {
               await github.rest.issues.updateComment({
@@ -648,8 +754,63 @@ jobs:
               }
             }
 
+  needs-info-comment-rerun:
+    if: github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.issue.state == 'open'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: issue-assistant-needs-info-comment-${{ github.repository }}-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Re-trigger AI when issue author follows up under Needs-Info
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = issue.number;
+
+            const issueAuthor = String(issue.user?.login || '').toLowerCase();
+            const commenter = String(comment.user?.login || '').toLowerCase();
+            if (!issueAuthor || !commenter || issueAuthor !== commenter) {
+              core.info('Skip: commenter is not the issue author.');
+              return;
+            }
+
+            const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+            const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
+            const hasNeedsInfo = hasLabel('Needs-Info');
+
+            if (!hasNeedsInfo) {
+              core.info('Skip: issue does not have Needs-Info label.');
+              return;
+            }
+
+            for (const name of ['Needs-Info', 'needs-info']) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+              } catch {
+                // ignore absent label
+              }
+            }
+
+            const labelsToAdd = [];
+            if (!hasLabel('NEW')) labelsToAdd.push('NEW');
+            if (!hasLabel('AI-Rerun')) labelsToAdd.push('AI-Rerun');
+
+            if (labelsToAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number,
+                labels: labelsToAdd
+              });
+            }
+
   confirm-apply:
-    if: github.event.action == 'labeled' && (github.event.label.name == 'Confirm' || github.event.label.name == 'confirm')
+    if: github.event_name == 'issues' && github.event.action == 'labeled' && (github.event.label.name == 'Confirm' || github.event.label.name == 'confirm')
     runs-on: ubuntu-latest
     steps:
       - name: Apply AI review result after confirm
@@ -697,6 +858,21 @@ jobs:
                 body: '未找到可应用的 AI 审查结果，请先等待 AI 审查评论生成后再添加 `Confirm`。'
               });
               return;
+            }
+
+            // 同步应用 AI 优化标题
+            const aiTitleRaw = String(aiPayload.better_title || '').trim();
+            const currentTitle = String(issue.title || '').trim();
+            if (aiTitleRaw) {
+              const normalizedAiTitle = aiTitleRaw.replace(/\s+/g, ' ').trim().slice(0, 200);
+              if (normalizedAiTitle && normalizedAiTitle !== currentTitle) {
+                await github.rest.issues.update({
+                  owner,
+                  repo,
+                  issue_number,
+                  title: normalizedAiTitle
+                });
+              }
             }
 
             const normalizeLabel = (label) => {
@@ -760,14 +936,31 @@ jobs:
               }
             }
 
+            // Needs-Info 也需清理：若 AI 不再建议补充信息，残留 Needs-Info 会导致 close-handler 误判
+            if (!desiredLabels.has('Needs-Info')) {
+              for (const name of ['Needs-Info', 'needs-info']) {
+                try {
+                  await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                } catch {
+                  // ignore absent label
+                }
+              }
+            }
+
             const hasNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'].some(l => desiredLabels.has(l));
 
             if (hasNegative) {
+              const negLabel = ['Duplicate', 'WontFix', 'Invalid'].find(l => desiredLabels.has(l)) || 'Negative';
+              let closeBody = `已根据 \`Confirm\` 应用 AI 审查结果，结论为 \`${negLabel}\`，现自动关闭该 Issue。`;
+              if (negLabel === 'Duplicate' && aiPayload.duplicate_of) {
+                closeBody += `\n\n重复于：#${aiPayload.duplicate_of}`;
+              }
+
               await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number,
-                body: '已根据 `Confirm` 应用 AI 审查结果，且结论为负向标签（`Duplicate`/`WontFix`/`Invalid`），现自动关闭该 issue。'
+                body: closeBody
               });
 
               await github.rest.issues.update({
@@ -801,7 +994,7 @@ jobs:
             }
 
   close-handler:
-    if: github.event.action == 'closed'
+    if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
       - name: Handle close rules by state reason and labels

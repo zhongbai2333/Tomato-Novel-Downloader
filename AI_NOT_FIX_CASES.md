@@ -14,6 +14,9 @@
 3. Question 为中性咨询类：
    - 可判定 `Needs-Info`，但不应进入 Release Notes 的代码变更分组。
 
+> **📌 给 AI 的提示**：本文件中列出的 issue 编号（#90、#93、#126 等）虽已关闭，但它们是维护者精选的**锚点案例**，**可以**作为 `duplicate_of` 的值。
+> 判断优先级：① 若当前 Open Issues 中有同类 issue，`duplicate_of` 优先指向 Open 的那条；② 若 Open 中无同类但新 issue 命中本文件的锚点案例，`duplicate_of` 指向本文件中对应的锚点编号，`negative=Duplicate`；③ 若两者都不匹配，才考虑 `WontFix`。
+
 ## Not-Fix 策略样例（用户提供）
 
 - #90  [Not Fix] 一键更新
@@ -36,6 +39,9 @@
   - 结论：不计划新增该格式开关
 
 ## 高频重复簇（补充）
+
+> 以下均为**已关闭**的历史案例，但作为维护者精选锚点，**可以**用作 `duplicate_of` 目标。
+> 判断优先级：若 Open Issues 中有同类 issue 优先指向 Open 的；若 Open 中无同类，`duplicate_of` 指向此簇中最相关的锚点编号（通常为 #90）。
 
 以下均与 #90 相关、通常按重复处理：
 
