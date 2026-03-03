@@ -875,6 +875,39 @@ jobs:
               }
             }
 
+            // 将 AI 总结追加到 Issue Body 末尾
+            const aiSummaryMarker = '<!-- ai-summary-section -->';
+            const currentBody = String(issue.body || '');
+            const summaryLines = [];
+            summaryLines.push(aiSummaryMarker);
+            summaryLines.push('');
+            summaryLines.push('---');
+            summaryLines.push('');
+            summaryLines.push('### 🤖 AI 审查总结');
+            summaryLines.push('');
+            summaryLines.push('- **总结**: ' + (aiPayload.summary || '（无）'));
+            if (aiPayload.duplicate_of) {
+              summaryLines.push('- **重复于**: #' + aiPayload.duplicate_of);
+            }
+
+            const summaryBlock = summaryLines.join('\n');
+
+            // 如果 body 中已有 AI 总结区域，替换它；否则追加
+            let newBody;
+            const markerIdx = currentBody.indexOf(aiSummaryMarker);
+            if (markerIdx >= 0) {
+              newBody = currentBody.slice(0, markerIdx).trimEnd() + '\n\n' + summaryBlock;
+            } else {
+              newBody = currentBody.trimEnd() + '\n\n' + summaryBlock;
+            }
+
+            await github.rest.issues.update({
+              owner,
+              repo,
+              issue_number,
+              body: newBody
+            });
+
             const normalizeLabel = (label) => {
               const text = String(label || '').trim();
               const low = text.toLowerCase();
