@@ -22,7 +22,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/api/app_update", get(routes::app_update::api_app_update))
         .route(
             "/api/self_update",
-            post(routes::app_update::api_self_update),
+            get(routes::app_update::api_self_update_status)
+                .post(routes::app_update::api_self_update),
         )
         .route(
             "/api/config",
@@ -42,6 +43,18 @@ pub(crate) fn build_router(state: AppState) -> Router {
         .route("/api/search", get(routes::search::api_search))
         .route("/api/preview/:book_id", get(routes::preview::api_preview))
         .route(
+            "/api/preview/:book_id/cleanup",
+            post(routes::preview::api_preview_cleanup),
+        )
+        .route(
+            "/api/preview-cover/:key",
+            get(routes::preview::api_preview_cover),
+        )
+        .route(
+            "/api/preview-cover-by-book/:book_id",
+            get(routes::preview::api_preview_cover_by_book),
+        )
+        .route(
             "/api/jobs",
             get(routes::jobs::list_jobs).post(routes::jobs::create_job),
         )
@@ -51,7 +64,8 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/api/jobs/:id/book_name",
             post(routes::jobs::submit_book_name_choice),
         )
-        .route("/api/updates", get(routes::updates::api_updates));
+        .route("/api/updates", get(routes::updates::api_updates))
+        .route("/api/history", get(routes::history::api_history));
 
     protected
         .layer(from_fn_with_state(state.clone(), auth_and_log_mw))

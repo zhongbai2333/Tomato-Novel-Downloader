@@ -38,6 +38,13 @@ pub(super) fn handle_event_home(app: &mut App, event: Event) -> Result<()> {
                     super::switch_view(app, MenuAction::Update)?;
                 }
             }
+            KeyCode::Char('h') => {
+                if app.focus == Focus::Input {
+                    app.input.push('h');
+                } else {
+                    super::switch_view(app, MenuAction::History)?;
+                }
+            }
             KeyCode::Char('a') => {
                 if app.focus == Focus::Input {
                     app.input.push('a');

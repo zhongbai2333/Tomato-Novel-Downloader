@@ -1,5 +1,7 @@
 use reqwest::blocking::Client;
-use reqwest::header::{ACCEPT, ACCEPT_ENCODING, CONNECTION, HeaderMap, HeaderValue};
+use reqwest::header::{
+    ACCEPT, ACCEPT_ENCODING, CONNECTION, HeaderMap, HeaderValue, REFERER, USER_AGENT,
+};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -11,6 +13,16 @@ fn shared_client() -> &'static Client {
         headers.insert(ACCEPT, HeaderValue::from_static("*/*"));
         headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         headers.insert(CONNECTION, HeaderValue::from_static("keep-alive"));
+        headers.insert(
+            REFERER,
+            HeaderValue::from_static("https://fanqienovel.com/"),
+        );
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            ),
+        );
         Client::builder()
             .default_headers(headers)
             .build()

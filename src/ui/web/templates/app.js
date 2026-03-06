@@ -174,9 +174,33 @@ function parseBookId(input) {
   return '';
 }
 
+function isLikelyHeicUrl(url) {
+  const s = (url || '').toString().toLowerCase();
+  if (!s) return false;
+  return /[\/.](heic|heif)(?:$|[?#])/i.test(s) || s.includes('format=heic') || s.includes('mime=image/heic');
+}
+
+function buildCoverCandidates(preview) {
+  const list = [];
+  const add = (u) => {
+    const v = (u || '').toString().trim();
+    if (!v) return;
+    if (!(v.startsWith('http://') || v.startsWith('https://') || v.startsWith('/'))) return;
+    if (!list.includes(v)) list.push(v);
+  };
+
+  add(preview?.detail_cover_url);
+  add(preview?.cover_url);
+
+  const nonHeic = list.filter(u => !isLikelyHeicUrl(u));
+  const heic = list.filter(isLikelyHeicUrl);
+  return [...nonHeic, ...heic];
+}
+
 // ── App Update ─────────────────────────────────────────────────────
 
 const DISMISS_KEY = 'tnd.dismissed_release_tag';
+let selfUpdatePollTimer = null;
 
 function getDismissedTag() {
   try { return (localStorage.getItem(DISMISS_KEY) || '').toString(); } catch { return ''; }
@@ -188,6 +212,47 @@ function setDismissedTag(tag) {
 function showAppUpdateBanner(show) {
   const el = document.getElementById('appUpdateBanner');
   if (el) el.classList.toggle('hidden', !show);
+}
+
+function renderSelfUpdateStatus(status) {
+  const wrap = document.getElementById('selfUpdateProgressWrap');
+  const stage = document.getElementById('selfUpdateStage');
+  const msg = document.getElementById('selfUpdateMessage');
+  const bar = document.getElementById('selfUpdateProgressBar');
+  const pct = document.getElementById('selfUpdatePercent');
+  if (!wrap || !stage || !msg || !bar || !pct) return;
+
+  const st = (status?.state || 'idle').toString();
+  const percent = Number(status?.percent || 0);
+  const show = st !== 'idle';
+  wrap.classList.toggle('hidden', !show);
+  if (!show) return;
+
+  stage.textContent = (status?.stage || 'idle').toString();
+  msg.textContent = (status?.message || '').toString();
+  bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  pct.textContent = `${Math.max(0, Math.min(100, percent))}%`;
+}
+
+async function pollSelfUpdateStatus() {
+  try {
+    const status = await j('/api/self_update');
+    renderSelfUpdateStatus(status);
+
+    const st = (status?.state || '').toString();
+    if (st === 'running') {
+      if (!selfUpdatePollTimer) {
+        selfUpdatePollTimer = setInterval(() => {
+          pollSelfUpdateStatus().catch(() => {});
+        }, 1000);
+      }
+    } else if (selfUpdatePollTimer) {
+      clearInterval(selfUpdatePollTimer);
+      selfUpdatePollTimer = null;
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function applyDockerUpdateUi() {
@@ -645,6 +710,12 @@ function showPreviewModal(show) {
   modal.classList.toggle('hidden', !show);
   document.body.style.overflow = show ? 'hidden' : '';
   if (!show) {
+    // 关闭预览时，清理服务端因预览产生的封面缓存文件夹
+    if (currentPreviewBookId) {
+      fetchWithCreds(`/api/preview/${encodeURIComponent(currentPreviewBookId)}/cleanup`, {
+        method: 'POST',
+      }).catch(() => {}); // fire-and-forget
+    }
     currentPreviewBookId = null;
     currentPreviewData = null;
   }
@@ -748,12 +819,27 @@ async function openPreview(bookId) {
     }
 
     if (cover) {
-      const coverUrl = preview.detail_cover_url || preview.cover_url;
-      if (coverUrl && (coverUrl.startsWith('http://') || coverUrl.startsWith('https://'))) {
-        cover.src = coverUrl;
+      const candidates = buildCoverCandidates(preview);
+      let coverIdx = 0;
+
+      const loadCandidate = () => {
+        if (coverIdx >= candidates.length) {
+          cover.removeAttribute('src');
+          cover.classList.add('hidden');
+          cover.onerror = null;
+          return;
+        }
+        cover.src = candidates[coverIdx++];
         cover.classList.remove('hidden');
+      };
+
+      cover.onerror = () => loadCandidate();
+      if (candidates.length > 0) {
+        loadCandidate();
       } else {
+        cover.removeAttribute('src');
         cover.classList.add('hidden');
+        cover.onerror = null;
       }
     }
 
@@ -909,6 +995,48 @@ async function refreshJobs() {
 
   const pending = (data.items || []).find(it => (it.book_name_options || []).length > 0);
   if (pending && !isBookNameModalOpen()) showBookNameModal(pending);
+}
+
+// ── History ───────────────────────────────────────────────────────
+
+async function refreshHistory() {
+  const hint = document.getElementById('historyHint');
+  const body = document.getElementById('historyBody');
+  const kw = (document.getElementById('historyKeyword')?.value || '').toString().trim();
+  if (!body) return;
+
+  if (hint) hint.textContent = '加载中…';
+  body.innerHTML = '<tr class="empty-row"><td colspan="6">加载中…</td></tr>';
+
+  const qs = new URLSearchParams();
+  qs.set('limit', '200');
+  if (kw) qs.set('q', kw);
+
+  const data = await j(`/api/history?${qs.toString()}`);
+  const items = data.items || [];
+
+  body.innerHTML = '';
+  for (const it of items) {
+    const tr = document.createElement('tr');
+    const status = (it.status || '').toString().toLowerCase();
+    const badge = status === 'success'
+      ? '<span class="badge success">成功</span>'
+      : '<span class="badge danger">失败</span>';
+    tr.innerHTML = `
+      <td>${esc(it.timestamp || '')}</td>
+      <td>${esc(it.book_name || '')}</td>
+      <td>${esc(it.author || '')}</td>
+      <td><code>${esc(it.book_id || '')}</code></td>
+      <td>${esc(it.progress || '')}</td>
+      <td>${badge}</td>
+    `;
+    body.appendChild(tr);
+  }
+
+  if (items.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="6">暂无历史记录</td></tr>';
+  }
+  if (hint) hint.textContent = `共 ${items.length} 条`;
 }
 
 // ── Updates ────────────────────────────────────────────────────────
@@ -1122,10 +1250,24 @@ function wire() {
     if (hint) hint.textContent = '自更新启动中…';
     try {
       await j('/api/self_update', { method: 'POST' });
-      if (hint) hint.textContent = '已触发自更新，服务将重启';
+      if (hint) hint.textContent = '自更新任务已启动';
+      await pollSelfUpdateStatus();
     } catch (err) {
       if (hint) hint.textContent = '自更新触发失败';
       alert(err);
+    }
+  });
+
+  const historyRefresh = document.getElementById('historyRefresh');
+  if (historyRefresh) historyRefresh.addEventListener('click', async () => {
+    try { await refreshHistory(); } catch (err) { alert(err); }
+  });
+
+  const historyKeyword = document.getElementById('historyKeyword');
+  if (historyKeyword) historyKeyword.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      try { await refreshHistory(); } catch (err) { alert(err); }
     }
   });
 
@@ -1293,7 +1435,9 @@ async function boot() {
   await refreshRawConfig();
   await refreshUpdates();
   await refreshJobs();
+  await refreshHistory();
   await refreshLibrary();
+  await pollSelfUpdateStatus();
   setInterval(() => refreshJobs().catch(() => {}), 1500);
   setInterval(() => refreshStatus().catch(() => {}), 5000);
   if (!isDockerBuild) {

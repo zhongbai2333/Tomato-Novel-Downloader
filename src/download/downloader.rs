@@ -16,6 +16,7 @@ use tracing::{debug, error, info};
 use crate::base_system::book_paths;
 use crate::base_system::context::Config;
 use crate::base_system::cooldown_retry::fetch_with_cooldown_retry;
+use crate::base_system::download_history::{DownloadHistoryRecord, append_download_history};
 use crate::book_parser::book_manager::BookManager;
 use crate::book_parser::finalize_utils;
 use crate::book_parser::parser::ContentParser;
@@ -436,7 +437,7 @@ pub fn download_with_plan_flow(
 
     loop {
         let book_name = manager.book_name.clone();
-        let result = download_chapters_into_manager(
+        let result = match download_chapters_into_manager(
             config,
             &plan.book_id,
             &book_name,
@@ -446,7 +447,23 @@ pub fn download_with_plan_flow(
             Some(&plan._raw),
             &mut reporter,
             cancel_flag.as_ref(),
-        )?;
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                let success = count_success_for_chosen(&manager, &chosen_chapters);
+                let failed = chosen_chapters.len().saturating_sub(success);
+                append_download_history(&DownloadHistoryRecord::new(
+                    manager.book_id.clone(),
+                    manager.book_name.clone(),
+                    manager.author.clone(),
+                    chosen_chapters.len(),
+                    success,
+                    failed,
+                    "failed".to_string(),
+                ));
+                return Err(e);
+            }
+        };
 
         if let Some(cb) = stage_callback.as_mut() {
             cb(result);
@@ -469,14 +486,33 @@ pub fn download_with_plan_flow(
         reporter.reset_for_retry(chosen_chapters.len(), pending.len());
     }
 
-    finalize_from_manager(
+    let finalize_result = finalize_from_manager(
         &mut manager,
         &chosen_chapters,
         Some(&plan._raw),
         Some(&mut reporter),
         cancel_flag.as_ref(),
         &mut book_name_asker,
-    )
+    );
+
+    let success = count_success_for_chosen(&manager, &chosen_chapters);
+    let failed = chosen_chapters.len().saturating_sub(success);
+    let status = if finalize_result.is_ok() && failed == 0 {
+        "success"
+    } else {
+        "failed"
+    };
+    append_download_history(&DownloadHistoryRecord::new(
+        manager.book_id.clone(),
+        manager.book_name.clone(),
+        manager.author.clone(),
+        chosen_chapters.len(),
+        success,
+        failed,
+        status.to_string(),
+    ));
+
+    finalize_result
 }
 
 // ── Manager 初始化与辅助 ──────────────────────────────────────
@@ -613,6 +649,13 @@ pub(crate) fn pending_failed(manager: &BookManager, chapters: &[ChapterRef]) -> 
         .filter(|ch| matches!(manager.downloaded.get(&ch.id), Some((_, None))))
         .cloned()
         .collect()
+}
+
+fn count_success_for_chosen(manager: &BookManager, chapters: &[ChapterRef]) -> usize {
+    chapters
+        .iter()
+        .filter(|ch| matches!(manager.downloaded.get(&ch.id), Some((_, Some(_)))))
+        .count()
 }
 
 // ── 核心下载编排 ──────────────────────────────────────────────

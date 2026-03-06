@@ -91,7 +91,7 @@ impl ContentParser {
                 .unwrap_or(cid.as_str());
 
             let processed = if cfg.novel_format.eq_ignore_ascii_case("txt") {
-                Self::clean_plain(raw_content)
+                Self::clean_plain(raw_content, title)
             } else if cfg.novel_format.eq_ignore_ascii_case("epub") {
                 // EPUB 模式：尽量保留原始 XHTML（包括 <img> 等标签），后续在 finalize 阶段
                 // 负责下载并替换图片资源。
@@ -114,7 +114,7 @@ impl ContentParser {
     }
 
     /// 纯文本清洗：移除标签、统一换行并添加简单缩进。
-    pub fn clean_plain(raw: &str) -> String {
+    pub fn clean_plain(raw: &str, title: &str) -> String {
         // Many chapters come as XHTML fragments (<p>, <br>, etc.).
         // If we strip tags directly, paragraphs collapse into a single line.
         let normalized = re_breaks().replace_all(raw, "\n");
@@ -138,17 +138,47 @@ impl ContentParser {
                 continue;
             }
             last_blank = false;
-            out.push(format!("　　{}", trimmed));
+            out.push(trimmed.to_string());
         }
 
         while out.last().is_some_and(|l| l.trim().is_empty()) {
             out.pop();
         }
 
+        // 某些章节正文首段会重复输出章节标题（常见于 h1/h2 被扁平化后），
+        // 这里做保守去重：仅当首个非空行与章节标题一致时移除首行。
+        let normalized_title = normalize_title_for_compare(title);
+        if !normalized_title.is_empty() {
+            loop {
+                let Some(first_non_empty_idx) = out.iter().position(|l| !l.trim().is_empty())
+                else {
+                    break;
+                };
+                let first_line_norm =
+                    normalize_title_for_compare(out[first_non_empty_idx].as_str());
+                if first_line_norm != normalized_title {
+                    break;
+                }
+                out.remove(first_non_empty_idx);
+                if first_non_empty_idx < out.len() && out[first_non_empty_idx].trim().is_empty() {
+                    out.remove(first_non_empty_idx);
+                }
+            }
+        }
+
         if out.is_empty() {
             without_tags.trim().to_string()
         } else {
-            out.join("\n")
+            out.into_iter()
+                .map(|line| {
+                    if line.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!("　　{}", line.trim())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         }
     }
 
@@ -303,5 +333,43 @@ impl ContentParser {
             .replace("&rsaquo;", "\u{203A}")
             // Must be last to avoid double-decoding
             .replace("&amp;", "&")
+    }
+}
+
+fn normalize_title_for_compare(s: &str) -> String {
+    s.chars()
+        .filter(|ch| {
+            !ch.is_whitespace()
+                && !matches!(
+                    ch,
+                    '　' | '：' | ':' | '，' | ',' | '。' | '！' | '!' | '？' | '?' | '、'
+                )
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContentParser;
+
+    #[test]
+    fn clean_plain_removes_duplicated_leading_title() {
+        let raw = "<h1>第1章 开局</h1><p>第1章 开局</p><p>正文第一段</p><p>正文第二段</p>";
+        let out = ContentParser::clean_plain(raw, "第1章 开局");
+        assert!(
+            !out.lines()
+                .any(|l| l.contains("第1章 开局") && l.trim() == "第1章 开局")
+        );
+        assert!(out.contains("正文第一段"));
+        assert!(out.contains("正文第二段"));
+    }
+
+    #[test]
+    fn clean_plain_keeps_non_title_first_line() {
+        let raw = "<p>引子</p><p>正文第一段</p>";
+        let out = ContentParser::clean_plain(raw, "第1章 开局");
+        assert!(out.contains("引子"));
+        assert!(out.contains("正文第一段"));
     }
 }

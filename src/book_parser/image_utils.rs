@@ -154,18 +154,20 @@ fn fetch_and_normalize_image(
     let should_try_jpeg = cfg.force_convert_images_to_jpeg
         || cfg.jpeg_retry_convert && (mime == "application/octet-stream" || mime != "image/jpeg");
     if should_try_jpeg
-        // HEIC/HEIF needs explicit opt-in for conversion attempt (image crate likely can't decode it).
-        && (mime != "image/heic" || cfg.convert_heic_to_jpeg)
-        && let Some(jpeg) = try_convert_to_jpeg(&bytes, cfg.jpeg_quality, cfg.media_max_dimension_px)
+        && mime != "image/heic"
+        && let Some(jpeg) =
+            try_convert_to_jpeg(&bytes, cfg.jpeg_quality, cfg.media_max_dimension_px)
     {
         return Ok(Some((jpeg, "image/jpeg", ".jpeg")));
     }
 
-    // If it's HEIC/HEIF and conversion failed, keep original only when configured.
+    // HEIC/HEIF：image crate 无原生支持，无法解码。
+    // WebUI 封面已通过 HTML <img> 标签获取浏览器兼容格式，此处仅保留原始数据或跳过。
     if mime == "image/heic" {
         if cfg.keep_heic_original {
             return Ok(Some((bytes, "image/heic", ext)));
         }
+        tracing::debug!(url, "HEIC 格式图片，无法解码，跳过");
         return Ok(None);
     }
 

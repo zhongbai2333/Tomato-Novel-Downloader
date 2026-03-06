@@ -27,7 +27,101 @@ pub(crate) struct AppState {
     pub(crate) config: Arc<Mutex<Config>>, // allow runtime updates via Web UI
     pub(crate) library_root: Arc<PathBuf>,
     pub(crate) jobs: Arc<JobStore>,
+    pub(crate) self_update: Arc<SelfUpdateStore>,
     pub(crate) auth: Option<AuthState>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SelfUpdateState {
+    Idle,
+    Running,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SelfUpdateInfo {
+    pub(crate) state: SelfUpdateState,
+    pub(crate) stage: String,
+    pub(crate) percent: u8,
+    pub(crate) message: String,
+    pub(crate) updated_ms: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct SelfUpdateStore {
+    running: AtomicBool,
+    inner: Mutex<SelfUpdateInfo>,
+}
+
+impl Default for SelfUpdateStore {
+    fn default() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            inner: Mutex::new(SelfUpdateInfo {
+                state: SelfUpdateState::Idle,
+                stage: "idle".to_string(),
+                percent: 0,
+                message: "尚未开始".to_string(),
+                updated_ms: now_ms(),
+            }),
+        }
+    }
+}
+
+impl SelfUpdateStore {
+    pub(crate) fn try_start(&self) -> bool {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+        self.set(SelfUpdateState::Running, "prepare", 2, "准备开始自更新…");
+        true
+    }
+
+    pub(crate) fn snapshot(&self) -> SelfUpdateInfo {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(crate) fn set(
+        &self,
+        state: SelfUpdateState,
+        stage: impl Into<String>,
+        percent: u8,
+        message: impl Into<String>,
+    ) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.state = state;
+        g.stage = stage.into();
+        g.percent = percent.min(100);
+        g.message = message.into();
+        g.updated_ms = now_ms();
+    }
+
+    pub(crate) fn tick_running(&self) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !matches!(g.state, SelfUpdateState::Running) {
+            return;
+        }
+        if g.percent < 92 {
+            g.percent = (g.percent + 1).min(92);
+            g.updated_ms = now_ms();
+        }
+    }
+
+    pub(crate) fn finish_done(&self, stage: impl Into<String>, message: impl Into<String>) {
+        self.set(SelfUpdateState::Done, stage, 100, message);
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn finish_failed(&self, stage: impl Into<String>, message: impl Into<String>) {
+        self.set(SelfUpdateState::Failed, stage, 100, message);
+        self.running.store(false, Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone)]

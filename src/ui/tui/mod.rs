@@ -40,10 +40,12 @@ mod config;
 mod config_model;
 mod cover;
 mod download;
+mod history;
 mod home;
 mod preview;
 mod update;
 
+use history::show_history_menu;
 use update::show_update_menu;
 
 use crate::base_system::context::{Config, safe_fs_name};
@@ -69,6 +71,7 @@ enum View {
     Home,
     Config,
     Update,
+    History,
     About,
     Cover,
     Preview,
@@ -79,6 +82,7 @@ pub(super) enum MenuAction {
     Confirm,
     Config,
     Update,
+    History,
     About,
     Quit,
 }
@@ -249,6 +253,11 @@ pub(super) struct App {
     // home layout
     last_home_layout: Option<[Rect; 5]>,
 
+    // history
+    history_entries: Vec<crate::base_system::download_history::DownloadHistoryRecord>,
+    history_state: ListState,
+    last_history_layout: Option<[Rect; 3]>,
+
     // worker
     worker_tx: Sender<WorkerMsg>,
     worker_rx: Receiver<WorkerMsg>,
@@ -334,6 +343,9 @@ impl App {
         let mut preview_buttons = ListState::default();
         preview_buttons.select(Some(0));
 
+        let mut history_state = ListState::default();
+        history_state.select(None);
+
         let mut book_name_modal_state = ListState::default();
         book_name_modal_state.select(Some(0));
 
@@ -390,6 +402,9 @@ impl App {
             cover_title: String::new(),
             _previous_view_cover: View::Home,
             last_home_layout: None,
+            history_entries: Vec::new(),
+            history_state,
+            last_history_layout: None,
             worker_tx,
             worker_rx,
             spinner_active: false,
@@ -554,6 +569,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut App) {
         View::Home => home::draw_home(frame, app),
         View::Config => config::draw_config(frame, app),
         View::Update => update::draw_update(frame, app),
+        View::History => history::draw_history(frame, app),
         View::About => about::draw_about(frame, app),
         View::Cover => cover::draw_cover(frame, app),
         View::Preview => preview::draw_preview(frame, app),
@@ -578,6 +594,7 @@ fn handle_event(app: &mut App) -> Result<bool> {
         View::Home => home::handle_event_home(app, evt)?,
         View::Config => config::handle_event_config(app, evt)?,
         View::Update => update::handle_event_update(app, evt)?,
+        View::History => history::handle_event_history(app, evt)?,
         View::About => about::handle_event_about(app, evt)?,
         View::Cover => cover::handle_event_cover(app, evt)?,
         View::Preview => handle_event_preview(app, evt)?,
@@ -828,6 +845,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     ("确定", MenuAction::Confirm),
     ("配置", MenuAction::Config),
     ("更新", MenuAction::Update),
+    ("历史", MenuAction::History),
     ("关于", MenuAction::About),
     ("退出", MenuAction::Quit),
 ];
@@ -1225,6 +1243,7 @@ pub(super) fn switch_view(app: &mut App, action: MenuAction) -> Result<()> {
             app.focus = Focus::Input;
         }
         MenuAction::Update => show_update_menu(app)?,
+        MenuAction::History => show_history_menu(app)?,
         MenuAction::About => {
             app.view = View::About;
             app.status = "关于".to_string();

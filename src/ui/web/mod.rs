@@ -130,6 +130,7 @@ async fn run_async(
         config: Arc::new(std::sync::Mutex::new(config)),
         library_root: Arc::new(library_root),
         jobs: Arc::new(JobStore::default()),
+        self_update: Arc::new(state::SelfUpdateStore::default()),
         auth,
     };
 

@@ -40,12 +40,28 @@ fn re_info_label_yellow() -> &'static regex::Regex {
     })
 }
 
+/// 匹配 HTML `<head>` 中 `<script type="application/ld+json">...</script>` 块。
+/// 封面图的真实 URL（带签名参数）位于其中的 `"image"` 或 `"images"` 字段。
+fn re_ld_json() -> &'static regex::Regex {
+    static R: OnceLock<regex::Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        regex::Regex::new(
+            r#"<script[^>]*type="application/ld\+json"[^>]*>\s*([\s\S]*?)\s*</script>"#,
+        )
+        .unwrap()
+    })
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct BookInfo {
     pub book_name: Option<String>,
     pub author: Option<String>,
     pub description: Option<String>,
     pub tags: Option<Vec<String>>,
+    pub cover_url: Option<String>,
+    pub detail_cover_url: Option<String>,
+    /// HTML `<img class="book-cover-img">` 的 src，浏览器兼容格式（非 HEIC）。
+    pub html_img_cover_url: Option<String>,
     pub chapter_count: Option<usize>,
     pub finished: Option<bool>,
 }
@@ -82,6 +98,9 @@ pub(crate) type BookInfoParts = (
     Option<String>,
     Option<String>,
     Option<Vec<String>>,
+    Option<String>,
+    Option<String>,
+    Option<String>, // html_img_cover_url
     Option<usize>,
     Option<bool>,
 );
@@ -153,13 +172,13 @@ impl FanqieWebNetwork {
             Ok(resp) => {
                 if resp.status().as_u16() == 404 {
                     error!("小说ID {} 不存在！", book_id);
-                    return (None, None, None, None, None, None);
+                    return (None, None, None, None, None, None, None, None, None);
                 }
                 let resp = match resp.error_for_status() {
                     Ok(r) => r,
                     Err(e) => {
                         error!("获取书籍信息失败: {}", e);
-                        return (None, None, None, None, None, None);
+                        return (None, None, None, None, None, None, None, None, None);
                     }
                 };
 
@@ -171,19 +190,22 @@ impl FanqieWebNetwork {
                             info.author,
                             info.description,
                             info.tags,
+                            info.cover_url,
+                            info.detail_cover_url,
+                            info.html_img_cover_url,
                             info.chapter_count,
                             info.finished,
                         )
                     }
                     Err(e) => {
                         error!("获取书籍信息失败: {}", e);
-                        (None, None, None, None, None, None)
+                        (None, None, None, None, None, None, None, None, None)
                     }
                 }
             }
             Err(e) => {
                 error!("获取书籍信息失败: {}", e);
-                (None, None, None, None, None, None)
+                (None, None, None, None, None, None, None, None, None)
             }
         }
     }
@@ -448,13 +470,49 @@ fn find_chapter_array(value: &Value) -> Option<Vec<Value>> {
     best
 }
 
+/// 从 HTML `<head>` 中的 `<script type="application/ld+json">` 结构化数据提取封面 URL。
+///
+/// 番茄小说页面的 `<img class="book-cover-img">` 实际是占位符，
+/// 真正的封面 URL（带 CDN 签名参数）位于 ld+json 的 `"image"` / `"images"` 字段。
+fn parse_html_img_cover_url(html: &str) -> Option<String> {
+    for caps in re_ld_json().captures_iter(html) {
+        let json_text = caps.get(1)?.as_str();
+        let Ok(value) = serde_json::from_str::<Value>(json_text) else {
+            continue;
+        };
+        // schema.org NewsArticle: "image": ["https://..."]
+        // baidu cambrian: "images": ["https://..."]
+        for key in ["image", "images"] {
+            if let Some(arr) = value.get(key).and_then(Value::as_array)
+                && let Some(url) = arr.first().and_then(Value::as_str)
+            {
+                let u = url.trim();
+                if !u.is_empty() && (u.starts_with("http://") || u.starts_with("https://")) {
+                    return Some(u.to_string());
+                }
+            }
+            // 也兼容非数组形式 "image": "https://..."
+            if let Some(url) = value.get(key).and_then(Value::as_str) {
+                let u = url.trim();
+                if !u.is_empty() && (u.starts_with("http://") || u.starts_with("https://")) {
+                    return Some(u.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 struct ContentParser;
 
 impl ContentParser {
     /// 从 HTML 中尽量解析出书籍信息。
     ///
-    /// 说明：番茄页面结构可能变化，这里采用“优先解析 __NEXT_DATA__ JSON，其次正则兜底”的策略。
+    /// 说明：番茄页面结构可能变化，这里采用"优先解析 __NEXT_DATA__ JSON，其次正则兜底"的策略。
     fn parse_book_info(html: &str, _book_id: &str) -> BookInfo {
+        let finished_from_label = parse_finished_from_info_label(html);
+        let html_img_cover_url = parse_html_img_cover_url(html);
+
         // 1) 优先解析 __NEXT_DATA__
         if let Some(json_text) = extract_next_data_json(html)
             && let Ok(value) = serde_json::from_str::<Value>(&json_text)
@@ -463,13 +521,39 @@ impl ContentParser {
             let author = find_string_by_key(&value, ["author", "authorName", "author_name"]);
             let description =
                 find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
+            let cover_url = find_string_by_key(
+                &value,
+                [
+                    "thumb_url",
+                    "expand_thumb_url",
+                    "cover_url",
+                    "cover",
+                    "horiz_thumb_url",
+                    "audio_thumb_url_hd",
+                ],
+            )
+            .or_else(|| {
+                find_string_by_key(&value, ["thumb_uri"])
+                    .and_then(|s| build_cover_url_from_thumb_uri(&s))
+            });
+            let detail_cover_url = find_string_by_key(
+                &value,
+                [
+                    "detail_page_thumb_url",
+                    "detail_cover_url",
+                    "detail_thumb_url",
+                ],
+            )
+            .or_else(|| cover_url.clone());
             let chapter_count = find_usize_by_key(&value, ["chapterCount", "chapter_count"]);
             let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"]);
-            let finished = find_finished_by_key(&value);
+            let finished = finished_from_label.or_else(|| find_finished_by_key(&value));
 
             if book_name.is_some()
                 || author.is_some()
                 || description.is_some()
+                || cover_url.is_some()
+                || detail_cover_url.is_some()
                 || chapter_count.is_some()
                 || tags.is_some()
             {
@@ -478,6 +562,9 @@ impl ContentParser {
                     author,
                     description,
                     tags,
+                    cover_url,
+                    detail_cover_url,
+                    html_img_cover_url,
                     chapter_count,
                     finished,
                 };
@@ -492,16 +579,41 @@ impl ContentParser {
             let author = find_string_by_key(&value, ["authorName", "author", "author_name"]);
             let description =
                 find_string_by_key(&value, ["abstract", "description", "intro", "introduce"]);
+            let cover_url = find_string_by_key(
+                &value,
+                [
+                    "thumb_url",
+                    "expand_thumb_url",
+                    "cover_url",
+                    "cover",
+                    "horiz_thumb_url",
+                    "audio_thumb_url_hd",
+                ],
+            )
+            .or_else(|| {
+                find_string_by_key(&value, ["thumb_uri"])
+                    .and_then(|s| build_cover_url_from_thumb_uri(&s))
+            });
+            let detail_cover_url = find_string_by_key(
+                &value,
+                [
+                    "detail_page_thumb_url",
+                    "detail_cover_url",
+                    "detail_thumb_url",
+                ],
+            )
+            .or_else(|| cover_url.clone());
             let chapter_count =
                 find_usize_by_key(&value, ["chapterTotal", "chapterCount", "chapter_count"]);
             let tags = find_string_array_by_key(&value, ["tags", "tagNames", "tag_names"])
                 .or_else(|| parse_tags_from_info_label(html));
-            let finished =
-                find_finished_by_key(&value).or_else(|| parse_finished_from_info_label(html));
+            let finished = finished_from_label.or_else(|| find_finished_by_key(&value));
 
             if book_name.is_some()
                 || author.is_some()
                 || description.is_some()
+                || cover_url.is_some()
+                || detail_cover_url.is_some()
                 || chapter_count.is_some()
                 || tags.is_some()
                 || finished.is_some()
@@ -511,6 +623,9 @@ impl ContentParser {
                     author,
                     description,
                     tags,
+                    cover_url,
+                    detail_cover_url,
+                    html_img_cover_url,
                     chapter_count,
                     finished,
                 };
@@ -524,20 +639,51 @@ impl ContentParser {
             .or_else(|| regex_json_string_field(html, "authorName"));
         let description = regex_json_string_field(html, "abstract")
             .or_else(|| regex_json_string_field(html, "description"));
+        let cover_url = regex_json_string_field(html, "thumb_url")
+            .or_else(|| regex_json_string_field(html, "expand_thumb_url"))
+            .or_else(|| regex_json_string_field(html, "cover_url"))
+            .or_else(|| regex_json_string_field(html, "cover"))
+            .or_else(|| regex_json_string_field(html, "horiz_thumb_url"))
+            .or_else(|| regex_json_string_field(html, "audio_thumb_url_hd"))
+            .or_else(|| {
+                regex_json_string_field(html, "thumb_uri")
+                    .and_then(|s| build_cover_url_from_thumb_uri(&s))
+            });
+        let detail_cover_url = regex_json_string_field(html, "detail_page_thumb_url")
+            .or_else(|| regex_json_string_field(html, "detail_cover_url"))
+            .or_else(|| regex_json_string_field(html, "detail_thumb_url"))
+            .or_else(|| cover_url.clone());
         let chapter_count = regex_json_usize_field(html, "chapterCount")
             .or_else(|| regex_json_usize_field(html, "chapter_count"));
         let tags = parse_tags_from_info_label(html);
-        let finished = parse_finished_from_info_label(html);
+        let finished = finished_from_label;
 
         BookInfo {
             book_name,
             author,
             description,
             tags,
+            cover_url,
+            detail_cover_url,
+            html_img_cover_url,
             chapter_count,
             finished,
         }
     }
+}
+
+fn build_cover_url_from_thumb_uri(uri: &str) -> Option<String> {
+    let trimmed = uri.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    Some(format!(
+        "https://p3-reading-sign.fqnovelpic.com/{}",
+        trimmed
+    ))
 }
 
 fn extract_next_data_json(html: &str) -> Option<String> {
@@ -582,8 +728,6 @@ fn find_string_array_by_key<const N: usize>(value: &Value, keys: [&str; N]) -> O
 fn find_finished_by_key(value: &Value) -> Option<bool> {
     let keys = [
         "status",
-        "creationStatus",
-        "creation_status",
         "serial_status",
         "finish_status",
         "finishStatus",
@@ -602,7 +746,13 @@ fn find_finished_by_key(value: &Value) -> Option<bool> {
 
 fn map_status_to_finished(key: &str, n: i64) -> Option<bool> {
     match key {
-        "status" | "creationStatus" | "creation_status" | "serial_status" => match n {
+        "status" => match n {
+            1 => Some(true),
+            0 => Some(false),
+            2 => Some(true),
+            _ => None,
+        },
+        "serial_status" => match n {
             1 => Some(false),
             2 => Some(true),
             _ => None,
@@ -777,4 +927,41 @@ fn _ensure_parent_dir(path: &Path) -> std::io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ContentParser;
+
+    #[test]
+    fn finished_should_prefer_html_label_over_numeric_status() {
+        let html = r#"
+        <span class="info-label-yellow">已完结</span>
+        <script>
+        window.__INITIAL_STATE__ = {"page":{"status":0}};
+        </script>
+        "#;
+
+        let info = ContentParser::parse_book_info(html, "dummy");
+        assert_eq!(info.finished, Some(true));
+    }
+
+    #[test]
+    fn finished_status_mapping_for_status_field() {
+        let html_finished = r#"
+        <script>
+        window.__INITIAL_STATE__ = {"page":{"status":1}};
+        </script>
+        "#;
+        let info_finished = ContentParser::parse_book_info(html_finished, "dummy");
+        assert_eq!(info_finished.finished, Some(true));
+
+        let html_serializing = r#"
+        <script>
+        window.__INITIAL_STATE__ = {"page":{"status":0}};
+        </script>
+        "#;
+        let info_serializing = ContentParser::parse_book_info(html_serializing, "dummy");
+        assert_eq!(info_serializing.finished, Some(false));
+    }
 }

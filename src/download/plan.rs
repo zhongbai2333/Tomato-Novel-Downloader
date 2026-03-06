@@ -69,7 +69,7 @@ pub fn prepare_download_plan(
         return Err(anyhow!("目录为空"));
     }
 
-    let meta_from_dir: BookMeta = dir.meta.into();
+    let meta_from_dir: BookMeta = dir.meta.clone().into();
     // For book_name: Prefer the hint (what user saw in search) to maintain consistency
     // For other metadata: Prefer authoritative directory metadata
     let merged = merge_meta_prefer_hint_name(meta_from_dir, meta_hint);
@@ -85,9 +85,9 @@ pub fn prepare_download_plan(
         completed_meta.tags = merge_tag_lists(&completed_meta.tags, &web_plan.meta.tags);
         completed_meta.tags =
             drop_tag_equals_category(&completed_meta.tags, &completed_meta.category);
-        if completed_meta.finished.is_none() {
-            completed_meta.finished = web_plan.meta.finished;
-        }
+        // 连载状态优先使用 web 页面解析结果（更稳定）。
+        // 若 web 未提供，再保留官方侧推断。
+        completed_meta.finished = web_plan.meta.finished.or(completed_meta.finished);
     }
 
     // 应用用户配置的书名字段偏好（移到前面，在下载封面之前）
@@ -103,6 +103,23 @@ pub fn prepare_download_plan(
             directory.fetch_directory_with_cover(book_id, api_url, Some(&cover_dir))
         {
             dir = with_cover;
+        }
+
+        // 如果下载到的封面实际是 HEIC（官方 API 的 cover_url 常返回 HEIC），
+        // 尝试从 web 页面的 <img> 标签获取浏览器兼容格式的封面 URL 来替换。
+        if let Some(ref cover_path) = dir.meta.cover_path
+            && cover_path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
+        {
+            info!(target: "download", book_id, "封面为 HEIC 格式，尝试从 web 页面获取 JPEG 封面替换");
+            if let Some(jpeg_path) =
+                try_replace_heic_cover_with_web_img(config, book_id, cover_path)
+            {
+                // 删除旧 HEIC 文件，更新路径
+                let _ = std::fs::remove_file(cover_path);
+                dir.meta.cover_path = Some(jpeg_path);
+            }
         }
     }
 
@@ -198,13 +215,24 @@ fn prepare_download_plan_web(
         return Err(anyhow!("解析章节列表失败（未能提取 item_id/title）"));
     }
 
-    let (book_name, author, description, tags_opt, chapter_count, finished) =
-        web.get_book_info(book_id);
+    let (
+        book_name,
+        author,
+        description,
+        tags_opt,
+        cover_url,
+        detail_cover_url,
+        _html_img_cover_url,
+        chapter_count,
+        finished,
+    ) = web.get_book_info(book_id);
     let web_meta = BookMeta {
         book_name,
         author,
         description,
         tags: tags_opt.unwrap_or_default(),
+        cover_url,
+        detail_cover_url,
         chapter_count,
         finished,
         ..BookMeta::default()
@@ -380,5 +408,49 @@ pub(crate) fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) 
                 .cloned()
                 .collect()
         }
+    }
+}
+
+// ── HEIC 封面替换 ────────────────────────────────────────────
+
+/// 当官方 API 下载的封面是 HEIC 格式时，尝试从 Web 页面的
+/// `<img class="book-cover-img">` 获取浏览器兼容格式的封面并保存为 JPEG。
+#[cfg(feature = "official-api")]
+fn try_replace_heic_cover_with_web_img(
+    config: &Config,
+    book_id: &str,
+    heic_path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let web_cfg = FanqieWebConfig {
+        request_timeout: Duration::from_secs(config.request_timeout.max(1)),
+        max_retries: 2,
+        ..Default::default()
+    };
+    let web = FanqieWebNetwork::new(web_cfg).ok()?;
+    let (_, _, _, _, _, _, html_img_cover_url, _, _) = web.get_book_info(book_id);
+    let img_url = html_img_cover_url?;
+    if img_url.trim().is_empty() {
+        return None;
+    }
+
+    let bytes =
+        crate::third_party::media_fetch::fetch_bytes(&img_url, Duration::from_millis(10_000))?;
+
+    // 确认下载到的确实不是 HEIC
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        let brand = &bytes[8..12];
+        if brand == b"heic" || brand == b"heix" || brand == b"mif1" || brand == b"msf1" {
+            warn!(target: "download", book_id, "web 页面封面仍为 HEIC，放弃替换");
+            return None;
+        }
+    }
+
+    // 以同名但 .jpg 扩展名保存
+    let jpg_path = heic_path.with_extension("jpg");
+    if std::fs::write(&jpg_path, &bytes).is_ok() {
+        info!(target: "download", book_id, path = %jpg_path.display(), "HEIC 封面已替换为 JPEG");
+        Some(jpg_path)
+    } else {
+        None
     }
 }

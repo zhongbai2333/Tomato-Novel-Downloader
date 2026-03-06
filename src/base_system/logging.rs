@@ -67,6 +67,11 @@ static LOG_CHANNEL: OnceLock<(
     crossbeam_channel::Sender<String>,
     crossbeam_channel::Receiver<String>,
 )> = OnceLock::new();
+static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn current_logs_dir() -> Option<PathBuf> {
+    LOGS_DIR.get().cloned()
+}
 
 #[derive(Clone)]
 struct ChannelWriter {
@@ -125,6 +130,7 @@ impl LogSystem {
             PathBuf::from("logs")
         };
         fs::create_dir_all(&logs_dir)?;
+        let _ = LOGS_DIR.set(logs_dir.clone());
         let latest_log = logs_dir.join("latest.log");
 
         archive_if_large(&latest_log, &logs_dir)?;

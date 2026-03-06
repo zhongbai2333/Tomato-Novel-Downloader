@@ -16,6 +16,7 @@ use crate::base_system::context::Config;
 mod app_update;
 mod config;
 mod download;
+mod history;
 mod update;
 
 fn show_config_menu(config: &mut Config) -> Result<()> {
@@ -63,7 +64,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
 
     loop {
         let prompt = format!(
-            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
+            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / h下载历史 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
         );
         let input = read_line(&prompt)?;
@@ -77,6 +78,10 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         }
         if text.eq_ignore_ascii_case("s") {
             show_config_menu(config)?;
+            continue;
+        }
+        if text.eq_ignore_ascii_case("h") {
+            history::show_history_menu()?;
             continue;
         }
         if text.eq_ignore_ascii_case("u") {

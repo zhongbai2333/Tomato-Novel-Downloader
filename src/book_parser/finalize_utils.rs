@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{collections::HashMap, collections::HashSet};
 
 use serde_json::Value;
 
@@ -53,7 +54,7 @@ pub fn run_finalize(
     };
 
     let result: anyhow::Result<()> = if fmt == "txt" {
-        finalize_txt(manager, chapters, &output_path)
+        finalize_txt(manager, chapters, &output_path, directory_raw)
     } else {
         let reporter_ref = {
             #[allow(clippy::needless_option_as_deref)]
@@ -144,7 +145,14 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
     Ok(output_path)
 }
 
-fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyhow::Result<()> {
+fn finalize_txt(
+    manager: &BookManager,
+    chapters: &[Value],
+    path: &Path,
+    directory_raw: Option<&Value>,
+) -> anyhow::Result<()> {
+    let volume_title_by_chapter_id = volume_title_map_for_chapters(chapters, directory_raw);
+
     if manager.config.bulk_files {
         std::fs::create_dir_all(path)?;
 
@@ -195,6 +203,7 @@ fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyho
         // 章节拆分
         let width = chapters.len().to_string().len().max(4);
         for (idx, ch) in chapters.iter().enumerate() {
+            let chapter_id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let title = ch.get("title").and_then(|v| v.as_str()).unwrap_or("章节");
             let content = ch.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -206,6 +215,12 @@ fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyho
                 title = safe_title
             );
             let mut f = File::create(path.join(filename))?;
+            if let Some(vol) = volume_title_by_chapter_id.get(chapter_id)
+                && !vol.trim().is_empty()
+            {
+                writeln!(f, "分卷：{}", vol.trim())?;
+                writeln!(f)?;
+            }
             writeln!(f, "{}", title)?;
             writeln!(f)?;
             // Do not `trim()` here: it will remove leading full-width indent (U+3000) from the first paragraph.
@@ -263,15 +278,327 @@ fn finalize_txt(manager: &BookManager, chapters: &[Value], path: &Path) -> anyho
     writeln!(f, "{}", "=".repeat(40))?;
     writeln!(f)?;
 
+    let mut last_volume: Option<String> = None;
+
     for ch in chapters {
+        let chapter_id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let title = ch.get("title").and_then(|v| v.as_str()).unwrap_or("章节");
         let content = ch.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+        if let Some(vol) = volume_title_by_chapter_id.get(chapter_id)
+            && !vol.trim().is_empty()
+            && last_volume.as_deref() != Some(vol.trim())
+        {
+            writeln!(f, "【{}】\n", vol.trim())?;
+            last_volume = Some(vol.trim().to_string());
+        }
         writeln!(f, "{}\n", title)?;
         // Do not `trim()` here: it will remove leading full-width indent (U+3000) from the first paragraph.
         writeln!(f, "{}\n", content.trim_end())?;
         writeln!(f, "\n----------------------------------------\n")?;
     }
     Ok(())
+}
+
+fn volume_title_map_for_chapters(
+    chapters: &[Value],
+    directory_raw: Option<&Value>,
+) -> HashMap<String, String> {
+    let Some(raw) = directory_raw else {
+        return HashMap::new();
+    };
+
+    let known_chapter_ids: HashSet<String> = chapters
+        .iter()
+        .filter_map(|ch| ch.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    if known_chapter_ids.is_empty() {
+        return HashMap::new();
+    }
+
+    let volumes = extract_volume_to_chapter_ids(raw, &known_chapter_ids);
+    let mut volume_order: Vec<String> = Vec::new();
+    let mut volume_title_by_chapter_id: HashMap<String, String> = HashMap::new();
+
+    for (title, ids) in &volumes {
+        let t = title.trim();
+        if t.is_empty() || ids.is_empty() {
+            continue;
+        }
+        if !volume_order.contains(&t.to_string()) {
+            volume_order.push(t.to_string());
+        }
+        for id in ids {
+            volume_title_by_chapter_id
+                .entry(id.clone())
+                .or_insert_with(|| t.to_string());
+        }
+    }
+
+    let skip_default_single =
+        volume_order.len() == 1 && is_default_volume_name(volume_order[0].as_str());
+    if skip_default_single {
+        return HashMap::new();
+    }
+
+    volume_title_by_chapter_id
+}
+
+fn is_default_volume_name(name: &str) -> bool {
+    let s = name.trim();
+    if s.is_empty() {
+        return true;
+    }
+    let normalized: String = s
+        .chars()
+        .map(|c| match c {
+            '：' | ':' | '—' | '–' | '_' | '·' | '｜' | '|' => ' ',
+            _ => c,
+        })
+        .collect();
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lower = normalized.to_lowercase();
+
+    let exact = [
+        "默认",
+        "默认卷",
+        "默认分卷",
+        "第一卷",
+        "第1卷",
+        "卷一",
+        "卷1",
+        "第一卷 默认",
+        "第1卷 默认",
+    ];
+    for e in exact {
+        if lower == e {
+            return true;
+        }
+    }
+
+    let lower_ascii = lower.replace(['.', '_'], " ");
+    let lower_ascii = lower_ascii.trim();
+    if lower_ascii == "volume 1" || lower_ascii == "vol 1" || lower_ascii == "vol1" {
+        return true;
+    }
+    false
+}
+
+fn extract_volume_to_chapter_ids(
+    directory_raw: &Value,
+    known_chapter_ids: &HashSet<String>,
+) -> Vec<(String, Vec<String>)> {
+    fn pick_string_or_number(v: Option<&Value>) -> Option<String> {
+        match v {
+            Some(Value::String(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            Some(Value::Number(n)) => Some(n.to_string()),
+            _ => None,
+        }
+    }
+
+    fn pick_volume_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        let candidates = [
+            "volume_title",
+            "volume_name",
+            "section_title",
+            "section_name",
+            "group_title",
+            "group_name",
+        ];
+        for k in candidates {
+            if let Some(Value::String(s)) = obj.get(k) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn pick_title(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        let candidates = [
+            "volume_title",
+            "volume_name",
+            "catalog_name",
+            "catalog_title",
+            "section_title",
+            "section_name",
+            "group_title",
+            "group_name",
+            "title",
+            "name",
+        ];
+        for k in candidates {
+            if let Some(Value::String(s)) = obj.get(k) {
+                let t = s.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn looks_like_chapter_obj(obj: &serde_json::Map<String, Value>) -> Option<String> {
+        let id = pick_string_or_number(
+            obj.get("chapter_id")
+                .or_else(|| obj.get("item_id"))
+                .or_else(|| obj.get("catalog_id"))
+                .or_else(|| obj.get("id")),
+        )?;
+        Some(id)
+    }
+
+    fn push_chapter(
+        title: &str,
+        chapter_id: &str,
+        known_chapter_ids: &HashSet<String>,
+        idx_by_title: &mut HashMap<String, usize>,
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
+        let t = title.trim();
+        if t.is_empty() {
+            return;
+        }
+        if !known_chapter_ids.contains(chapter_id) {
+            return;
+        }
+        let i = if let Some(i) = idx_by_title.get(t) {
+            *i
+        } else {
+            let i = out.len();
+            out.push((t.to_string(), Vec::new()));
+            idx_by_title.insert(t.to_string(), i);
+            i
+        };
+
+        let ids = &mut out[i].1;
+        if ids.last().is_some_and(|last| last == chapter_id) {
+            return;
+        }
+        if !ids.contains(&chapter_id.to_string()) {
+            ids.push(chapter_id.to_string());
+        }
+    }
+
+    fn visit(
+        v: &Value,
+        current_volume: Option<&str>,
+        known_chapter_ids: &HashSet<String>,
+        idx_by_title: &mut HashMap<String, usize>,
+        out: &mut Vec<(String, Vec<String>)>,
+    ) {
+        match v {
+            Value::Array(arr) => {
+                for it in arr {
+                    visit(it, current_volume, known_chapter_ids, idx_by_title, out);
+                }
+            }
+            Value::Object(obj) => {
+                let is_chapter = looks_like_chapter_obj(obj).is_some();
+
+                if let Some(vol) = pick_volume_title(obj)
+                    && let Some(id) = looks_like_chapter_obj(obj)
+                {
+                    push_chapter(&vol, &id, known_chapter_ids, idx_by_title, out);
+                }
+
+                if let Some(vol) = current_volume
+                    && let Some(id) = looks_like_chapter_obj(obj)
+                {
+                    push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
+                }
+
+                let title_here = if is_chapter {
+                    pick_volume_title(obj)
+                } else {
+                    pick_title(obj)
+                };
+                let next_volume = title_here.as_deref().or(current_volume);
+
+                let child_keys = [
+                    "catalog_data",
+                    "item_data_list",
+                    "items",
+                    "item_list",
+                    "children",
+                    "child_list",
+                    "sub_items",
+                    "sub_item_list",
+                    "chapter_list",
+                    "chapters",
+                    "chapter_ids",
+                ];
+
+                for k in child_keys {
+                    if let Some(arr) = obj.get(k).and_then(Value::as_array) {
+                        for child in arr {
+                            if let (Some(vol), Some(id)) =
+                                (next_volume, pick_string_or_number(Some(child)))
+                            {
+                                push_chapter(vol, &id, known_chapter_ids, idx_by_title, out);
+                            } else {
+                                visit(child, next_volume, known_chapter_ids, idx_by_title, out);
+                            }
+                        }
+                    }
+                }
+
+                for (k, vv) in obj {
+                    if child_keys.contains(&k.as_str()) {
+                        continue;
+                    }
+                    visit(vv, next_volume, known_chapter_ids, idx_by_title, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut idx_by_title: HashMap<String, usize> = HashMap::new();
+
+    if let Some(items) = directory_raw
+        .get("item_data_list")
+        .and_then(Value::as_array)
+    {
+        let mut current: Option<String> = None;
+        for it in items {
+            let Some(obj) = it.as_object() else {
+                continue;
+            };
+            if let Some(vol) = pick_volume_title(obj) {
+                current = Some(vol);
+            }
+            let Some(id) = looks_like_chapter_obj(obj) else {
+                continue;
+            };
+            if let Some(vol) = current.as_deref() {
+                push_chapter(vol, &id, known_chapter_ids, &mut idx_by_title, &mut out);
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
+    visit(
+        directory_raw,
+        None,
+        known_chapter_ids,
+        &mut idx_by_title,
+        &mut out,
+    );
+    out
 }
 
 /// 下载完后让用户选择使用哪个书名（仅 CLI 模式）。
