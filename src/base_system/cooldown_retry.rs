@@ -7,6 +7,7 @@ use std::time::Duration;
 #[cfg(feature = "official-api")]
 use tomato_novel_official_api::FanqieClient;
 
+#[allow(dead_code)]
 pub fn fetch_with_cooldown_retry(
     #[cfg(feature = "official-api")] client: &FanqieClient,
     ids: &str,
