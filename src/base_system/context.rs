@@ -2,6 +2,7 @@
 //!
 //! 该模块同时提供生成 `config.yml` 的字段元信息。
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -369,6 +370,52 @@ impl Config {
         }
     }
 
+    pub fn find_existing_status_folder_by_book_id(
+        &self,
+        book_id: &str,
+        save_dir: Option<&Path>,
+    ) -> io::Result<Option<PathBuf>> {
+        let save_dir = save_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.default_save_dir());
+        if !save_dir.exists() {
+            return Ok(None);
+        }
+
+        let safe_book_id = safe_fs_name(book_id, "_", 120);
+        let prefix = format!("{}_", safe_book_id);
+
+        for entry in fs::read_dir(&save_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+
+            if Self::status_folder_has_book_record(&path, book_id) {
+                return Ok(Some(path));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn status_folder_has_book_record(path: &Path, book_id: &str) -> bool {
+        path.join("status.json").exists()
+            || path
+                .join(format!("chapter_status_{}.json", book_id))
+                .exists()
+            || path.join("downloaded_chapters.jsonl").exists()
+    }
+
     /// 根据用户配置的首选字段选择书名
     pub fn pick_preferred_book_name(
         &self,
@@ -447,9 +494,21 @@ impl Config {
             .unwrap_or_else(|| self.default_save_dir());
         let safe_book_id = safe_fs_name(book_id, "_", 120);
         let safe_book_name = safe_fs_name(book_name, "_", 120);
-        let path = save_dir.join(format!("{}_{}", safe_book_id, safe_book_name));
+        let desired_path = save_dir.join(format!("{}_{}", safe_book_id, safe_book_name));
+        let path = if desired_path.exists() {
+            desired_path
+        } else if let Some(existing) =
+            self.find_existing_status_folder_by_book_id(book_id, Some(&save_dir))?
+        {
+            existing
+        } else {
+            fs::create_dir_all(&desired_path)?;
+            desired_path
+        };
         let existed_before = path.exists();
-        fs::create_dir_all(&path)?;
+        if !path.exists() {
+            fs::create_dir_all(&path)?;
+        }
 
         if let Some(prev) = &self.folder_path
             && self.last_status_was_new
@@ -486,6 +545,26 @@ impl Config {
 
         self.last_status_was_new = is_new_this_session;
         self.last_status_claimed = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn status_folder_path_reuses_existing_folder_when_only_book_name_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+
+        let old_folder = temp_dir.path().join("123_旧书名");
+        std::fs::create_dir_all(&old_folder).unwrap();
+        std::fs::write(old_folder.join("status.json"), "{}\n").unwrap();
+
+        let resolved = config.status_folder_path("新书名", "123", None).unwrap();
+        assert_eq!(resolved, old_folder);
+        assert!(!temp_dir.path().join("123_新书名").exists());
     }
 }
 

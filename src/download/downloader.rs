@@ -607,49 +607,40 @@ pub fn download_with_plan_flow(
 
 // ── Manager 初始化与辅助 ──────────────────────────────────────
 
-fn rename_old_folder_if_needed(
-    config: &Config,
-    book_id: &str,
-    new_book_name: &str,
-    meta: &BookMeta,
-) -> Result<()> {
-    let possible_old_names = vec![
-        meta.book_name.as_deref(),
-        meta.original_book_name.as_deref(),
-        meta.book_short_name.as_deref(),
-    ];
-
+fn rename_old_folder_if_needed(config: &Config, book_id: &str, new_book_name: &str) -> Result<()> {
     let new_folder = book_paths::book_folder_path(config, book_id, Some(new_book_name));
 
     if new_folder.exists() {
         return Ok(());
     }
 
-    for old_name_str in possible_old_names.into_iter().flatten() {
-        if old_name_str == new_book_name {
-            continue;
-        }
+    let Some(old_folder) = config.find_existing_status_folder_by_book_id(book_id, None)? else {
+        return Ok(());
+    };
 
-        let old_folder = book_paths::book_folder_path(config, book_id, Some(old_name_str));
+    if old_folder != new_folder {
+        let old_name = old_folder
+            .file_name()
+            .and_then(|s| s.to_str())
+            .and_then(|name| name.split_once('_').map(|(_, title)| title.to_string()))
+            .unwrap_or_default();
 
-        if old_folder.exists() && old_folder != new_folder {
-            info!(
+        info!(
+            target: "download",
+            old = %old_folder.display(),
+            new = %new_folder.display(),
+            "检测到书名变更，按 BookID 命中旧目录并重命名"
+        );
+
+        if let Err(e) = std::fs::rename(&old_folder, &new_folder) {
+            debug!(
                 target: "download",
-                old = %old_folder.display(),
-                new = %new_folder.display(),
-                "检测到书名偏好变更，重命名文件夹"
+                error = ?e,
+                "重命名文件夹失败，将继续复用旧目录"
             );
-
-            if let Err(e) = std::fs::rename(&old_folder, &new_folder) {
-                debug!(
-                    target: "download",
-                    error = ?e,
-                    "重命名文件夹失败，将使用新文件夹"
-                );
-            } else {
-                rename_cover_files_if_needed(&new_folder, old_name_str, new_book_name);
-                return Ok(());
-            }
+        } else {
+            rename_cover_files_if_needed(&new_folder, &old_name, new_book_name);
+            return Ok(());
         }
     }
 
@@ -699,7 +690,7 @@ pub(crate) fn init_manager_from_plan(config: &Config, plan: &DownloadPlan) -> Re
         .clone()
         .unwrap_or_else(|| plan.book_id.clone());
 
-    if let Err(e) = rename_old_folder_if_needed(config, &plan.book_id, &book_name, meta) {
+    if let Err(e) = rename_old_folder_if_needed(config, &plan.book_id, &book_name) {
         debug!(
             target: "download",
             error = ?e,
@@ -1346,5 +1337,22 @@ mod tests {
         assert!(should_escalate_full_group_retry(2, &all_missing));
         assert!(!should_escalate_full_group_retry(2, &partial_missing));
         assert!(!should_escalate_full_group_retry(1, &all_missing));
+    }
+
+    #[test]
+    fn rename_old_folder_by_book_id_even_if_api_book_name_changed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = crate::base_system::context::Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+
+        let old_folder = temp_dir.path().join("123_旧书名");
+        std::fs::create_dir_all(&old_folder).unwrap();
+        std::fs::write(old_folder.join("status.json"), "{}\n").unwrap();
+
+        rename_old_folder_if_needed(&config, "123", "新书名").unwrap();
+
+        let new_folder = temp_dir.path().join("123_新书名");
+        assert!(new_folder.exists());
+        assert!(!old_folder.exists());
     }
 }

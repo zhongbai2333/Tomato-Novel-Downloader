@@ -2,10 +2,9 @@
 //!
 //! 使用标准输入输出进行交互，并在进入前尽量恢复终端模式。
 
-use std::fs;
 use std::io::{self, BufRead, Write};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crossterm::event::DisableMouseCapture;
 use crossterm::execute;
@@ -23,20 +22,16 @@ fn show_config_menu(config: &mut Config) -> Result<()> {
     config::show_config_menu(config)
 }
 
-fn search_and_pick(keyword: &str) -> Result<Option<String>> {
-    download::search_and_pick(keyword)
-}
-
 pub(crate) fn download_book(book_id: &str, config: &Config) -> Result<()> {
     download::download_book(book_id, config)
 }
 
-pub(crate) fn download_book_non_interactive(
+pub(crate) fn update_existing_book_non_interactive(
     book_id: &str,
     config: &Config,
     retry_failed: bool,
 ) -> Result<()> {
-    download::download_book_non_interactive(book_id, config, retry_failed)
+    download::update_existing_book_non_interactive(book_id, config, retry_failed)
 }
 
 pub fn run(config: &mut Config) -> Result<()> {
@@ -64,7 +59,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
 
     loop {
         let prompt = format!(
-            "请输入 小说ID/书本链接（分享链接）/书本名字（输入s配置 / h下载历史 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
+            "旧 CLI 已禁用新建下载；请输入命令（s配置 / h下载历史 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
         );
         let input = read_line(&prompt)?;
@@ -109,41 +104,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
             continue;
         }
 
-        // 解析 book_id / 链接 / 搜索
-        let mut book_id = parse_book_id(text);
-        if book_id.is_none() && text.chars().all(|c| c.is_ascii_digit()) {
-            book_id = Some(text.to_string());
-        }
-        if book_id.is_none() {
-            book_id = search_and_pick(text)?;
-            if book_id.is_none() {
-                continue;
-            }
-        }
-
-        let book_id = book_id.unwrap();
-        let save_dir_input = read_line(&format!(
-            "保存路径（默认：{}）：",
-            config.default_save_dir().display()
-        ))?;
-        if !save_dir_input.trim().is_empty() {
-            let p = save_dir_input.trim().trim_end_matches(['/', '\\']);
-            fs::create_dir_all(p).with_context(|| format!("创建目录失败: {}", p))?;
-            config.save_path = p.to_string();
-        }
-
-        println!("开始下载 book_id={}", book_id);
-        match download_book(&book_id, config) {
-            Ok(()) => println!("下载完成\n"),
-            Err(err) => println!("下载失败: {}\n", err),
-        }
+        println!(
+            "旧 CLI 模式已禁用下载新小说。\n如需新增下载，请使用 TUI 或 Web UI；旧 CLI 仅保留“u”更新本地已有小说。\n"
+        );
     }
 
     Ok(())
-}
-
-fn parse_book_id(input: &str) -> Option<String> {
-    crate::base_system::book_id::parse_book_id(input)
 }
 
 fn read_line(prompt: &str) -> Result<String> {

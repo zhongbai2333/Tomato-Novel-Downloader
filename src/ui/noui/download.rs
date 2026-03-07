@@ -4,65 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{Context, Result};
-
-#[cfg(feature = "official-api")]
-use tomato_novel_official_api::SearchClient;
+use anyhow::{Context, Result, anyhow};
 
 use crate::base_system::context::Config;
 use crate::download::downloader as dl;
 use crate::download::downloader::ChapterRef;
-
-#[cfg(feature = "official-api")]
-pub(super) fn search_and_pick(keyword: &str) -> Result<Option<String>> {
-    let client = SearchClient::new().context("init SearchClient")?;
-    let resp = client
-        .search_books(keyword)
-        .with_context(|| format!("搜索失败: {}", keyword))?;
-
-    if resp.books.is_empty() {
-        println!("未搜索到结果\n");
-        return Ok(None);
-    }
-
-    println!("\n===== 搜索结果 =====");
-    for (idx, b) in resp.books.iter().enumerate() {
-        println!(
-            "{}. 书名: {} | ID: {} | 作者: {}",
-            idx + 1,
-            b.title.as_deref().unwrap_or(""),
-            b.book_id,
-            b.author.as_deref().unwrap_or("")
-        );
-    }
-    println!("0. 取消\n");
-
-    let choice = super::read_line("请输入编号：")?;
-    let choice = choice.trim();
-    if choice == "0" || choice.eq_ignore_ascii_case("q") {
-        return Ok(None);
-    }
-    if let Ok(idx) = choice.parse::<usize>()
-        && idx >= 1
-        && idx <= resp.books.len()
-    {
-        return Ok(Some(resp.books[idx - 1].book_id.clone()));
-    }
-
-    println!("输入无效，已取消\n");
-    Ok(None)
-}
-
-#[cfg(not(feature = "official-api"))]
-pub(super) fn search_and_pick(_keyword: &str) -> Result<Option<String>> {
-    println!(
-        "当前构建未启用 official-api feature，搜索功能不可用。\n\
-你可以：\n\
-1) 直接输入 book_id 下载；或\n\
-2) 使用默认构建/启用 official-api 后再搜索。\n"
-    );
-    Ok(None)
-}
 
 #[derive(Debug, Clone, Copy)]
 struct DownloadOptions {
@@ -100,6 +46,34 @@ pub(super) fn download_book_non_interactive(
         config,
         DownloadOptions::non_interactive(retry_failed_once),
     )
+}
+
+pub(super) fn update_existing_book_non_interactive(
+    book_id: &str,
+    config: &Config,
+    retry_failed_once: bool,
+) -> Result<()> {
+    ensure_local_download_exists(config, book_id)?;
+    download_book_non_interactive(book_id, config, retry_failed_once)
+}
+
+fn ensure_local_download_exists(config: &Config, book_id: &str) -> Result<()> {
+    if has_local_download_record(config, book_id)? {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "CLI 模式仅支持更新本地已有小说：未在 {} 下找到 book_id={} 的下载记录。请先使用 Web UI 或 TUI 完成首次下载。",
+        config.default_save_dir().display(),
+        book_id
+    ))
+}
+
+fn has_local_download_record(config: &Config, book_id: &str) -> Result<bool> {
+    Ok(config
+        .find_existing_status_folder_by_book_id(book_id, None)
+        .with_context(|| format!("读取保存目录失败: {}", config.default_save_dir().display()))?
+        .is_some())
 }
 
 fn download_book_with_options(
@@ -417,4 +391,27 @@ fn preview_cover_ascii(image_path: &Path) -> Result<()> {
     }
     println!();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_local_download_record;
+    use crate::base_system::context::Config;
+
+    #[test]
+    fn local_download_record_requires_matching_status_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+
+        let valid = temp_dir.path().join("123_test-book");
+        std::fs::create_dir_all(&valid).unwrap();
+        std::fs::write(valid.join("status.json"), "{}\n").unwrap();
+
+        let invalid = temp_dir.path().join("123_preview-only");
+        std::fs::create_dir_all(&invalid).unwrap();
+
+        assert!(has_local_download_record(&config, "123").unwrap());
+        assert!(!has_local_download_record(&config, "456").unwrap());
+    }
 }
