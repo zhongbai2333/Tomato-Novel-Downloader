@@ -155,6 +155,7 @@ fn finalize_txt(
 
     if manager.config.bulk_files {
         std::fs::create_dir_all(path)?;
+        let mut inserted_volumes: HashSet<String> = HashSet::new();
 
         // 书籍信息
         let mut meta = File::create(path.join("0000_书籍信息.txt"))?;
@@ -217,6 +218,7 @@ fn finalize_txt(
             let mut f = File::create(path.join(filename))?;
             if let Some(vol) = volume_title_by_chapter_id.get(chapter_id)
                 && !vol.trim().is_empty()
+                && inserted_volumes.insert(vol.trim().to_string())
             {
                 writeln!(f, "分卷：{}", vol.trim())?;
                 writeln!(f)?;
