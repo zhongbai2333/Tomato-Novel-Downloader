@@ -189,6 +189,24 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.free-notice {
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  background: var(--surface);
+  text-align: center;
+}
+.free-notice a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.free-notice a:hover {
+  text-decoration: underline;
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;

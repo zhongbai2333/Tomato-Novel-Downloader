@@ -29,6 +29,10 @@ pub(crate) struct AppState {
     pub(crate) jobs: Arc<JobStore>,
     pub(crate) self_update: Arc<SelfUpdateStore>,
     pub(crate) auth: Option<AuthState>,
+    /// 限制同时访问上游 API（search / preview）的并发数，防止 WebUI 被用作多用户 API 代理。
+    /// 仅在启用 official-api feature 时有意义，其他 feature 下置 None。
+    #[cfg(feature = "official-api")]
+    pub(crate) api_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -298,6 +302,14 @@ impl JobStore {
                 .then_with(|| b.id.cmp(&a.id))
         });
         v
+    }
+
+    /// 返回当前处于 Queued 或 Running 状态的任务数量，用于并发限制。
+    pub(crate) fn count_active(&self) -> usize {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.values()
+            .filter(|e| matches!(e.info.state, JobState::Queued | JobState::Running))
+            .count()
     }
 
     pub(crate) fn set_running(&self, id: u64) {

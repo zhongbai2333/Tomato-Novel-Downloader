@@ -110,6 +110,15 @@ pub(super) fn draw_about(frame: &mut ratatui::Frame, app: &mut App) {
     text.push_str("本项目仅供学习交流使用，请勿用于商业及违法行为。\n");
     text.push_str(&format!("\n当前版本: v{}\n", env!("CARGO_PKG_VERSION")));
 
+    #[cfg(feature = "official-api")]
+    {
+        text.push_str("\n===== 免费声明 =====\n");
+        text.push_str(
+            "本程序完全免费，官方仓库: https://github.com/zhongbai2333/Tomato-Novel-Downloader\n",
+        );
+        text.push_str("如果你为此付费，你被欺骗了。\n");
+    }
+
     text.push_str("\n===== 程序更新 =====\n");
     if cfg!(feature = "docker") {
         text.push_str("Docker 构建已禁用程序自更新，请通过重新拉取镜像进行升级。\n");

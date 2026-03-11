@@ -23,6 +23,8 @@ struct LibraryItem {
 #[derive(Debug, Deserialize)]
 pub(crate) struct LibraryQuery {
     pub(crate) path: Option<String>,
+    /// 按文件名/文件夹名关键词模糊过滤（忽略大小写）
+    pub(crate) name: Option<String>,
 }
 
 pub(crate) async fn api_library(
@@ -33,9 +35,15 @@ pub(crate) async fn api_library(
     let base_for_task = base.clone();
     let rel = q.path.unwrap_or_default();
     let rel_for_task = rel.clone();
-    let items = tokio::task::spawn_blocking(move || scan_library(&base_for_task, &rel_for_task))
-        .await
-        .unwrap_or_default();
+    let mut items =
+        tokio::task::spawn_blocking(move || scan_library(&base_for_task, &rel_for_task))
+            .await
+            .unwrap_or_default();
+
+    if let Some(ref kw) = q.name {
+        let kw_lower = kw.to_lowercase();
+        items.retain(|i| i.name.to_lowercase().contains(&kw_lower));
+    }
 
     Json(json!({
         "root": base.to_string_lossy(),

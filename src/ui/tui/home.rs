@@ -501,20 +501,33 @@ pub(super) fn draw_home(frame: &mut ratatui::Frame, app: &mut App) {
         app.last_home_layout = Some(arr);
     }
 
-    let header_line = Line::from(vec![
-        Span::styled(
-            "番茄小说下载器 TUI",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  |  输出目录: "),
-        Span::styled(
-            app.config.default_save_dir().display().to_string(),
-            Style::default().fg(Color::Green),
-        ),
-        Span::raw("  |  c: 配置, q: 退出"),
-    ]);
+    let header_line = {
+        #[cfg(feature = "official-api")]
+        let notice = "  |  本程序完全免费，若发现收费渠道，请勿上当受骗！";
+        #[cfg(not(feature = "official-api"))]
+        let notice = "  |  c: 配置, q: 退出";
+
+        Line::from(vec![
+            Span::styled(
+                "番茄小说下载器 TUI",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  |  输出目录: "),
+            Span::styled(
+                app.config.default_save_dir().display().to_string(),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                notice,
+                #[cfg(feature = "official-api")]
+                Style::default().fg(Color::Yellow),
+                #[cfg(not(feature = "official-api"))]
+                Style::default(),
+            ),
+        ])
+    };
 
     let header = Paragraph::new(header_line).block(
         Block::default()

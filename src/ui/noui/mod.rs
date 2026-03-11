@@ -54,6 +54,12 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         env!("CARGO_PKG_VERSION")
     );
 
+    #[cfg(feature = "official-api")]
+    println!(
+        "\n【免费声明】本程序完全免费，若发现收费渠道，请勿上当受骗！\n\
+      官方仓库: https://github.com/zhongbai2333/Tomato-Novel-Downloader"
+    );
+
     // 每次启动检查程序更新（不影响后续流程，失败直接忽略）。
     app_update::startup_check();
 

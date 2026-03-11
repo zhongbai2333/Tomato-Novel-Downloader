@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 use std::thread;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -12,14 +12,39 @@ use crate::download::downloader as dl;
 use crate::ui::web::state::{AppState, JobState};
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct ListJobsQuery {
+    /// 按 job id 精确过滤
+    pub(crate) id: Option<u64>,
+    /// 按书名/书ID关键词模糊过滤（忽略大小写）
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct CreateJobReq {
     pub(crate) book_id: String,
     pub(crate) range_start: Option<usize>,
     pub(crate) range_end: Option<usize>,
 }
 
-pub(crate) async fn list_jobs(State(state): State<AppState>) -> Json<Value> {
-    let items = state.jobs.list();
+pub(crate) async fn list_jobs(
+    State(state): State<AppState>,
+    Query(q): Query<ListJobsQuery>,
+) -> Json<Value> {
+    let mut items = state.jobs.list();
+    if let Some(id) = q.id {
+        items.retain(|j| j.id == id);
+    }
+    if let Some(ref kw) = q.name {
+        let kw_lower = kw.to_lowercase();
+        items.retain(|j| {
+            j.title
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(&kw_lower)
+                || j.book_id.to_lowercase().contains(&kw_lower)
+        });
+    }
     Json(json!({ "items": items }))
 }
 
@@ -35,6 +60,11 @@ pub(crate) async fn create_job(
     };
     if book_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // 并发限制：同时只允许一个活跃任务（Queued 或 Running），防止 API 被滥用为多用户服务。
+    if state.jobs.count_active() >= 1 {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
     // Validate range parameters if provided

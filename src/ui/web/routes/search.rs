@@ -15,7 +15,7 @@ pub(crate) struct SearchQuery {
 }
 
 pub(crate) async fn api_search(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     #[cfg(not(feature = "official-api"))]
@@ -36,6 +36,13 @@ pub(crate) async fn api_search(
         if keyword.is_empty() {
             return Ok(Json(json!({"items": []})));
         }
+
+        // 并发限制：最多 2 个同时进行的上游 API 请求。
+        let _permit = state
+            .api_semaphore
+            .acquire()
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
         let resp = tokio::task::spawn_blocking(move || {
             let client = SearchClient::new()?;

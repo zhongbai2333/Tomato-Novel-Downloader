@@ -4,7 +4,8 @@ use axum::response::{Html, IntoResponse, Response};
 use crate::ui::web::templates;
 
 pub(crate) async fn index() -> impl IntoResponse {
-    let mut resp = Html(templates::INDEX_HTML).into_response();
+    let html = templates::INDEX_HTML_RAW.replace("{{FREE_NOTICE}}", templates::FREE_NOTICE_HTML);
+    let mut resp = Html(html).into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-store, no-cache, must-revalidate"),

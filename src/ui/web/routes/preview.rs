@@ -159,6 +159,14 @@ pub(crate) async fn api_preview(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    // 并发限制：与 search 共用同一个信号量，最多 2 个上游 API 请求并发。
+    #[cfg(feature = "official-api")]
+    let _permit = state
+        .api_semaphore
+        .acquire()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
     let cfg = state
         .config
         .lock()
