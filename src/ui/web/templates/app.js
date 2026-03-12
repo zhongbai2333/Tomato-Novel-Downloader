@@ -201,6 +201,8 @@ function buildCoverCandidates(preview) {
 
 const DISMISS_KEY = 'tnd.dismissed_release_tag';
 let selfUpdatePollTimer = null;
+let selfUpdateWasRunning = false;
+let selfUpdateRestartWaiting = false;
 
 function getDismissedTag() {
   try { return (localStorage.getItem(DISMISS_KEY) || '').toString(); } catch { return ''; }
@@ -240,19 +242,73 @@ async function pollSelfUpdateStatus() {
     renderSelfUpdateStatus(status);
 
     const st = (status?.state || '').toString();
+    const stage = (status?.stage || '').toString();
     if (st === 'running') {
+      selfUpdateWasRunning = true;
+      selfUpdateRestartWaiting = false;
       if (!selfUpdatePollTimer) {
         selfUpdatePollTimer = setInterval(() => {
           pollSelfUpdateStatus().catch(() => {});
         }, 1000);
       }
-    } else if (selfUpdatePollTimer) {
-      clearInterval(selfUpdatePollTimer);
-      selfUpdatePollTimer = null;
+    } else {
+      if (selfUpdatePollTimer) {
+        clearInterval(selfUpdatePollTimer);
+        selfUpdatePollTimer = null;
+      }
+      // Detect restart scenarios
+      if (selfUpdateWasRunning && !selfUpdateRestartWaiting) {
+        if (st === 'done' && stage === 'restart') {
+          // finish_done("restart") was called before exit — wait for new process
+          startWaitingForRestart();
+        } else if (st === 'idle') {
+          // New process started with fresh state — page needs reload
+          window.location.reload();
+        }
+      }
     }
   } catch {
-    // ignore
+    // Network error — if update was in progress, server likely restarted
+    if (selfUpdateWasRunning && !selfUpdateRestartWaiting) {
+      startWaitingForRestart();
+    }
   }
+}
+
+function startWaitingForRestart() {
+  selfUpdateRestartWaiting = true;
+  if (selfUpdatePollTimer) {
+    clearInterval(selfUpdatePollTimer);
+    selfUpdatePollTimer = null;
+  }
+
+  // Push progress bar to 100%
+  const wrap = document.getElementById('selfUpdateProgressWrap');
+  const bar = document.getElementById('selfUpdateProgressBar');
+  const pct = document.getElementById('selfUpdatePercent');
+  const stageEl = document.getElementById('selfUpdateStage');
+  const msgEl = document.getElementById('selfUpdateMessage');
+  if (wrap) wrap.classList.remove('hidden');
+  if (bar) bar.style.width = '100%';
+  if (pct) pct.textContent = '100%';
+  if (stageEl) stageEl.textContent = 'restart';
+  if (msgEl) msgEl.textContent = '服务重启中，等待重连…';
+
+  const hint = document.getElementById('appUpdateHint');
+  if (hint) hint.textContent = '更新完成，等待服务重启…';
+
+  // Poll /api/status every 2 s; reload once the new process responds
+  const reconnTimer = setInterval(async () => {
+    try {
+      await fetchWithCreds('/api/status');
+      clearInterval(reconnTimer);
+      if (msgEl) msgEl.textContent = '服务已重启，正在刷新页面…';
+      if (hint) hint.textContent = '更新完成，正在刷新…';
+      setTimeout(() => window.location.reload(), 600);
+    } catch {
+      // still offline, keep waiting
+    }
+  }, 2000);
 }
 
 function applyDockerUpdateUi() {

@@ -199,6 +199,11 @@ body {
   background: var(--surface);
   text-align: center;
 }
+
+/* Desktop: hide the mobile-only free-notice injected in status section */
+@media (min-width: 769px) {
+  .free-notice-mobile { display: none; }
+}
 .free-notice a {
   color: var(--accent);
   text-decoration: none;
@@ -900,6 +905,7 @@ button.success {
   .nav a { white-space: nowrap; padding: 8px 12px; font-size: 0.85rem; }
 
   .sidebar-footer { border-top: none; padding: 8px; }
+  .sidebar-footer .free-notice { display: none; }
   .theme-toggle span { display: none; }
 
   .main-content {
