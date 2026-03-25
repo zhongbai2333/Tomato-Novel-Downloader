@@ -40,7 +40,7 @@ pub(super) fn start_download_task(
     app.last_preview_desc_area = None;
     app.download_progress = Some(ProgressSnapshot {
         group_done: 0,
-        group_total: pending.plan.chapters.len().div_ceil(25),
+        group_total: downloader::dynamic_group_count(pending.plan.chapters.len()),
         saved_chapters: pending.downloaded_count,
         chapter_total: pending.plan.chapters.len(),
         save_phase: SavePhase::TextSave,

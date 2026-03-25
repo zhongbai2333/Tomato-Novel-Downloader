@@ -85,7 +85,7 @@ impl ChapterDownloader {
         }
     }
 
-    /// 下载一批章节，使用官方批量接口，每批最多 25 章。
+    /// 下载一批章节，使用官方批量接口，每批动态分组 15~25 章。
     pub fn download_book(
         &self,
         manager: &mut BookManager,
@@ -102,7 +102,7 @@ impl ChapterDownloader {
         let start = Instant::now();
         info!("开始下载：{} ({} 章)", book_name, chapters.len());
 
-        let groups: Vec<&[ChapterRef]> = chapters.chunks(25).collect();
+        let groups = build_dynamic_chapter_groups(chapters);
         let total_groups = groups.len() as u64;
         let total_chapters = chapters.len() as u64;
         let mut saved_in_job: u64 = 0;
@@ -889,7 +889,7 @@ fn download_third_party_flow(
     let (tx_jobs, rx_jobs) = channel::unbounded::<Vec<ChapterRef>>();
     let (tx_res, rx_res) = channel::unbounded::<Result<(Vec<ChapterRef>, Value)>>();
 
-    for group in pending_chapters.chunks(25) {
+    for group in build_dynamic_chapter_groups(pending_chapters) {
         tx_jobs.send(group.to_vec()).ok();
     }
     drop(tx_jobs);
@@ -1104,6 +1104,56 @@ fn log_failed_chapter(chapter: &ChapterRef, reason: &str) {
         chapter.title,
         chapter.id
     );
+}
+
+pub(crate) const MIN_DYNAMIC_GROUP_SIZE: usize = 15;
+pub(crate) const MAX_DYNAMIC_GROUP_SIZE: usize = 25;
+
+pub(crate) fn build_dynamic_chapter_groups(chapters: &[ChapterRef]) -> Vec<&[ChapterRef]> {
+    if chapters.is_empty() {
+        return Vec::new();
+    }
+
+    let len = chapters.len();
+    if len <= MAX_DYNAMIC_GROUP_SIZE {
+        return vec![chapters];
+    }
+
+    let min_groups = len.div_ceil(MAX_DYNAMIC_GROUP_SIZE);
+    let max_groups = len / MIN_DYNAMIC_GROUP_SIZE;
+
+    let group_count = if min_groups <= max_groups {
+        max_groups
+    } else {
+        min_groups
+    }
+    .max(1);
+
+    let base_size = len / group_count;
+    let remainder = len % group_count;
+
+    let mut groups = Vec::with_capacity(group_count);
+    let mut start = 0;
+    for idx in 0..group_count {
+        let extra = usize::from(idx < remainder);
+        let size = base_size + extra;
+        let end = start + size;
+        groups.push(&chapters[start..end]);
+        start = end;
+    }
+
+    groups
+}
+
+pub(crate) fn dynamic_group_count(total: usize) -> usize {
+    build_dynamic_chapter_groups(&vec![
+        ChapterRef {
+            id: String::new(),
+            title: String::new(),
+        };
+        total
+    ])
+    .len()
 }
 
 #[cfg(feature = "official-api")]
@@ -1337,6 +1387,49 @@ mod tests {
         assert!(should_escalate_full_group_retry(2, &all_missing));
         assert!(!should_escalate_full_group_retry(2, &partial_missing));
         assert!(!should_escalate_full_group_retry(1, &all_missing));
+    }
+
+    #[test]
+    fn build_dynamic_chapter_groups_keeps_group_size_within_range() {
+        let chapters: Vec<ChapterRef> = (1..=80)
+            .map(|i| ChapterRef {
+                id: i.to_string(),
+                title: format!("第{i}章"),
+            })
+            .collect();
+
+        let groups = build_dynamic_chapter_groups(&chapters);
+        assert_eq!(
+            groups.iter().map(|g| g.len()).sum::<usize>(),
+            chapters.len()
+        );
+        assert!(groups.iter().all(|g| (15..=25).contains(&g.len())));
+        assert_eq!(groups.len(), 5);
+    }
+
+    #[test]
+    fn build_dynamic_chapter_groups_allows_small_tail_as_single_group() {
+        let chapters: Vec<ChapterRef> = (1..=14)
+            .map(|i| ChapterRef {
+                id: i.to_string(),
+                title: format!("第{i}章"),
+            })
+            .collect();
+
+        let groups = build_dynamic_chapter_groups(&chapters);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 14);
+    }
+
+    #[test]
+    fn dynamic_group_count_matches_balanced_distribution() {
+        assert_eq!(dynamic_group_count(0), 0);
+        assert_eq!(dynamic_group_count(14), 1);
+        assert_eq!(dynamic_group_count(25), 1);
+        assert_eq!(dynamic_group_count(26), 2);
+        assert_eq!(dynamic_group_count(30), 2);
+        assert_eq!(dynamic_group_count(50), 3);
+        assert_eq!(dynamic_group_count(80), 5);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
+use super::downloader::dynamic_group_count;
 use super::models::ChapterRef;
 use super::models::{ProgressSnapshot, SavePhase};
 use crate::base_system::context::Config;
@@ -75,7 +76,7 @@ impl ProgressReporter {
 
     pub(crate) fn reset_for_retry(&mut self, total: usize, pending_len: usize) {
         self.snapshot.group_done = 0;
-        self.snapshot.group_total = pending_len.div_ceil(25);
+        self.snapshot.group_total = dynamic_group_count(pending_len);
         self.snapshot.saved_chapters = total.saturating_sub(pending_len);
         self.snapshot.chapter_total = total;
         self.snapshot.save_phase = SavePhase::TextSave;
@@ -133,7 +134,7 @@ pub(crate) fn make_reporter(
     progress: Option<Box<dyn FnMut(ProgressSnapshot) + Send>>,
 ) -> ProgressReporter {
     let total = chosen.len();
-    let group_total = pending.len().div_ceil(25);
+    let group_total = dynamic_group_count(pending.len());
 
     let use_cli_bars = progress.is_none()
         && config.use_official_api

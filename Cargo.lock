@@ -3150,6 +3150,7 @@ dependencies = [
  "time",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -903,7 +903,7 @@ pub(super) fn apply_preview_ready(app: &mut App, pending: PendingDownload) {
     app.input.clear();
     app.download_progress = Some(ProgressSnapshot {
         group_done: 0,
-        group_total: total.div_ceil(25),
+        group_total: downloader::dynamic_group_count(total),
         saved_chapters: downloaded,
         chapter_total: total,
         save_phase: SavePhase::TextSave,
