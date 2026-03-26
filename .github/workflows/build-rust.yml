@@ -770,7 +770,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary (macOS amd64)
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build --release --target x86_64-apple-darwin --no-default-features --features official-api,tts-native,clipboard,clipboard-arboard
 
       - name: Bundle artifacts
         shell: bash
