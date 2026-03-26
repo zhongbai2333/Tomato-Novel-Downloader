@@ -143,16 +143,25 @@ BINARY_NAME=""
 case "$PLATFORM" in
     Linux)
         if $IS_TERMUX; then
+            # 检测 Termux 架构：aarch64 → arm64, armv7l → arm32
+            if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+                ANDROID_ARCH="arm64"
+            elif [[ "$ARCH" == "armv7l" || "$ARCH" == "arm" ]]; then
+                ANDROID_ARCH="arm32"
+            else
+                log_error "不支持的 Android 架构 [${ARCH}]！仅支持 aarch64/arm64 与 armv7l/arm。"
+                exit 1
+            fi
             echo ""
-            echo "检测到 Termux：请选择安装类型（默认 1）："
+            echo "检测到 Termux（架构：${ANDROID_ARCH}）：请选择安装类型（默认 1）："
             echo "  1) Android 原生 (推荐，无需 glibc-runner)"
             echo "  2) Linux glibc (需要 glibc-runner，兼容性依赖环境)"
             read -r TERMUX_KIND
             TERMUX_KIND="${TERMUX_KIND:-1}"
             case "$TERMUX_KIND" in
-                1) BINARY_NAME="TomatoNovelDownloader-Android_arm64-v${VERSION}" ;;
-                2) BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}" ;;
-                *) log_warn "无效输入，使用默认 Android 原生。"; BINARY_NAME="TomatoNovelDownloader-Android_arm64-v${VERSION}" ;;
+                1) BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}" ;;
+                2) BINARY_NAME="TomatoNovelDownloader-Linux_${ANDROID_ARCH}-v${VERSION}" ;;
+                *) log_warn "无效输入，使用默认 Android 原生。"; BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}" ;;
             esac
         else
             if [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
@@ -162,7 +171,11 @@ case "$PLATFORM" in
                     BINARY_NAME="TomatoNovelDownloader-Linux_amd64-v${VERSION}"
                 fi
             elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-                BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
+                if $IS_MUSL; then
+                    BINARY_NAME="TomatoNovelDownloader-Linux_musl_arm64-v${VERSION}"
+                else
+                    BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
+                fi
             else
                 log_error "不支持的 Linux 架构 [${ARCH}]！仅支持 x86_64/amd64 与 aarch64/arm64。"
                 exit 1
@@ -172,8 +185,10 @@ case "$PLATFORM" in
     Darwin)
         if [[ "$ARCH" == "arm64" ]]; then
             BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
+        elif [[ "$ARCH" == "x86_64" ]]; then
+            BINARY_NAME="TomatoNovelDownloader-macOS_amd64-v${VERSION}"
         else
-            log_error "不支持的 macOS 架构 [${ARCH}]！当前仅支持 Apple Silicon（arm64）。"
+            log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64 与 x86_64。"
             exit 1
         fi
         ;;

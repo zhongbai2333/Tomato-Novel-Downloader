@@ -245,18 +245,19 @@ fn fetch_latest_release(client: &Client) -> Result<ReleaseInfo> {
 }
 
 fn detect_platform_keyword() -> Result<String> {
-    // 对齐 Python 版本：
+    // 对齐 CI 构建产物命名：
     // - Linux (glibc): Linux_amd64 / Linux_arm64
     // - Linux (musl):  Linux_musl_amd64 / Linux_musl_arm64
-    // - Android: Android_arm64 (and others if provided)
-    // - Windows: Win64
-    // - macOS:  macOS_arm64
+    // - Android:       Android_arm64 / Android_arm32
+    // - Windows:       Win64 / WinArm64
+    // - macOS:         macOS_arm64 / macOS_amd64
     let system = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
     let arch_key = match arch {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
+        "arm" => "arm32",
         other => other,
     };
 
@@ -269,16 +270,11 @@ fn detect_platform_keyword() -> Result<String> {
             }
         }
         "android" => Ok(format!("Android_{arch_key}")),
-        "windows" => Ok("Win64".to_string()),
-        "macos" => {
-            if arch_key == "amd64" {
-                Err(anyhow!(
-                    "macOS x86_64 is no longer supported: no release asset will be published"
-                ))
-            } else {
-                Ok("macOS_arm64".to_string())
-            }
-        }
+        "windows" => match arch_key {
+            "arm64" => Ok("WinArm64".to_string()),
+            _ => Ok("Win64".to_string()),
+        },
+        "macos" => Ok(format!("macOS_{arch_key}")),
         other => Ok(other.to_string()),
     }
 }
@@ -396,9 +392,9 @@ fn canonical_executable_name() -> Result<OsString> {
     // 例如：
     // - Linux (glibc): TomatoNovelDownloader-Linux_amd64 / TomatoNovelDownloader-Linux_arm64
     // - Linux (musl):  TomatoNovelDownloader-Linux_musl_amd64 / TomatoNovelDownloader-Linux_musl_arm64
-    // - Android: TomatoNovelDownloader-Android_arm64
-    // - Windows: TomatoNovelDownloader-Win64.exe
-    // - macOS:  TomatoNovelDownloader-macOS_arm64
+    // - Android:       TomatoNovelDownloader-Android_arm64 / TomatoNovelDownloader-Android_arm32
+    // - Windows:       TomatoNovelDownloader-Win64.exe / TomatoNovelDownloader-WinArm64.exe
+    // - macOS:         TomatoNovelDownloader-macOS_arm64 / TomatoNovelDownloader-macOS_amd64
     let platform_key = detect_platform_keyword()?;
     let mut name = format!("TomatoNovelDownloader-{platform_key}");
     if cfg!(windows) {

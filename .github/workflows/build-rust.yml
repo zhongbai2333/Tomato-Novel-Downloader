@@ -11,6 +11,9 @@ on:
       - ".github/workflows/build-rust.yml"
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-linux:
     name: Build (linux-amd64)
