@@ -22,9 +22,6 @@
 - #90  [Not Fix] 一键更新
   - URL: <https://github.com/zhongbai2333/Tomato-Novel-Downloader/issues/90>
   - 结论：不计划实现一键更新/批量自动更新队列
-- #230 [Question] 有没有 macOS 10.15 系统可用版本
-  - URL: <https://github.com/zhongbai2333/Tomato-Novel-Downloader/issues/230>
-  - 结论：受 Runner/平台限制，不计划支持该场景
 - #265 [Not Fix] 能不能增加功能，API?
   - URL: <https://github.com/zhongbai2333/Tomato-Novel-Downloader/issues/265>
   - 结论：不计划在该项目提供此方向
@@ -65,7 +62,6 @@
 | 更新队列 / 自动下载模块 / 无人值守更新 | 与项目目标冲突的自动化队列能力 | `WontFix`（若 Open 有同类则 `Duplicate`） | #90, #93 |
 | VIP全本 / VIP章节 / 会员章节 / 登录下载 | 需账号或付费能力 | `WontFix`（若 Open 有同类则 `Duplicate`） | #243 |
 | API封装 / 提供API / HTTP接口 / SDK接口 | 将本项目作为通用 API 服务输出 | `WontFix`（若 Open 有同类则 `Duplicate`） | #265 |
-| macOS 10.15 / Intel Mac / x86_64 Mac 版本 | 受构建环境限制的平台支持诉求 | `WontFix`（若 Open 有同类则 `Duplicate`） | #230 |
 | AdGuard / VPN / snssdk 被拦截 / IID 获取失败 | 网络或本地环境导致的问题（通常非代码缺陷） | `Question` + `Needs-Info` 或 `WontFix` | #242 |
 | txt 空行 / 段落空行 / 去空行开关 | 文本格式个性化开关诉求 | `WontFix`（若 Open 有同类则 `Duplicate`） | #233 |
 
