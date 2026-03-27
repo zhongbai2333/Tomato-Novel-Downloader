@@ -338,6 +338,57 @@ fn get_accelerated_url(original_url: &str) -> String {
     }
 }
 
+/// 更新同目录下的 `run.sh`：将旧的带版本号文件名替换为规范文件名（无版本号）。
+///
+/// `run.sh` 中的 `exec` 行格式如：
+///   exec "${SCRIPT_DIR}/TomatoNovelDownloader-Android_arm64-v2.3.2" --server "$@"
+/// 更新后需变为：
+///   exec "${SCRIPT_DIR}/TomatoNovelDownloader-Android_arm64" --server "$@"
+fn patch_run_sh_if_exists(new_exe: &Path) -> Result<()> {
+    let Some(parent) = new_exe.parent() else {
+        return Ok(());
+    };
+    let run_sh = parent.join("run.sh");
+    if !run_sh.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&run_sh).context("read run.sh")?;
+    let platform_key = detect_platform_keyword()?;
+    let versioned_prefix = format!("TomatoNovelDownloader-{platform_key}-v");
+    let canonical = format!("TomatoNovelDownloader-{platform_key}");
+
+    let mut new_content = String::with_capacity(content.len());
+    let mut changed = false;
+
+    for line in content.lines() {
+        if let Some(idx) = line.find(&versioned_prefix) {
+            // 将 "TomatoNovelDownloader-<platform>-v<version>" 替换为规范名
+            let before = &line[..idx];
+            let after_prefix = &line[idx + versioned_prefix.len()..];
+            // 跳过版本号部分（到下一个引号、空格或行尾）
+            let end = after_prefix
+                .find(['"', '\'', ' '])
+                .unwrap_or(after_prefix.len());
+            let rest = &after_prefix[end..];
+            new_content.push_str(before);
+            new_content.push_str(&canonical);
+            new_content.push_str(rest);
+            changed = true;
+        } else {
+            new_content.push_str(line);
+        }
+        new_content.push('\n');
+    }
+
+    if changed {
+        fs::write(&run_sh, &new_content).context("write updated run.sh")?;
+        info!(target: "self_update", "已更新 run.sh 中的可执行文件名");
+    }
+
+    Ok(())
+}
+
 fn start_update(matched: &MatchedReleaseAsset) -> Result<()> {
     info!(
         target: "self_update",
@@ -358,6 +409,12 @@ fn start_update(matched: &MatchedReleaseAsset) -> Result<()> {
     }
 
     let new_exe = unix_apply(&tmp_file)?;
+
+    // 更新同目录的 run.sh（如果存在），将旧版本号文件名替换为规范名
+    if let Err(e) = patch_run_sh_if_exists(&new_exe) {
+        warn!(target: "self_update", "更新 run.sh 失败: {e}");
+    }
+
     info!(target: "self_update", "更新完成，正在重启程序…");
 
     let mut cmd = Command::new(&new_exe);

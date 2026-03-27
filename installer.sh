@@ -7,7 +7,7 @@
 #   3. 支持 2 种下载方式：
 #        (1) 直连 GitHub
 #        (2) 项目加速源（https://dl.zhongbai233.com/）加速
-#   4. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh（默认 --server）
+#   4. Termux 环境下生成 run.sh（默认 --server）
 #   5. Linux / macOS (arm64 & Intel x86_64) 下下载对应架构二进制并赋予执行权限
 # 
 # 使用方法：
@@ -27,7 +27,7 @@ set -e
 #   1. 自动通过 GitHub API 获取 Tomato-Novel-Downloader 最新版本
 #   2. 询问用户安装路径（Termux 下默认 $HOME）
 #   3. 支持 2 种下载方式：直连 / 项目加速源
-#   4. Termux 环境下自动安装 glibc 运行依赖并生成 run.sh（默认 --server）
+#   4. Termux 环境下生成 run.sh（默认 --server）
 #   5. Linux / macOS 下载对应架构二进制并赋予执行权限
 
 set -e
@@ -152,17 +152,8 @@ case "$PLATFORM" in
                 log_error "不支持的 Android 架构 [${ARCH}]！仅支持 aarch64/arm64 与 armv7l/arm。"
                 exit 1
             fi
-            echo ""
-            echo "检测到 Termux（架构：${ANDROID_ARCH}）：请选择安装类型（默认 1）："
-            echo "  1) Android 原生 (推荐，无需 glibc-runner)"
-            echo "  2) Linux glibc (需要 glibc-runner，兼容性依赖环境)"
-            read -r TERMUX_KIND
-            TERMUX_KIND="${TERMUX_KIND:-1}"
-            case "$TERMUX_KIND" in
-                1) BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}" ;;
-                2) BINARY_NAME="TomatoNovelDownloader-Linux_${ANDROID_ARCH}-v${VERSION}" ;;
-                *) log_warn "无效输入，使用默认 Android 原生。"; BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}" ;;
-            esac
+            BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}"
+            log_info "检测到 Termux（架构：${ANDROID_ARCH}），将使用 Android 原生版本。"
         else
             if [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
                 if $IS_MUSL; then
@@ -241,12 +232,21 @@ fi
 chmod +x "$TARGET_BINARY_PATH"
 log_info "下载完成并赋予可执行权限：${TARGET_BINARY_PATH}"
 
+# 重命名为规范名（不含版本号），与程序自更新后的命名保持一致
+CANONICAL_NAME="${BINARY_NAME%-v*}"
+if [ "$CANONICAL_NAME" != "$BINARY_NAME" ]; then
+    CANONICAL_PATH="${INSTALL_DIR}/${CANONICAL_NAME}"
+    mv "${TARGET_BINARY_PATH}" "${CANONICAL_PATH}"
+    chmod +x "${CANONICAL_PATH}"
+    TARGET_BINARY_PATH="${CANONICAL_PATH}"
+    log_info "已重命名为规范名：${CANONICAL_NAME}"
+fi
+
 if $IS_TERMUX; then
     echo ""
     log_info "生成 run.sh..."
     RUN_SH_PATH="${INSTALL_DIR}/run.sh"
-    if [[ "${BINARY_NAME}" == TomatoNovelDownloader-Android_* ]]; then
-        cat > "$RUN_SH_PATH" <<EOF
+    cat > "$RUN_SH_PATH" <<EOF
 #!/usr/bin/env bash
 # Termux / MT 管理器环境：运行 Android 原生 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
 # 你可以用环境变量控制监听地址与密码锁：
@@ -254,25 +254,8 @@ if $IS_TERMUX; then
 #   TOMATO_WEB_PASSWORD=你的密码
 SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 termux-open-url "http://127.0.0.1:18423/" >/dev/null 2>&1 || true
-exec "\${SCRIPT_DIR}/${BINARY_NAME}" --server "\$@"
+exec "\${SCRIPT_DIR}/${CANONICAL_NAME}" --server "\$@"
 EOF
-    else
-        echo ""
-        log_info "你选择了 Linux glibc 版本，将安装 glibc-repo 与 glibc-runner..."
-        pkg update -y
-        pkg install -y glibc-repo
-        pkg install -y glibc-runner
-        cat > "$RUN_SH_PATH" <<EOF
-#!/usr/bin/env bash
-# Termux / MT 管理器环境下使用 glibc-runner 运行 TomatoNovelDownloader（默认启动 Web UI 服务器模式）
-# 你可以用环境变量控制监听地址与密码锁：
-#   TOMATO_WEB_ADDR=0.0.0.0:18423
-#   TOMATO_WEB_PASSWORD=你的密码
-SCRIPT_DIR="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-termux-open-url "http://127.0.0.1:18423/" >/dev/null 2>&1 || true
-exec glibc-runner "\${SCRIPT_DIR}/${BINARY_NAME}" --server "\$@"
-EOF
-    fi
     chmod +x "$RUN_SH_PATH"
     log_info "已生成：${RUN_SH_PATH}"
 
@@ -288,14 +271,14 @@ elif [[ "$PLATFORM" == "Linux" ]]; then
     echo "安装完成，文件位于：${TARGET_BINARY_PATH}"
     echo "运行方式："
     echo "    cd ${INSTALL_DIR}"
-    echo "    ./$(printf "%q" "${BINARY_NAME}")"
+    echo "    ./$(printf "%q" "${CANONICAL_NAME}")"
 elif [[ "$PLATFORM" == "Darwin" ]]; then
     echo ""
     log_info "检测到 macOS 环境。"
     echo "安装完成，文件位于：${TARGET_BINARY_PATH}"
     echo "运行方式："
     echo "    cd ${INSTALL_DIR}"
-    echo "    ./$(printf "%q" "${BINARY_NAME}")"
+    echo "    ./$(printf "%q" "${CANONICAL_NAME}")"
 fi
 
 log_info "全部完成。"
