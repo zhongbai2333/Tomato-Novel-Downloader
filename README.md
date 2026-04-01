@@ -1,5 +1,7 @@
 # 番茄小说下载器~~精简版~~
 
+> 小小推广位：https://v.wjx.cn/vm/Qs13X5r.aspx#  <- 小问卷
+
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
 目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了（~~虽说原本的Python版本也没几行是原项目的了~~）
