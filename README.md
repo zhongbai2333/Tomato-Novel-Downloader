@@ -1,6 +1,6 @@
 # 番茄小说下载器~~精简版~~
 
-> 小小推广位：https://v.wjx.cn/vm/Qs13X5r.aspx#  <- 小问卷
+> 小小推广位：https://v.wjx.cn/vm/Qs13X5r.aspx#  <- 小问卷 若是有空帮我写一下 感激不尽（交差用的随便写）
 
 番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
 
