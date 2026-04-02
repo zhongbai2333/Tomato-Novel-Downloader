@@ -995,12 +995,34 @@ pub(crate) fn finalize_from_manager(
 
     let mut chapter_values = Vec::with_capacity(manager.downloaded.len());
     for ch in chosen {
-        if let Some((title, Some(content))) = manager.downloaded.get(&ch.id) {
-            let mut obj = Map::new();
-            obj.insert("id".to_string(), Value::String(ch.id.clone()));
-            obj.insert("title".to_string(), Value::String(title.clone()));
-            obj.insert("content".to_string(), Value::String(content.clone()));
-            chapter_values.push(Value::Object(obj));
+        match manager.downloaded.get(&ch.id) {
+            Some((title, Some(content))) => {
+                let mut obj = Map::new();
+                obj.insert("id".to_string(), Value::String(ch.id.clone()));
+                obj.insert("title".to_string(), Value::String(title.clone()));
+                obj.insert("content".to_string(), Value::String(content.clone()));
+                chapter_values.push(Value::Object(obj));
+            }
+            Some((title, None)) => {
+                let mut obj = Map::new();
+                obj.insert("id".to_string(), Value::String(ch.id.clone()));
+                obj.insert("title".to_string(), Value::String(title.clone()));
+                obj.insert(
+                    "content".to_string(),
+                    Value::String("[本章下载失败]".to_string()),
+                );
+                chapter_values.push(Value::Object(obj));
+            }
+            None => {
+                let mut obj = Map::new();
+                obj.insert("id".to_string(), Value::String(ch.id.clone()));
+                obj.insert("title".to_string(), Value::String(ch.title.clone()));
+                obj.insert(
+                    "content".to_string(),
+                    Value::String("[本章下载失败]".to_string()),
+                );
+                chapter_values.push(Value::Object(obj));
+            }
         }
     }
 
@@ -1022,11 +1044,12 @@ pub(crate) fn finalize_from_manager(
         .map(|n| n == chosen.len())
         .unwrap_or(false);
 
+    let all_success = count_success_for_chosen(manager, chosen) == chosen.len();
     if finalize_ok
         && manager.config.auto_clear_dump
         && finished
         && full_book_range
-        && chapter_values.len() == chosen.len()
+        && all_success
         && let Err(e) = manager.delete_status_folder()
     {
         error!(target: "book_manager", error = ?e, "删除状态目录失败");
