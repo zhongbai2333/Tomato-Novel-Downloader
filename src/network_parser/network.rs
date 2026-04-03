@@ -401,7 +401,18 @@ impl FanqieWebNetwork {
                 return Some(arr.clone());
             }
         }
-
+        // chapterListWithVolume：按卷分组的章节列表（数组的数组），需要展平
+        if let Some(volumes) = root.get("chapterListWithVolume").and_then(Value::as_array) {
+            let mut all_chapters: Vec<Value> = Vec::new();
+            for vol in volumes {
+                if let Some(ch_list) = vol.as_array() {
+                    all_chapters.extend(ch_list.iter().cloned());
+                }
+            }
+            if !all_chapters.is_empty() {
+                return Some(all_chapters);
+            }
+        }
         // 有些接口会是 data.data.list / data.data.chapterList / data.data.items
         if let Some(inner) = root.get("data") {
             for key in [
