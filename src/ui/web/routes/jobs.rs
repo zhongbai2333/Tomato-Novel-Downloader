@@ -132,6 +132,23 @@ pub(crate) async fn create_job(
             rx.recv().ok().flatten()
         };
 
+        let jobs_fmt = jobs.clone();
+        let format_asker = move |_manager: &crate::book_parser::book_manager::BookManager| {
+            let options = vec![
+                dl::BookNameOption {
+                    label: "txt 格式".to_string(),
+                    value: "txt".to_string(),
+                },
+                dl::BookNameOption {
+                    label: "epub 格式".to_string(),
+                    value: "epub".to_string(),
+                },
+            ];
+            let (tx, rx) = std::sync::mpsc::channel();
+            jobs_fmt.set_format_options(id, options, tx);
+            rx.recv().ok().flatten()
+        };
+
         let result = dl::download_with_plan_flow(
             &cfg,
             plan,
@@ -151,6 +168,7 @@ pub(crate) async fn create_job(
                 },
                 stage_callback: None,
                 book_name_asker: Some(Box::new(book_name_asker)),
+                format_asker: Some(Box::new(format_asker)),
             },
             Some(Box::new(move |snap| jobs_cb.set_progress(id, snap))),
             Some(handle.cancel.clone()),
@@ -185,6 +203,18 @@ pub(crate) async fn submit_book_name_choice(
     Json(req): Json<BookNameChoiceReq>,
 ) -> Result<Json<Value>, StatusCode> {
     if state.jobs.submit_book_name_choice(id, req.value) {
+        Ok(Json(json!({"ok": true})))
+    } else {
+        Err(StatusCode::NOT_FOUND)
+    }
+}
+
+pub(crate) async fn submit_format_choice(
+    State(state): State<AppState>,
+    Path(id): Path<u64>,
+    Json(req): Json<BookNameChoiceReq>,
+) -> Result<Json<Value>, StatusCode> {
+    if state.jobs.submit_format_choice(id, req.value) {
         Ok(Json(json!({"ok": true})))
     } else {
         Err(StatusCode::NOT_FOUND)

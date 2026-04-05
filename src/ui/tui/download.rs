@@ -101,6 +101,25 @@ pub(super) fn start_download_task(
             });
             resp_rx.recv().ok().flatten()
         };
+        let format_ask_tx = tx.clone();
+        let format_asker = move |_manager: &crate::book_parser::book_manager::BookManager| {
+            let options = vec![
+                downloader::BookNameOption {
+                    label: "txt 格式".to_string(),
+                    value: "txt".to_string(),
+                },
+                downloader::BookNameOption {
+                    label: "epub 格式".to_string(),
+                    value: "epub".to_string(),
+                },
+            ];
+            let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+            let _ = format_ask_tx.send(WorkerMsg::AskFormat {
+                options,
+                respond_to: resp_tx,
+            });
+            resp_rx.recv().ok().flatten()
+        };
         let result = downloader::download_with_plan_flow(
             &cfg,
             pending.plan,
@@ -120,6 +139,7 @@ pub(super) fn start_download_task(
                 },
                 stage_callback: None,
                 book_name_asker: Some(Box::new(book_name_asker)),
+                format_asker: Some(Box::new(format_asker)),
             },
             Some(Box::new(progress_cb)),
             Some(cancel_flag),

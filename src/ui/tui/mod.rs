@@ -127,6 +127,10 @@ enum WorkerMsg {
         options: Vec<crate::download::downloader::BookNameOption>,
         respond_to: std::sync::mpsc::Sender<Option<String>>,
     },
+    AskFormat {
+        options: Vec<crate::download::downloader::BookNameOption>,
+        respond_to: std::sync::mpsc::Sender<Option<String>>,
+    },
     PreviewReady(Box<Result<PendingDownload>>),
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
     AppUpdateChecked(Result<crate::base_system::app_update::UpdateCheckReport>),
@@ -309,6 +313,13 @@ pub(super) struct App {
     book_name_modal_options: Vec<crate::download::downloader::BookNameOption>,
     book_name_modal_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
     last_book_name_modal_list: Option<Rect>,
+
+    // format modal (post-download)
+    format_modal_open: bool,
+    format_modal_state: ListState,
+    format_modal_options: Vec<crate::download::downloader::BookNameOption>,
+    format_modal_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
+    last_format_modal_list: Option<Rect>,
 }
 #[derive(Clone, Debug, Default)]
 struct PreviewModalLayout {
@@ -436,6 +447,16 @@ impl App {
             book_name_modal_options: Vec::new(),
             book_name_modal_sender: None,
             last_book_name_modal_list: None,
+
+            format_modal_open: false,
+            format_modal_state: {
+                let mut s = ListState::default();
+                s.select(Some(0));
+                s
+            },
+            format_modal_options: Vec::new(),
+            format_modal_sender: None,
+            last_format_modal_list: None,
         }
     }
 
@@ -578,6 +599,10 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut App) {
     if app.book_name_modal_open {
         render_book_name_modal(frame, app);
     }
+
+    if app.format_modal_open {
+        render_format_modal(frame, app);
+    }
 }
 
 fn handle_event(app: &mut App) -> Result<bool> {
@@ -588,6 +613,10 @@ fn handle_event(app: &mut App) -> Result<bool> {
     let evt = event::read().context("read event")?;
     if app.book_name_modal_open {
         handle_book_name_modal_event(app, evt)?;
+        return Ok(!app.should_quit);
+    }
+    if app.format_modal_open {
+        handle_format_modal_event(app, evt)?;
         return Ok(!app.should_quit);
     }
     match app.view {
@@ -674,6 +703,124 @@ fn handle_book_name_modal_event(app: &mut App, event: Event) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn handle_format_modal_event(app: &mut App, event: Event) -> Result<()> {
+    match event {
+        Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Up => {
+                let len = app.format_modal_options.len();
+                if len > 0 {
+                    let cur = app.format_modal_state.selected().unwrap_or(0);
+                    let next = if cur == 0 { len - 1 } else { cur - 1 };
+                    app.format_modal_state.select(Some(next));
+                }
+            }
+            KeyCode::Down => {
+                let len = app.format_modal_options.len();
+                if len > 0 {
+                    let cur = app.format_modal_state.selected().unwrap_or(0);
+                    let next = (cur + 1) % len;
+                    app.format_modal_state.select(Some(next));
+                }
+            }
+            KeyCode::Enter => {
+                let idx = app.format_modal_state.selected().unwrap_or(0);
+                let chosen = app.format_modal_options.get(idx).map(|o| o.value.clone());
+                if let Some(tx) = app.format_modal_sender.take() {
+                    let _ = tx.send(chosen);
+                }
+                app.format_modal_open = false;
+                app.format_modal_options.clear();
+                app.last_format_modal_list = None;
+            }
+            _ => {}
+        },
+        Event::Mouse(me) if matches!(me.kind, MouseEventKind::Down(MouseButton::Left)) => {
+            if let Some(area) = app.last_format_modal_list
+                && pos_in(area, me.column, me.row)
+            {
+                let idx = me.row.saturating_sub(area.y + 1) as usize;
+                if idx < app.format_modal_options.len() {
+                    app.format_modal_state.select(Some(idx));
+                    let chosen = app.format_modal_options.get(idx).map(|o| o.value.clone());
+                    if let Some(tx) = app.format_modal_sender.take() {
+                        let _ = tx.send(chosen);
+                    }
+                    app.format_modal_open = false;
+                    app.format_modal_options.clear();
+                    app.last_format_modal_list = None;
+                }
+            }
+        }
+        Event::Mouse(me) if matches!(me.kind, MouseEventKind::Moved) => {
+            if let Some(area) = app.last_format_modal_list
+                && pos_in(area, me.column, me.row)
+            {
+                let idx = me.row.saturating_sub(area.y + 1) as usize;
+                if idx < app.format_modal_options.len() {
+                    app.format_modal_state.select(Some(idx));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn render_format_modal(frame: &mut ratatui::Frame, app: &mut App) {
+    let area = frame.size();
+    let w = (area.width as f32 * 0.50) as u16;
+    let h: u16 = 10;
+    let modal = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w.max(30).min(area.width.saturating_sub(2)),
+        height: h.min(area.height.saturating_sub(2)).max(6),
+    };
+
+    frame.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("下载完成：选择输出格式")
+        .border_style(Style::default().fg(Color::Green));
+    frame.render_widget(block, modal);
+
+    let inner = Rect {
+        x: modal.x + 1,
+        y: modal.y + 1,
+        width: modal.width.saturating_sub(2),
+        height: modal.height.saturating_sub(2),
+    };
+
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let hint = Paragraph::new(vec![Line::from("↑↓ 选择 / Enter 确认")]).wrap(Wrap { trim: true });
+    frame.render_widget(hint, parts[0]);
+
+    let items: Vec<ListItem> = app
+        .format_modal_options
+        .iter()
+        .map(|o| ListItem::new(format!("{}: {}", o.label, o.value)))
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("可选格式"))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Blue)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_stateful_widget(list, parts[1], &mut app.format_modal_state);
+    app.last_format_modal_list = Some(parts[1]);
 }
 
 #[cfg(feature = "official-api")]
@@ -1328,6 +1475,20 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     app.book_name_modal_state.select(Some(0));
                     app.book_name_modal_sender = Some(respond_to);
                     app.status = "请选择书名（下载已完成）".to_string();
+                }
+            }
+            WorkerMsg::AskFormat {
+                options,
+                respond_to,
+            } => {
+                if options.is_empty() {
+                    let _ = respond_to.send(None);
+                } else {
+                    app.format_modal_open = true;
+                    app.format_modal_options = options;
+                    app.format_modal_state.select(Some(0));
+                    app.format_modal_sender = Some(respond_to);
+                    app.status = "请选择输出格式（下载已完成）".to_string();
                 }
             }
             WorkerMsg::UpdateScanned(res) => match res {

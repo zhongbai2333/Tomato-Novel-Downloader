@@ -145,10 +145,27 @@ pub(in crate::ui) const BOOK_NAME_FIELD_PRESETS: &[VoicePreset] = &[
     },
 ];
 
+pub(in crate::ui) const NOVEL_FORMAT_PRESETS: &[VoicePreset] = &[
+    VoicePreset {
+        name: "txt",
+        label: "txt 格式",
+    },
+    VoicePreset {
+        name: "epub",
+        label: "epub 格式",
+    },
+    VoicePreset {
+        name: "ask_after_download",
+        label: "下载完后选择",
+    },
+];
+
 pub(in crate::ui) fn cfg_field_is_combo(field: ConfigField) -> bool {
     matches!(
         field,
-        ConfigField::AudiobookVoice | ConfigField::PreferredBookNameField
+        ConfigField::AudiobookVoice
+            | ConfigField::PreferredBookNameField
+            | ConfigField::NovelFormat
     )
 }
 
@@ -156,6 +173,7 @@ pub(in crate::ui) fn cfg_combo_presets(field: ConfigField) -> Option<&'static [V
     match field {
         ConfigField::AudiobookVoice => Some(AUDIOBOOK_VOICE_PRESETS),
         ConfigField::PreferredBookNameField => Some(BOOK_NAME_FIELD_PRESETS),
+        ConfigField::NovelFormat => Some(NOVEL_FORMAT_PRESETS),
         _ => None,
     }
 }
@@ -170,7 +188,7 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                     field: ConfigField::SavePath,
                 },
                 ConfigEntry {
-                    title: "小说格式(txt/epub)",
+                    title: "小说格式",
                     field: ConfigField::NovelFormat,
                 },
                 ConfigEntry {
@@ -366,7 +384,13 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
 pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String {
     match field {
         ConfigField::SavePath => app.config.save_path.clone(),
-        ConfigField::NovelFormat => app.config.novel_format.clone(),
+        ConfigField::NovelFormat => {
+            if app.config.ask_format_after_download {
+                novel_format_to_chinese("ask_after_download").to_string()
+            } else {
+                novel_format_to_chinese(&app.config.novel_format).to_string()
+            }
+        }
         ConfigField::FirstLineIndentEm => format!("{:.2}", app.config.first_line_indent_em),
         ConfigField::BulkFiles => app.config.bulk_files.to_string(),
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
@@ -510,15 +534,26 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
             app.config.save_path = raw.to_string();
         }
         ConfigField::NovelFormat => {
-            let lower = raw.to_ascii_lowercase();
-            if lower != "txt" && lower != "epub" {
-                app.status = "仅支持 txt 或 epub".to_string();
-                return Ok(());
-            }
-            app.config.novel_format = lower;
-            if app.config.novel_format == "txt" && app.config.enable_segment_comments {
-                app.config.enable_segment_comments = false;
-                note = Some("已关闭段评以兼容 txt".to_string());
+            let field_name = if let Some(english) = chinese_to_novel_format(raw) {
+                english
+            } else {
+                let lower = raw.to_ascii_lowercase();
+                if lower == "txt" || lower == "epub" || lower == "ask_after_download" {
+                    lower
+                } else {
+                    app.status = "请选择：txt 格式、epub 格式 或 下载完后选择".to_string();
+                    return Ok(());
+                }
+            };
+            if field_name == "ask_after_download" {
+                app.config.ask_format_after_download = true;
+            } else {
+                app.config.ask_format_after_download = false;
+                app.config.novel_format = field_name;
+                if app.config.novel_format == "txt" && app.config.enable_segment_comments {
+                    app.config.enable_segment_comments = false;
+                    note = Some("已关闭段评以兼容 txt".to_string());
+                }
             }
         }
         ConfigField::FirstLineIndentEm => {
@@ -787,6 +822,26 @@ fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
         "默认书名" => Some("book_name".to_string()),
         "原始书名" => Some("original_book_name".to_string()),
         "短书名" => Some("book_short_name".to_string()),
+        "下载完后选择" => Some("ask_after_download".to_string()),
+        _ => None,
+    }
+}
+
+/// 将小说格式英文名转换为中文显示名
+fn novel_format_to_chinese(field: &str) -> &'static str {
+    match field {
+        "txt" => "txt 格式",
+        "epub" => "epub 格式",
+        "ask_after_download" => "下载完后选择",
+        _ => "txt 格式",
+    }
+}
+
+/// 将中文显示名转换为小说格式英文名
+fn chinese_to_novel_format(chinese: &str) -> Option<String> {
+    match chinese {
+        "txt 格式" => Some("txt".to_string()),
+        "epub 格式" => Some("epub".to_string()),
         "下载完后选择" => Some("ask_after_download".to_string()),
         _ => None,
     }

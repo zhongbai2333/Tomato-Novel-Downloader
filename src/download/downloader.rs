@@ -35,7 +35,8 @@ use std::sync::atomic::AtomicBool;
 // ── 向后兼容重导出（外部代码通过 download::downloader::Xxx 引用）──
 pub use super::models::{
     BookMeta, BookNameAsker, BookNameOption, ChapterRange, ChapterRef, DownloadFlowOptions,
-    DownloadMode, DownloadPlan, DownloadResult, ProgressSnapshot, RetryFailed, SavePhase,
+    DownloadMode, DownloadPlan, DownloadResult, FormatAsker, ProgressSnapshot, RetryFailed,
+    SavePhase,
 };
 pub(crate) use super::plan::apply_range;
 pub use super::plan::prepare_download_plan;
@@ -173,11 +174,8 @@ impl ChapterDownloader {
 
                     match parsed.get(&ch.id) {
                         Some((content, title)) if !content.is_empty() => {
-                            let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
-                                extract_body_fragment(content)
-                            } else {
-                                content.clone()
-                            };
+                            // 缓存统一保存为 XHTML 格式
+                            let cleaned = extract_body_fragment(content);
                             manager.save_chapter(&ch.id, title, &cleaned);
                             manager.append_downloaded_chapter(&ch.id, title, &cleaned);
                             result.success += 1;
@@ -311,11 +309,8 @@ impl ChapterDownloader {
 
                     match parsed.get(&ch.id) {
                         Some((content, title)) if !content.is_empty() => {
-                            let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
-                                extract_body_fragment(content)
-                            } else {
-                                content.clone()
-                            };
+                            // 缓存统一保存为 XHTML 格式
+                            let cleaned = extract_body_fragment(content);
                             manager.save_chapter(&ch.id, title, &cleaned);
                             manager.append_downloaded_chapter(&ch.id, title, &cleaned);
                             result.success += 1;
@@ -391,11 +386,8 @@ impl ChapterDownloader {
                     && !content.is_empty()
                     && outcome.deferred.is_empty()
                 {
-                    let cleaned = if self.config.novel_format.eq_ignore_ascii_case("epub") {
-                        extract_body_fragment(content)
-                    } else {
-                        content.clone()
-                    };
+                    // 缓存统一保存为 XHTML 格式
+                    let cleaned = extract_body_fragment(content);
                     manager.save_chapter(&chapter.id, title, &cleaned);
                     manager.append_downloaded_chapter(&chapter.id, title, &cleaned);
                     result.success += 1;
@@ -477,6 +469,7 @@ pub fn download_with_plan(
             retry_failed: RetryFailed::Never,
             stage_callback: None,
             book_name_asker: None,
+            format_asker: None,
         },
         progress,
         cancel_flag,
@@ -499,6 +492,7 @@ pub fn download_with_plan_flow(
         mut retry_failed,
         mut stage_callback,
         mut book_name_asker,
+        mut format_asker,
     } = options;
 
     let chosen_chapters = apply_range(&plan.chapters, range);
@@ -583,6 +577,7 @@ pub fn download_with_plan_flow(
         Some(&mut reporter),
         cancel_flag.as_ref(),
         &mut book_name_asker,
+        &mut format_asker,
     );
 
     let success = count_success_for_chosen(&manager, &chosen_chapters);
@@ -930,11 +925,8 @@ fn download_third_party_flow(
         for ch in &group {
             match parsed.get(&ch.id) {
                 Some((content, title)) if !content.is_empty() => {
-                    let cleaned = if epub_mode {
-                        extract_body_fragment(content)
-                    } else {
-                        content.clone()
-                    };
+                    // 缓存统一保存为 XHTML 格式
+                    let cleaned = extract_body_fragment(content);
                     manager.save_chapter(&ch.id, title, &cleaned);
                     manager.append_downloaded_chapter(&ch.id, title, &cleaned);
                     result.success += 1;
@@ -976,6 +968,7 @@ pub(crate) fn finalize_from_manager(
     mut reporter: Option<&mut ProgressReporter>,
     cancel: Option<&Arc<AtomicBool>>,
     book_name_asker: &mut Option<BookNameAsker>,
+    format_asker: &mut Option<FormatAsker>,
 ) -> Result<()> {
     if manager.config.is_ask_after_download()
         && !manager.book_name_selected_after_download
@@ -988,6 +981,17 @@ pub(crate) fn finalize_from_manager(
         if old_name != chosen_name {
             rename_cover_files_if_needed(manager.book_folder(), &old_name, &chosen_name);
         }
+    }
+
+    // 下载完后选择格式
+    if manager.config.ask_format_after_download
+        && !manager.format_selected_after_download
+        && let Some(asker) = format_asker.as_mut()
+        && let Some(chosen_fmt) = asker(manager)
+    {
+        info!(target: "download", "用户选择输出格式: {}", chosen_fmt);
+        manager.config.novel_format = chosen_fmt;
+        manager.format_selected_after_download = true;
     }
 
     debug!(target: "download", "保存下载状态");

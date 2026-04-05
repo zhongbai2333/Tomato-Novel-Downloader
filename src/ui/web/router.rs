@@ -64,6 +64,10 @@ pub(crate) fn build_router(state: AppState) -> Router {
             "/api/jobs/:id/book_name",
             post(routes::jobs::submit_book_name_choice),
         )
+        .route(
+            "/api/jobs/:id/format",
+            post(routes::jobs::submit_format_choice),
+        )
         .route("/api/updates", get(routes::updates::api_updates))
         .route("/api/history", get(routes::history::api_history));
 

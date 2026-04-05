@@ -242,6 +242,7 @@ fn download_book_with_options(
                 );
             })),
             book_name_asker: None,
+            format_asker: None,
         },
         None,
         None,

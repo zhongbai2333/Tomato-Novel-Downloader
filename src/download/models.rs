@@ -45,9 +45,13 @@ pub struct DownloadFlowOptions {
     pub retry_failed: RetryFailed,
     pub stage_callback: Option<Box<dyn FnMut(DownloadResult) + Send>>,
     pub book_name_asker: Option<BookNameAsker>,
+    pub format_asker: Option<FormatAsker>,
 }
 
 pub type BookNameAsker =
+    Box<dyn FnMut(&crate::book_parser::book_manager::BookManager) -> Option<String> + Send>;
+
+pub type FormatAsker =
     Box<dyn FnMut(&crate::book_parser::book_manager::BookManager) -> Option<String> + Send>;
 
 #[derive(Debug, Clone, Default)]

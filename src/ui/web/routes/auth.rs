@@ -77,6 +77,7 @@ pub(crate) struct WebConfigView {
     pub(crate) bulk_files: bool,
     pub(crate) enable_audiobook: bool,
     pub(crate) audiobook_format: String,
+    pub(crate) ask_format_after_download: bool,
 }
 
 pub(crate) async fn get_config(State(state): State<AppState>) -> Json<WebConfigView> {
@@ -90,6 +91,7 @@ pub(crate) async fn get_config(State(state): State<AppState>) -> Json<WebConfigV
         bulk_files: cfg.bulk_files,
         enable_audiobook: cfg.enable_audiobook,
         audiobook_format: cfg.audiobook_format,
+        ask_format_after_download: cfg.ask_format_after_download,
     })
 }
 
@@ -99,6 +101,7 @@ pub(crate) struct WebConfigPatch {
     pub(crate) bulk_files: Option<bool>,
     pub(crate) enable_audiobook: Option<bool>,
     pub(crate) audiobook_format: Option<String>,
+    pub(crate) ask_format_after_download: Option<bool>,
 }
 
 pub(crate) async fn set_config(
@@ -131,6 +134,10 @@ pub(crate) async fn set_config(
                 return Err(StatusCode::BAD_REQUEST);
             }
             g.audiobook_format = v;
+        }
+
+        if let Some(v) = patch.ask_format_after_download {
+            g.ask_format_after_download = v;
         }
 
         (old, g.clone())

@@ -19,6 +19,7 @@ use crossterm::terminal::enable_raw_mode;
 use super::audio_generator::generate_audiobook;
 use super::book_manager::BookManager;
 use super::finalize_epub::finalize_epub;
+use super::parser::ContentParser;
 use crate::base_system::context::safe_fs_name;
 
 /// 生成最终输出；返回是否需要延迟清理缓存。
@@ -42,6 +43,16 @@ pub fn run_finalize(
         info!(target: "book_manager", "用户选择书名: {}", chosen);
         manager.book_name = chosen;
         manager.book_name_selected_after_download = true;
+    }
+
+    // "下载完后选择格式"：在生成文件前询问用户选择输出格式（仅 CLI 模式兜底）
+    if manager.config.ask_format_after_download
+        && !manager.format_selected_after_download
+        && let Some(chosen) = prompt_format_selection(manager)
+    {
+        info!(target: "book_manager", "用户选择输出格式: {}", chosen);
+        manager.config.novel_format = chosen;
+        manager.format_selected_after_download = true;
     }
 
     let fmt = manager.config.novel_format.to_lowercase();
@@ -207,6 +218,8 @@ fn finalize_txt(
             let chapter_id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let title = ch.get("title").and_then(|v| v.as_str()).unwrap_or("章节");
             let content = ch.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            // 缓存为 XHTML，写入 txt 时实时清洗为纯文本
+            let content = ContentParser::clean_plain(content, title);
 
             let safe_title = safe_fs_name(title, "_", 120);
             let filename = format!(
@@ -225,7 +238,6 @@ fn finalize_txt(
             }
             writeln!(f, "{}", title)?;
             writeln!(f)?;
-            // Do not `trim()` here: it will remove leading full-width indent (U+3000) from the first paragraph.
             writeln!(f, "{}", content.trim_end())?;
         }
 
@@ -286,6 +298,8 @@ fn finalize_txt(
         let chapter_id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let title = ch.get("title").and_then(|v| v.as_str()).unwrap_or("章节");
         let content = ch.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        // 缓存为 XHTML，写入 txt 时实时清洗为纯文本
+        let content = ContentParser::clean_plain(content, title);
 
         if let Some(vol) = volume_title_by_chapter_id.get(chapter_id)
             && !vol.trim().is_empty()
@@ -295,7 +309,6 @@ fn finalize_txt(
             last_volume = Some(vol.trim().to_string());
         }
         writeln!(f, "{}\n", title)?;
-        // Do not `trim()` here: it will remove leading full-width indent (U+3000) from the first paragraph.
         writeln!(f, "{}\n", content.trim_end())?;
         writeln!(f, "\n----------------------------------------\n")?;
     }
@@ -665,6 +678,43 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
 
     let chosen = options[idx - 1].1.clone();
     if chosen == *default_name {
+        return None;
+    }
+    Some(chosen)
+}
+
+/// CLI 模式下询问用户选择输出格式（txt / epub）。
+/// 返回 `Some("txt")` 或 `Some("epub")` 表示用户选了格式，`None` 表示保持默认。
+fn prompt_format_selection(manager: &BookManager) -> Option<String> {
+    let current = manager.config.novel_format.to_lowercase();
+    let options = ["txt", "epub"];
+
+    println!("\n=== 选择输出格式 ===");
+    for (idx, fmt) in options.iter().enumerate() {
+        let marker = if *fmt == current { " (当前)" } else { "" };
+        println!("  {}. {}{}", idx + 1, fmt, marker);
+    }
+
+    let default_idx = options.iter().position(|f| *f == current).unwrap_or(0) + 1;
+    print!("请选择 [{}]: ", default_idx);
+    io::stdout().flush().ok();
+    let mut line = String::new();
+    if io::stdin().lock().read_line(&mut line).is_err() {
+        return None;
+    }
+
+    let choice = line.trim();
+    let idx = if choice.is_empty() {
+        default_idx
+    } else {
+        match choice.parse::<usize>() {
+            Ok(i) if i >= 1 && i <= options.len() => i,
+            _ => return None,
+        }
+    };
+
+    let chosen = options[idx - 1].to_string();
+    if chosen == current {
         return None;
     }
     Some(chosen)

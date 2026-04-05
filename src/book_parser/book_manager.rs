@@ -35,6 +35,8 @@ pub struct BookManager {
     pub book_name_selected_after_download: bool,
     pub downloaded: DownloadedMap,
     pub ignore_updates: bool,
+    /// 是否已在下载完成后确认过输出格式
+    pub format_selected_after_download: bool,
     has_download_activity: bool,
     status_folder: PathBuf,
     status_file: PathBuf,
@@ -88,6 +90,7 @@ impl BookManager {
             book_name_selected_after_download: false,
             downloaded: HashMap::new(),
             ignore_updates: false,
+            format_selected_after_download: false,
             has_download_activity: false,
             status_folder: target,
             status_file,
@@ -227,7 +230,7 @@ impl BookManager {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // 追加日志比 status.json 更“实时”：合并后可覆盖 status.json 未及时写入的最后几章。
+        // 追加日志比 status.json 更"实时"：合并后可覆盖 status.json 未及时写入的最后几章。
         let _ = self.merge_resume_journal();
 
         info!(target: "book_manager", "loaded resume state: chapters={}", self.downloaded.len());

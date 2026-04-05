@@ -112,6 +112,9 @@ pub struct Config {
     pub allow_overwrite_files: bool,
     #[serde(default = "default_preferred_book_name_field")]
     pub preferred_book_name_field: String,
+    /// 下载完成后询问用户选择输出格式（txt/epub）
+    #[serde(default = "default_false")]
+    pub ask_format_after_download: bool,
 
     #[serde(skip)]
     folder_path: Option<PathBuf>,
@@ -175,6 +178,7 @@ impl Default for Config {
             media_max_dimension_px: default_media_max_dimension_px(),
             allow_overwrite_files: default_true(),
             preferred_book_name_field: default_preferred_book_name_field(),
+            ask_format_after_download: default_false(),
             folder_path: None,
             last_status_was_new: false,
             last_status_claimed: false,
@@ -187,7 +191,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 42] = [
+        static FIELDS: [FieldMeta; 43] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -355,6 +359,10 @@ impl ConfigSpec for Config {
             FieldMeta {
                 name: "preferred_book_name_field",
                 description: "优先使用的书名字段 (book_name/original_book_name/book_short_name/ask_after_download)",
+            },
+            FieldMeta {
+                name: "ask_format_after_download",
+                description: "下载完成后询问用户选择输出格式 (true/false)",
             },
         ];
         &FIELDS

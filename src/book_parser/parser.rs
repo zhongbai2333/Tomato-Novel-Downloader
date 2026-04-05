@@ -90,11 +90,8 @@ impl ContentParser {
                 })
                 .unwrap_or(cid.as_str());
 
-            let processed = if cfg.novel_format.eq_ignore_ascii_case("txt") {
-                Self::clean_plain(raw_content, title)
-            } else if cfg.novel_format.eq_ignore_ascii_case("epub") {
-                // EPUB 模式：尽量保留原始 XHTML（包括 <img> 等标签），后续在 finalize 阶段
-                // 负责下载并替换图片资源。
+            // 缓存统一保存为 XHTML 格式，txt 的清洗在 finalize 阶段完成。
+            let processed = if cfg.novel_format.eq_ignore_ascii_case("epub") {
                 Self::prepare_epub_xhtml(raw_content)
             } else {
                 Self::clean_xhtml(raw_content, title)

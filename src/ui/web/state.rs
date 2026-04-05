@@ -238,6 +238,7 @@ pub(crate) struct JobInfo {
     pub(crate) progress: Option<ProgressSnapshot>,
     pub(crate) message: Option<String>,
     pub(crate) book_name_options: Option<Vec<BookNameOption>>,
+    pub(crate) format_options: Option<Vec<BookNameOption>>,
     pub(crate) created_ms: u64,
     pub(crate) updated_ms: u64,
 }
@@ -253,6 +254,7 @@ struct JobEntry {
     info: JobInfo,
     cancel: Arc<AtomicBool>,
     book_name_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
+    format_sender: Option<std::sync::mpsc::Sender<Option<String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -276,6 +278,7 @@ impl JobStore {
             progress: None,
             message: None,
             book_name_options: None,
+            format_options: None,
             created_ms: now,
             updated_ms: now,
         };
@@ -287,6 +290,7 @@ impl JobStore {
                 info,
                 cancel: cancel.clone(),
                 book_name_sender: None,
+                format_sender: None,
             },
         );
 
@@ -317,6 +321,7 @@ impl JobStore {
             j.state = JobState::Running;
             j.message = None;
             j.book_name_options = None;
+            j.format_options = None;
         });
     }
 
@@ -338,6 +343,7 @@ impl JobStore {
             j.state = JobState::Done;
             j.message = None;
             j.book_name_options = None;
+            j.format_options = None;
         });
     }
 
@@ -346,6 +352,7 @@ impl JobStore {
             j.state = JobState::Failed;
             j.message = Some(msg);
             j.book_name_options = None;
+            j.format_options = None;
         });
     }
 
@@ -360,7 +367,11 @@ impl JobStore {
         if let Some(tx) = e.book_name_sender.take() {
             let _ = tx.send(None);
         }
+        if let Some(tx) = e.format_sender.take() {
+            let _ = tx.send(None);
+        }
         e.info.book_name_options = None;
+        e.info.format_options = None;
         e.info.updated_ms = now_ms();
         true
     }
@@ -374,6 +385,9 @@ impl JobStore {
         if let Some(tx) = e.book_name_sender.take() {
             let _ = tx.send(None);
         }
+        if let Some(tx) = e.format_sender.take() {
+            let _ = tx.send(None);
+        }
         true
     }
 
@@ -383,6 +397,9 @@ impl JobStore {
             return false;
         };
         if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(None);
+        }
+        if let Some(tx) = e.format_sender.take() {
             let _ = tx.send(None);
         }
         true
@@ -412,6 +429,37 @@ impl JobStore {
         if let Some(tx) = e.book_name_sender.take() {
             let _ = tx.send(choice);
             e.info.book_name_options = None;
+            e.info.message = None;
+            e.info.updated_ms = now_ms();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn set_format_options(
+        &self,
+        id: u64,
+        options: Vec<BookNameOption>,
+        sender: std::sync::mpsc::Sender<Option<String>>,
+    ) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = g.get_mut(&id) else {
+            return;
+        };
+        e.info.format_options = Some(options);
+        e.info.message = Some("等待选择输出格式".to_string());
+        e.format_sender = Some(sender);
+        e.info.updated_ms = now_ms();
+    }
+
+    pub(crate) fn submit_format_choice(&self, id: u64, choice: Option<String>) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = g.get_mut(&id) else {
+            return false;
+        };
+        if let Some(tx) = e.format_sender.take() {
+            let _ = tx.send(choice);
+            e.info.format_options = None;
             e.info.message = None;
             e.info.updated_ms = now_ms();
             return true;
