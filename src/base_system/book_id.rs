@@ -88,7 +88,7 @@ pub fn resolve_book_id(input: &str) -> Option<String> {
     let trimmed = input.trim();
     let url = re_url().find(trimmed).map(|m| m.as_str())?;
 
-    if !re_short_link().is_match(url) {
+    if !is_short_link(url) {
         return None;
     }
 
