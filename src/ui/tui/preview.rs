@@ -253,6 +253,9 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
     let tx = app.worker_tx.clone();
     let cfg = app.config.clone();
     thread::spawn(move || {
+        // Resolve short links in the background thread to avoid blocking the UI.
+        let book_id = crate::base_system::book_id::resolve_book_id(&book_id)
+            .unwrap_or(book_id);
         let result = downloader::prepare_download_plan(&cfg, &book_id, hint).map(|plan| {
             let folder = crate::base_system::book_paths::book_folder_path(
                 &cfg,
