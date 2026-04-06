@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::path::{Path as FsPath, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::base_system::book_id::{parse_book_id, resolve_book_id};
+use crate::base_system::book_id::resolve_book_id;
 use crate::base_system::book_paths::book_folder_path;
 use crate::base_system::context::safe_fs_name;
 use crate::base_system::file_cleaner::is_empty_dir;
@@ -311,10 +311,10 @@ pub(crate) async fn api_preview_cleanup(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
 ) -> StatusCode {
-    let book_id = match parse_book_id(&book_id) {
-        Some(id) => id,
-        None => return StatusCode::BAD_REQUEST,
-    };
+    let book_id = tokio::task::spawn_blocking(move || resolve_book_id(&book_id))
+        .await
+        .unwrap_or(None)
+        .unwrap_or_default();
     if book_id.is_empty() {
         return StatusCode::BAD_REQUEST;
     }

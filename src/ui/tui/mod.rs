@@ -981,7 +981,7 @@ fn upsert_result_detail_from_plan(app: &mut App, book_id: &str, meta: &BookMeta)
 // JSON 字段提取 helper 已抽取到 base_system::json_extract
 
 pub(super) fn parse_book_id(input: &str) -> Option<String> {
-    crate::base_system::book_id::resolve_book_id(input)
+    crate::base_system::book_id::parse_book_id(input)
 }
 
 pub(super) fn parse_range_input(input: &str, total: usize) -> Result<Option<ChapterRange>> {

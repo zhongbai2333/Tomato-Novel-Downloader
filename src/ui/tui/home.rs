@@ -342,6 +342,13 @@ pub(super) fn process_input(app: &mut App) -> Result<()> {
         app.input.clear();
         app.results.clear();
         app.list_state.select(None);
+    } else if crate::base_system::book_id::is_short_link(text) {
+        app.focus = Focus::Input;
+        app.status = "正在解析短链接…".to_string();
+        super::start_preview_task(app, text.to_string(), BookMeta::default())?;
+        app.input.clear();
+        app.results.clear();
+        app.list_state.select(None);
     } else {
         super::start_search_task(app, text.to_string())?;
     }
