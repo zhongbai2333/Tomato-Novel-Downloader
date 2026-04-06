@@ -171,6 +171,10 @@ function parseBookId(input) {
   const page = target.match(/\/page\/([0-9]+)/i);
   if (page && page[1]) return page[1];
 
+  // Short link (e.g. https://changdunovel.com/t/XXXXX/) – return the URL so
+  // the server can follow the redirect and extract the book ID.
+  if (/\/t\/[A-Za-z0-9]+\/?$/.test(target)) return target;
+
   return '';
 }
 

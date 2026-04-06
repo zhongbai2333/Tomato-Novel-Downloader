@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::base_system::book_id::parse_book_id;
+use crate::base_system::book_id::resolve_book_id;
 use crate::download::downloader as dl;
 use crate::ui::web::state::{AppState, JobState};
 
@@ -52,12 +52,11 @@ pub(crate) async fn create_job(
     State(state): State<AppState>,
     Json(req): Json<CreateJobReq>,
 ) -> Result<Json<Value>, StatusCode> {
-    let book_id = match parse_book_id(&req.book_id) {
-        Some(id) => id,
-        None => {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-    };
+    let book_id_raw = req.book_id.clone();
+    let book_id = tokio::task::spawn_blocking(move || resolve_book_id(&book_id_raw))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::BAD_REQUEST)?;
     if book_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
