@@ -3,6 +3,7 @@
 //! 负责章节批量下载、保存与断点续传、finalize 等核心编排链路。
 //! 具体子模块职责参见 `mod.rs`。
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,7 +12,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use crossbeam_channel as channel;
 use serde_json::{Map, Value, json};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::base_system::book_paths;
 use crate::base_system::context::Config;
@@ -998,7 +999,12 @@ pub(crate) fn finalize_from_manager(
     manager.save_download_status();
 
     let mut chapter_values = Vec::with_capacity(manager.downloaded.len());
+    let mut finalized_ids = HashSet::with_capacity(chosen.len());
     for ch in chosen {
+        if !finalized_ids.insert(&ch.id) {
+            warn!(target: "download", id = %ch.id, title = %ch.title, "跳过最终输出中的重复章节");
+            continue;
+        }
         match manager.downloaded.get(&ch.id) {
             Some((title, Some(content))) => {
                 let mut obj = Map::new();

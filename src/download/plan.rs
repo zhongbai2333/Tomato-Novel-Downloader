@@ -285,7 +285,10 @@ pub(crate) fn merge_chapters_with_web(
     let mut merged = Vec::with_capacity(official.len() + web.len().saturating_sub(official.len()));
 
     for mut ch in official {
-        seen.insert(ch.id.clone());
+        if !seen.insert(ch.id.clone()) {
+            warn!(target: "download", id = %ch.id, title = %ch.title, "跳过官方源中的重复章节");
+            continue;
+        }
         if ch.title.trim().is_empty()
             && let Some(title) = web_title_map.get(&ch.id)
         {
