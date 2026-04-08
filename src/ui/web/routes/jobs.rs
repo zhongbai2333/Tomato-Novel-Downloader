@@ -142,6 +142,10 @@ pub(crate) async fn create_job(
                     label: "epub 格式".to_string(),
                     value: "epub".to_string(),
                 },
+                dl::BookNameOption {
+                    label: "pdf 格式".to_string(),
+                    value: "pdf".to_string(),
+                },
             ];
             let (tx, rx) = std::sync::mpsc::channel();
             jobs_fmt.set_format_options(id, options, tx);

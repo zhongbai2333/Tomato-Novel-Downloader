@@ -65,6 +65,7 @@ axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
 futures-core = "0.3"
+genpdf = { version = "0.2", features = ["images"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = { version = "3.4", optional = true }

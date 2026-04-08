@@ -77,7 +77,7 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             ty: ConfigValueType::String,
         },
         ConfigOption {
-            name: "小说保存格式(txt/epub)",
+            name: "小说保存格式(txt/epub/pdf)",
             field: ConfigField::NovelFormat,
             ty: ConfigValueType::String,
         },
@@ -557,8 +557,8 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
         }
         ConfigField::NovelFormat => {
             let lower = v.trim().to_ascii_lowercase();
-            if lower != "txt" && lower != "epub" {
-                return Err(anyhow!("保存格式仅支持 txt/epub"));
+            if lower != "txt" && lower != "epub" && lower != "pdf" {
+                return Err(anyhow!("保存格式仅支持 txt/epub/pdf"));
             }
             if lower == "txt" && config.enable_segment_comments {
                 config.enable_segment_comments = false;

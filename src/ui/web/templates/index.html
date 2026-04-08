@@ -405,11 +405,27 @@
         <div class="modalCard">
             <div class="modalHeader">
                 <h3>下载完成：选择书名</h3>
+                <button id="bookNameClose" type="button" class="sm">关闭</button>
             </div>
             <p id="bookNameJobHint" class="k mb-16"></p>
             <div id="bookNameOptions" class="formCol mb-20"></div>
             <div class="row justify-end mb-0">
                 <button id="bookNameConfirm" type="button" class="primary">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== Format Modal ===== -->
+    <div id="formatModal" class="modal hidden">
+        <div class="modalCard">
+            <div class="modalHeader">
+                <h3>下载完成：选择输出格式</h3>
+                <button id="formatClose" type="button" class="sm">关闭</button>
+            </div>
+            <p id="formatJobHint" class="k mb-16"></p>
+            <div id="formatOptions" class="formCol mb-20"></div>
+            <div class="row justify-end mb-0">
+                <button id="formatConfirm" type="button" class="primary">确认</button>
             </div>
         </div>
     </div>

@@ -13,13 +13,15 @@ use serde_json::Value;
 
 use tracing::{error, info, warn};
 
+use super::parser::ContentParser;
+
 use crossterm::event::EnableMouseCapture;
 use crossterm::terminal::enable_raw_mode;
 
 use super::audio_generator::generate_audiobook;
 use super::book_manager::BookManager;
 use super::finalize_epub::finalize_epub;
-use super::parser::ContentParser;
+use super::finalize_pdf::finalize_pdf;
 use crate::base_system::context::safe_fs_name;
 
 /// 生成最终输出；返回是否需要延迟清理缓存。
@@ -66,6 +68,8 @@ pub fn run_finalize(
 
     let result: anyhow::Result<()> = if fmt == "txt" {
         finalize_txt(manager, chapters, &output_path, directory_raw)
+    } else if fmt == "pdf" {
+        finalize_pdf(manager, chapters, &output_path, directory_raw)
     } else {
         let reporter_ref = {
             #[allow(clippy::needless_option_as_deref)]
@@ -139,10 +143,14 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
 
     // bulk_files: TXT 每章一个文件，输出到"小说名"文件夹
     if fmt == "txt" && manager.config.bulk_files {
-        return Ok(dir.join(safe_book));
+        return Ok(dir);
     }
 
-    let suffix = if fmt == "epub" { "epub" } else { "txt" };
+    let suffix = match fmt {
+        "epub" => "epub",
+        "pdf" => "pdf",
+        _ => "txt",
+    };
     let output_path = dir.join(format!("{}.{}", safe_book, suffix));
 
     // 检查文件是否已存在且不允许覆盖
@@ -315,7 +323,7 @@ fn finalize_txt(
     Ok(())
 }
 
-fn volume_title_map_for_chapters(
+pub(super) fn volume_title_map_for_chapters(
     chapters: &[Value],
     directory_raw: Option<&Value>,
 ) -> HashMap<String, String> {
@@ -687,7 +695,7 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
 /// 返回 `Some("txt")` 或 `Some("epub")` 表示用户选了格式，`None` 表示保持默认。
 fn prompt_format_selection(manager: &BookManager) -> Option<String> {
     let current = manager.config.novel_format.to_lowercase();
-    let options = ["txt", "epub"];
+    let options = ["txt", "epub", "pdf"];
 
     println!("\n=== 选择输出格式 ===");
     for (idx, fmt) in options.iter().enumerate() {

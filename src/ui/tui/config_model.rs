@@ -538,10 +538,15 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 english
             } else {
                 let lower = raw.to_ascii_lowercase();
-                if lower == "txt" || lower == "epub" || lower == "ask_after_download" {
+                if lower == "txt"
+                    || lower == "epub"
+                    || lower == "pdf"
+                    || lower == "ask_after_download"
+                {
                     lower
                 } else {
-                    app.status = "请选择：txt 格式、epub 格式 或 下载完后选择".to_string();
+                    app.status =
+                        "请选择：txt 格式、epub 格式、pdf 格式 或 下载完后选择".to_string();
                     return Ok(());
                 }
             };
@@ -832,6 +837,7 @@ fn novel_format_to_chinese(field: &str) -> &'static str {
     match field {
         "txt" => "txt 格式",
         "epub" => "epub 格式",
+        "pdf" => "pdf 格式",
         "ask_after_download" => "下载完后选择",
         _ => "txt 格式",
     }
@@ -842,6 +848,7 @@ fn chinese_to_novel_format(chinese: &str) -> Option<String> {
     match chinese {
         "txt 格式" => Some("txt".to_string()),
         "epub 格式" => Some("epub".to_string()),
+        "pdf 格式" => Some("pdf".to_string()),
         "下载完后选择" => Some("ask_after_download".to_string()),
         _ => None,
     }

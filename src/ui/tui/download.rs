@@ -112,6 +112,10 @@ pub(super) fn start_download_task(
                     label: "epub 格式".to_string(),
                     value: "epub".to_string(),
                 },
+                downloader::BookNameOption {
+                    label: "pdf 格式".to_string(),
+                    value: "pdf".to_string(),
+                },
             ];
             let (resp_tx, resp_rx) = std::sync::mpsc::channel();
             let _ = format_ask_tx.send(WorkerMsg::AskFormat {

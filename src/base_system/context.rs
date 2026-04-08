@@ -115,7 +115,9 @@ pub struct Config {
     /// 下载完成后询问用户选择输出格式（txt/epub）
     #[serde(default = "default_false")]
     pub ask_format_after_download: bool,
-
+    /// PDF 字体文件路径，留空自动检测系统字体
+    #[serde(default)]
+    pub pdf_font_path: Option<String>,
     #[serde(skip)]
     folder_path: Option<PathBuf>,
     #[serde(skip)]
@@ -176,6 +178,7 @@ impl Default for Config {
             first_line_indent_em: default_first_line_indent_em(),
             media_limit_per_chapter: default_media_limit_per_chapter(),
             media_max_dimension_px: default_media_max_dimension_px(),
+            pdf_font_path: None,
             allow_overwrite_files: default_true(),
             preferred_book_name_field: default_preferred_book_name_field(),
             ask_format_after_download: default_false(),
@@ -191,7 +194,7 @@ impl ConfigSpec for Config {
     const FILE_NAME: &'static str = "config.yml";
 
     fn fields() -> &'static [FieldMeta] {
-        static FIELDS: [FieldMeta; 43] = [
+        static FIELDS: [FieldMeta; 44] = [
             FieldMeta {
                 name: "old_cli",
                 description: "是否使用老版本命令行界面",
@@ -222,7 +225,7 @@ impl ConfigSpec for Config {
             },
             FieldMeta {
                 name: "novel_format",
-                description: "保存小说格式, 可选: [txt, epub]",
+                description: "保存小说格式, 可选: [txt, epub, pdf]",
             },
             FieldMeta {
                 name: "bulk_files",
@@ -361,6 +364,10 @@ impl ConfigSpec for Config {
                 description: "优先使用的书名字段 (book_name/original_book_name/book_short_name/ask_after_download)",
             },
             FieldMeta {
+                name: "pdf_font_path",
+                description: "PDF 字体文件路径, 留空自动检测系统 CJK 字体",
+            },
+            FieldMeta {
                 name: "ask_format_after_download",
                 description: "下载完成后询问用户选择输出格式 (true/false)",
             },
@@ -370,6 +377,40 @@ impl ConfigSpec for Config {
 }
 
 impl Config {
+    /// 解析 PDF 字体路径：用户指定 > 系统自动检测
+    pub fn resolve_pdf_font_path(&self) -> Option<PathBuf> {
+        if let Some(ref p) = self.pdf_font_path {
+            let p = PathBuf::from(p);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        // 按操作系统自动检测常见 CJK 字体
+        let candidates: &[&str] = if cfg!(target_os = "windows") {
+            // genpdf/rusttype 不支持 .ttc 集合字体，优先使用 .ttf 单字体
+            &[
+                r"C:\Windows\Fonts\simhei.ttf",
+                r"C:\Windows\Fonts\simkai.ttf",
+                r"C:\Windows\Fonts\msyh.ttf",
+                r"C:\Windows\Fonts\simsun.ttf",
+            ]
+        } else if cfg!(target_os = "macos") {
+            &[
+                "/System/Library/Fonts/PingFang.ttc",
+                "/Library/Fonts/Arial Unicode.ttf",
+            ]
+        } else {
+            &[
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/wenquanyi/wqy-microhei.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            ]
+        };
+        candidates.iter().map(PathBuf::from).find(|p| p.exists())
+    }
+
     pub fn default_save_dir(&self) -> PathBuf {
         if self.save_path.trim().is_empty() {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))

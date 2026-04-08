@@ -114,7 +114,7 @@ pub(crate) async fn set_config(
 
         if let Some(v) = patch.novel_format {
             let v = v.trim().to_lowercase();
-            if v != "txt" && v != "epub" {
+            if v != "txt" && v != "epub" && v != "pdf" {
                 return Err(StatusCode::BAD_REQUEST);
             }
             g.novel_format = v;
@@ -263,8 +263,8 @@ fn normalize_config(cfg: &mut Config) {
 }
 
 fn validate_config(cfg: &Config) -> Result<(), String> {
-    if cfg.novel_format != "txt" && cfg.novel_format != "epub" {
-        return Err("novel_format must be txt or epub".to_string());
+    if cfg.novel_format != "txt" && cfg.novel_format != "epub" && cfg.novel_format != "pdf" {
+        return Err("novel_format must be txt, epub, or pdf".to_string());
     }
     if cfg.enable_segment_comments && cfg.novel_format != "epub" {
         return Err("segment comments require epub".to_string());

@@ -394,6 +394,8 @@ async function refreshAppUpdate(manual) {
 let libraryPath = '';
 let pendingBookNameJobId = null;
 let pendingBookNameOptions = [];
+let pendingFormatJobId = null;
+let pendingFormatOptions = [];
 
 async function refreshStatus() {
   const data = await j('/api/status');
@@ -468,7 +470,7 @@ const FULL_CONFIG_SCHEMA = [
     fields: [
       { key: 'save_path', label: '保存路径', type: 'text' },
       { key: 'novel_format', label: '小说格式', type: 'select', options: [
-        { value: 'txt', label: 'txt' }, { value: 'epub', label: 'epub' }, { value: 'ask_after_download', label: '下载后选择' }
+        { value: 'txt', label: 'txt' }, { value: 'epub', label: 'epub' }, { value: 'pdf', label: 'pdf' }, { value: 'ask_after_download', label: '下载后选择' }
       ] },
       { key: 'first_line_indent_em', label: '首行缩进(em)', type: 'number', parse: 'float', step: '0.1', min: '0' },
       { key: 'bulk_files', label: '散装文件保存', type: 'bool' },
@@ -1032,6 +1034,9 @@ async function refreshJobs() {
     const pct = total > 0 ? Math.min(100, Math.round((saved / total) * 100)) : 0;
     const progressText = it.progress ? `${saved}/${total}` : '';
     const title = it.title || it.book_id || '';
+    const hasBookNameOptions = (it.book_name_options || []).length > 0;
+    const hasFormatOptions = (it.format_options || []).length > 0;
+    const needsPostConfig = hasBookNameOptions || hasFormatOptions;
 
     // Determine effective visual state
     let vState = (it.state || '').toLowerCase();
@@ -1045,7 +1050,9 @@ async function refreshJobs() {
 
     // State badge
     let stateHtml;
-    switch (vState) {
+    if (needsPostConfig) {
+      stateHtml = '<span class="badge warning">待配置</span>';
+    } else switch (vState) {
       case 'running': stateHtml = `<span class="badge info">${pct}%</span>`; break;
       case 'queued':  stateHtml = '<span class="badge">排队中</span>'; break;
       case 'done':    stateHtml = '<span class="badge success">完成</span>'; break;
@@ -1057,7 +1064,10 @@ async function refreshJobs() {
 
     // Action button
     let btnHtml;
-    switch (vState) {
+    if (needsPostConfig) {
+      const kind = hasBookNameOptions ? 'book_name' : 'format';
+      btnHtml = `<button data-jobid="${esc(it.id)}" data-kind="${esc(kind)}" class="configJob sm warning">配置...</button>`;
+    } else switch (vState) {
       case 'done':
         btnHtml = `<button data-jobid="${esc(it.id)}" data-title="${esc(title)}" class="goLibrary sm success">完成</button>`;
         break;
@@ -1084,9 +1094,6 @@ async function refreshJobs() {
   if ((data.items || []).length === 0) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无任务</td></tr>';
   }
-
-  const pending = (data.items || []).find(it => (it.book_name_options || []).length > 0);
-  if (pending && !isBookNameModalOpen()) showBookNameModal(pending);
 }
 
 // ── History ───────────────────────────────────────────────────────
@@ -1183,6 +1190,14 @@ function isBookNameModalOpen() {
   return modal && !modal.classList.contains('hidden');
 }
 
+function hideBookNameModal() {
+  pendingBookNameJobId = null;
+  pendingBookNameOptions = [];
+  const modal = document.getElementById('bookNameModal');
+  if (modal) modal.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
 function showBookNameModal(job) {
   pendingBookNameJobId = job.id;
   pendingBookNameOptions = job.book_name_options || [];
@@ -1207,6 +1222,7 @@ function showBookNameModal(job) {
     `;
     options.appendChild(row);
   });
+  document.body.style.overflow = 'hidden';
   modal.classList.remove('hidden');
 }
 
@@ -1217,11 +1233,85 @@ async function submitBookNameChoice(value) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ value })
   });
-  pendingBookNameJobId = null;
-  pendingBookNameOptions = [];
-  const modal = document.getElementById('bookNameModal');
-  if (modal) modal.classList.add('hidden');
+  hideBookNameModal();
   await refreshJobs();
+}
+
+function isFormatModalOpen() {
+  const modal = document.getElementById('formatModal');
+  return modal && !modal.classList.contains('hidden');
+}
+
+function hideFormatModal() {
+  pendingFormatJobId = null;
+  pendingFormatOptions = [];
+  const modal = document.getElementById('formatModal');
+  if (modal) modal.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+function showFormatModal(job) {
+  pendingFormatJobId = job.id;
+  pendingFormatOptions = job.format_options || [];
+  const modal = document.getElementById('formatModal');
+  const hint = document.getElementById('formatJobHint');
+  const options = document.getElementById('formatOptions');
+  if (!modal || !options) return;
+
+  if (hint) {
+    const title = job.title || job.book_id || '';
+    hint.textContent = title ? `《${title}》` : '';
+  }
+
+  options.innerHTML = '';
+  pendingFormatOptions.forEach((opt, idx) => {
+    const id = `formatOpt_${idx}`;
+    const row = document.createElement('label');
+    row.className = 'row';
+    row.innerHTML = `
+      <input type="radio" name="formatOpt" id="${id}" value="${esc(opt.value)}" ${idx === 0 ? 'checked' : ''} />
+      <span>${esc(opt.label)}: ${esc(opt.value)}</span>
+    `;
+    options.appendChild(row);
+  });
+  document.body.style.overflow = 'hidden';
+  modal.classList.remove('hidden');
+}
+
+async function submitFormatChoice(value) {
+  if (!pendingFormatJobId) return;
+  await j(`/api/jobs/${encodeURIComponent(pendingFormatJobId)}/format`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ value })
+  });
+  hideFormatModal();
+  await refreshJobs();
+}
+
+async function openJobConfiguration(jobId, kindHint) {
+  const data = await j(`/api/jobs?id=${encodeURIComponent(jobId)}`);
+  const job = (data.items || [])[0];
+  if (!job) {
+    throw new Error('任务不存在或已被清理');
+  }
+
+  const hasBookNameOptions = (job.book_name_options || []).length > 0;
+  const hasFormatOptions = (job.format_options || []).length > 0;
+
+  if (hasBookNameOptions && (kindHint === 'book_name' || !hasFormatOptions)) {
+    hideFormatModal();
+    showBookNameModal(job);
+    return;
+  }
+
+  if (hasFormatOptions) {
+    hideBookNameModal();
+    showFormatModal(job);
+    return;
+  }
+
+  throw new Error('当前任务没有待配置项');
 }
 
 // ── Wire ───────────────────────────────────────────────────────────
@@ -1448,6 +1538,11 @@ function wire() {
         await refreshJobs();
       } catch (err) { alert(err); }
     }
+    if (t.classList.contains('configJob')) {
+      const jobId = t.getAttribute('data-jobid');
+      const kind = t.getAttribute('data-kind') || '';
+      try { await openJobConfiguration(jobId, kind); } catch (err) { alert(err); }
+    }
     if (t.classList.contains('goLibrary')) {
       const title = t.getAttribute('data-title') || '';
       const jobId = t.getAttribute('data-jobid');
@@ -1473,6 +1568,16 @@ function wire() {
       const previewModal = document.getElementById('previewModal');
       if (previewModal && !previewModal.classList.contains('hidden')) {
         showPreviewModal(false);
+        return;
+      }
+      const bookNameModal = document.getElementById('bookNameModal');
+      if (bookNameModal && !bookNameModal.classList.contains('hidden')) {
+        hideBookNameModal();
+        return;
+      }
+      const formatModal = document.getElementById('formatModal');
+      if (formatModal && !formatModal.classList.contains('hidden')) {
+        hideFormatModal();
         return;
       }
       const loginModal = document.getElementById('loginModal');
@@ -1501,6 +1606,19 @@ function wire() {
     if (!selected) { alert('请选择一个书名'); return; }
     await submitBookNameChoice(selected.value);
   });
+
+  const bookNameClose = document.getElementById('bookNameClose');
+  if (bookNameClose) bookNameClose.addEventListener('click', () => hideBookNameModal());
+
+  const formatConfirm = document.getElementById('formatConfirm');
+  if (formatConfirm) formatConfirm.addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="formatOpt"]:checked');
+    if (!selected) { alert('请选择一个输出格式'); return; }
+    await submitFormatChoice(selected.value);
+  });
+
+  const formatClose = document.getElementById('formatClose');
+  if (formatClose) formatClose.addEventListener('click', () => hideFormatModal());
 }
 
 function highlightLibraryItem(title) {
