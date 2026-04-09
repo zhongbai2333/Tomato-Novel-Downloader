@@ -143,7 +143,7 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
 
     // bulk_files: TXT 每章一个文件，输出到"小说名"文件夹
     if fmt == "txt" && manager.config.bulk_files {
-        return Ok(dir);
+        return Ok(dir.join(&safe_book));
     }
 
     let suffix = match fmt {
