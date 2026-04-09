@@ -78,6 +78,28 @@ struct GroupFetchOutcome {
 }
 
 #[cfg(feature = "official-api")]
+#[derive(Debug)]
+struct ResolvedDeferredChapter {
+    chapter: ChapterRef,
+    title: String,
+    content: String,
+}
+
+#[cfg(feature = "official-api")]
+#[derive(Debug)]
+enum DeferredRetryOutcome {
+    Resolved(ResolvedDeferredChapter),
+    Failed(DeferredChapter),
+}
+
+#[cfg(feature = "official-api")]
+#[derive(Debug, Default)]
+struct DeferredBatchAttempt {
+    resolved: Vec<ResolvedDeferredChapter>,
+    pending: Vec<DeferredChapter>,
+}
+
+#[cfg(feature = "official-api")]
 impl ChapterDownloader {
     pub fn new(book_id: &str, config: Config, client: FanqieClient) -> Self {
         Self {
@@ -362,48 +384,52 @@ impl ChapterDownloader {
                 error!(target: "download", error = %e, "统一重试前刷新 IID 失败，将继续使用当前会话重试");
             }
 
-            for deferred in deferred_retry {
+            let deferred_total = deferred_retry.len();
+            let retry_outcomes = retry_deferred_bisect(
+                &self.client,
+                &deferred_retry,
+                &self.config,
+                epub_mode,
+                Some(&self.book_id),
+                cancel,
+            )?;
+
+            if retry_outcomes.len() != deferred_total {
+                warn!(
+                    target: "download",
+                    expected = deferred_total,
+                    actual = retry_outcomes.len(),
+                    "延后重试结果数量与输入章节数不一致"
+                );
+            }
+
+            for outcome in retry_outcomes {
                 if cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false) {
                     return Err(anyhow!("用户停止下载"));
                 }
 
-                let chapter = deferred.chapter.clone();
-                let outcome = match fetch_group_best_effort(
-                    &self.client,
-                    std::slice::from_ref(&chapter),
-                    epub_mode,
-                    Some(&self.book_id),
-                ) {
-                    Ok(v) => v,
-                    Err(err) => GroupFetchOutcome {
-                        group: vec![chapter.clone()],
-                        value: json!({"code": 0, "data": {}}),
-                        deferred: vec![DeferredChapter::new(chapter.clone(), err.to_string())],
-                    },
-                };
-
-                let parsed = ContentParser::extract_api_content(&outcome.value, &self.config);
-                if let Some((content, title)) = parsed.get(&chapter.id)
-                    && !content.is_empty()
-                    && outcome.deferred.is_empty()
-                {
-                    // 缓存统一保存为 XHTML 格式
-                    let cleaned = extract_body_fragment(content);
-                    manager.save_chapter(&chapter.id, title, &cleaned);
-                    manager.append_downloaded_chapter(&chapter.id, title, &cleaned);
-                    result.success += 1;
-                    if let Some(pool) = seg_pool.as_mut() {
-                        pool.submit(&chapter.id);
+                match outcome {
+                    DeferredRetryOutcome::Resolved(resolved) => {
+                        manager.save_chapter(
+                            &resolved.chapter.id,
+                            &resolved.title,
+                            &resolved.content,
+                        );
+                        manager.append_downloaded_chapter(
+                            &resolved.chapter.id,
+                            &resolved.title,
+                            &resolved.content,
+                        );
+                        result.success += 1;
+                        if let Some(pool) = seg_pool.as_mut() {
+                            pool.submit(&resolved.chapter.id);
+                        }
                     }
-                } else {
-                    let final_reason = outcome
-                        .deferred
-                        .first()
-                        .map(|item| item.reason.as_str())
-                        .unwrap_or(deferred.reason.as_str());
-                    log_failed_chapter(&chapter, final_reason);
-                    manager.save_error_chapter(&chapter.id, &chapter.title);
-                    result.failed += 1;
+                    DeferredRetryOutcome::Failed(deferred) => {
+                        log_failed_chapter(&deferred.chapter, &deferred.reason);
+                        manager.save_error_chapter(&deferred.chapter.id, &deferred.chapter.title);
+                        result.failed += 1;
+                    }
                 }
 
                 if let Some(bar) = save_bar.as_ref() {
@@ -1213,6 +1239,208 @@ pub(crate) fn dynamic_group_count(total: usize) -> usize {
 }
 
 #[cfg(feature = "official-api")]
+const DEFERRED_RETRY_SINGLE_FALLBACK_THRESHOLD: usize = 3;
+
+#[cfg(feature = "official-api")]
+fn attempt_deferred_batch(
+    client: &FanqieClient,
+    deferred: &[DeferredChapter],
+    config: &Config,
+    epub_mode: bool,
+    book_id: Option<&str>,
+) -> DeferredBatchAttempt {
+    if deferred.is_empty() {
+        return DeferredBatchAttempt::default();
+    }
+
+    let group: Vec<ChapterRef> = deferred.iter().map(|item| item.chapter.clone()).collect();
+    let outcome = match fetch_group_best_effort(client, &group, epub_mode, book_id) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            let reason = err.to_string();
+            return DeferredBatchAttempt {
+                resolved: Vec::new(),
+                pending: group
+                    .into_iter()
+                    .map(|chapter| DeferredChapter::new(chapter, reason.clone()))
+                    .collect(),
+            };
+        }
+    };
+
+    let parsed = ContentParser::extract_api_content(&outcome.value, config);
+    let mut resolved = Vec::new();
+    let mut pending = Vec::new();
+
+    for chapter in &outcome.group {
+        if let Some(failed) = outcome
+            .deferred
+            .iter()
+            .find(|item| item.chapter.id == chapter.id)
+        {
+            pending.push(failed.clone());
+            continue;
+        }
+
+        match parsed.get(&chapter.id) {
+            Some((content, title)) if !content.is_empty() => {
+                resolved.push(ResolvedDeferredChapter {
+                    chapter: chapter.clone(),
+                    title: title.to_string(),
+                    content: extract_body_fragment(content),
+                });
+            }
+            _ => {
+                let reason = deferred
+                    .iter()
+                    .find(|item| item.chapter.id == chapter.id)
+                    .map(|item| item.reason.as_str())
+                    .unwrap_or("章节内容缺失或为空");
+                pending.push(DeferredChapter::new(chapter.clone(), reason));
+            }
+        }
+    }
+
+    DeferredBatchAttempt { resolved, pending }
+}
+
+#[cfg(feature = "official-api")]
+fn retry_deferred_bisect_with<F>(
+    deferred: &[DeferredChapter],
+    max_batch_size: usize,
+    single_fallback_threshold: usize,
+    cancel: Option<&Arc<AtomicBool>>,
+    attempt: &F,
+) -> Result<Vec<DeferredRetryOutcome>>
+where
+    F: Fn(&[DeferredChapter]) -> DeferredBatchAttempt,
+{
+    if cancel
+        .map(|flag| flag.load(Ordering::Relaxed))
+        .unwrap_or(false)
+    {
+        return Err(anyhow!("用户停止下载"));
+    }
+
+    if deferred.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if deferred.len() > max_batch_size {
+        let mid = deferred.len() / 2;
+        info!(
+            target: "download",
+            total = deferred.len(),
+            left = mid,
+            right = deferred.len() - mid,
+            "延后重试批次超过单次接口上限，拆分为两批继续重试"
+        );
+
+        let mut outcomes = retry_deferred_bisect_with(
+            &deferred[..mid],
+            max_batch_size,
+            single_fallback_threshold,
+            cancel,
+            attempt,
+        )?;
+        outcomes.extend(retry_deferred_bisect_with(
+            &deferred[mid..],
+            max_batch_size,
+            single_fallback_threshold,
+            cancel,
+            attempt,
+        )?);
+        return Ok(outcomes);
+    }
+
+    if deferred.len() == 1 {
+        let attempt_outcome = attempt(deferred);
+        let mut outcomes = attempt_outcome
+            .resolved
+            .into_iter()
+            .map(DeferredRetryOutcome::Resolved)
+            .collect::<Vec<_>>();
+        outcomes.extend(
+            attempt_outcome
+                .pending
+                .into_iter()
+                .map(DeferredRetryOutcome::Failed),
+        );
+        return Ok(outcomes);
+    }
+
+    let DeferredBatchAttempt { resolved, pending } = attempt(deferred);
+    let mut outcomes = resolved
+        .into_iter()
+        .map(DeferredRetryOutcome::Resolved)
+        .collect::<Vec<_>>();
+
+    if pending.is_empty() {
+        return Ok(outcomes);
+    }
+
+    if pending.len() <= single_fallback_threshold {
+        info!(
+            target: "download",
+            count = pending.len(),
+            "延后重试批次已缩小，切换为逐章兜底重试"
+        );
+        for deferred in pending {
+            outcomes.extend(retry_deferred_bisect_with(
+                std::slice::from_ref(&deferred),
+                max_batch_size,
+                single_fallback_threshold,
+                cancel,
+                attempt,
+            )?);
+        }
+        return Ok(outcomes);
+    }
+
+    let mid = pending.len() / 2;
+    info!(
+        target: "download",
+        total = pending.len(),
+        left = mid,
+        right = pending.len() - mid,
+        "批量重试后仍有失败章节，按二分法继续拆分"
+    );
+    outcomes.extend(retry_deferred_bisect_with(
+        &pending[..mid],
+        max_batch_size,
+        single_fallback_threshold,
+        cancel,
+        attempt,
+    )?);
+    outcomes.extend(retry_deferred_bisect_with(
+        &pending[mid..],
+        max_batch_size,
+        single_fallback_threshold,
+        cancel,
+        attempt,
+    )?);
+    Ok(outcomes)
+}
+
+#[cfg(feature = "official-api")]
+fn retry_deferred_bisect(
+    client: &FanqieClient,
+    deferred: &[DeferredChapter],
+    config: &Config,
+    epub_mode: bool,
+    book_id: Option<&str>,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Result<Vec<DeferredRetryOutcome>> {
+    retry_deferred_bisect_with(
+        deferred,
+        MAX_DYNAMIC_GROUP_SIZE,
+        DEFERRED_RETRY_SINGLE_FALLBACK_THRESHOLD,
+        cancel,
+        &|batch| attempt_deferred_batch(client, batch, config, epub_mode, book_id),
+    )
+}
+
+#[cfg(feature = "official-api")]
 fn fetch_group_best_effort(
     client: &FanqieClient,
     group: &[ChapterRef],
@@ -1346,6 +1574,8 @@ fn merge_content_values(values: Vec<Value>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "official-api")]
+    use std::cell::RefCell;
 
     #[test]
     fn merge_content_values_combines_data_entries() {
@@ -1486,6 +1716,126 @@ mod tests {
         assert_eq!(dynamic_group_count(30), 2);
         assert_eq!(dynamic_group_count(50), 3);
         assert_eq!(dynamic_group_count(80), 5);
+    }
+
+    #[cfg(feature = "official-api")]
+    fn make_deferred(ids: &[&str]) -> Vec<DeferredChapter> {
+        ids.iter()
+            .map(|id| {
+                DeferredChapter::new(
+                    ChapterRef {
+                        id: (*id).to_string(),
+                        title: format!("第{id}章"),
+                    },
+                    format!("{id} failed"),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "official-api")]
+    fn make_resolved(item: &DeferredChapter) -> ResolvedDeferredChapter {
+        ResolvedDeferredChapter {
+            chapter: item.chapter.clone(),
+            title: item.chapter.title.clone(),
+            content: format!("content-{}", item.chapter.id),
+        }
+    }
+
+    #[cfg(feature = "official-api")]
+    #[test]
+    fn retry_deferred_bisect_switches_to_single_chapter_fallback_for_small_pending_sets() {
+        let deferred = make_deferred(&["1", "2", "3", "4"]);
+        let calls = RefCell::new(Vec::<Vec<String>>::new());
+
+        let outcomes = retry_deferred_bisect_with(&deferred, 25, 3, None, &|batch| {
+            let ids = batch
+                .iter()
+                .map(|item| item.chapter.id.clone())
+                .collect::<Vec<_>>();
+            calls.borrow_mut().push(ids.clone());
+
+            if ids == vec!["1", "2", "3", "4"] {
+                DeferredBatchAttempt {
+                    resolved: vec![make_resolved(&batch[0])],
+                    pending: batch[1..].to_vec(),
+                }
+            } else if ids == vec!["2"] {
+                DeferredBatchAttempt {
+                    resolved: vec![make_resolved(&batch[0])],
+                    pending: Vec::new(),
+                }
+            } else if ids == vec!["3"] {
+                DeferredBatchAttempt {
+                    resolved: Vec::new(),
+                    pending: vec![DeferredChapter::new(
+                        batch[0].chapter.clone(),
+                        "still failing",
+                    )],
+                }
+            } else if ids == vec!["4"] {
+                DeferredBatchAttempt {
+                    resolved: vec![make_resolved(&batch[0])],
+                    pending: Vec::new(),
+                }
+            } else {
+                panic!("unexpected batch ids: {ids:?}");
+            }
+        })
+        .unwrap();
+
+        let mut resolved_ids = Vec::new();
+        let mut failed_ids = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                DeferredRetryOutcome::Resolved(item) => resolved_ids.push(item.chapter.id),
+                DeferredRetryOutcome::Failed(item) => failed_ids.push(item.chapter.id),
+            }
+        }
+        resolved_ids.sort();
+        failed_ids.sort();
+
+        assert_eq!(resolved_ids, vec!["1", "2", "4"]);
+        assert_eq!(failed_ids, vec!["3"]);
+        assert_eq!(
+            calls
+                .into_inner()
+                .into_iter()
+                .map(|ids| ids.len())
+                .collect::<Vec<_>>(),
+            vec![4, 1, 1, 1]
+        );
+    }
+
+    #[cfg(feature = "official-api")]
+    #[test]
+    fn retry_deferred_bisect_splits_before_requesting_batches_over_api_limit() {
+        let deferred = make_deferred(
+            &(1..=26)
+                .map(|idx| idx.to_string())
+                .collect::<Vec<_>>()
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>(),
+        );
+        let calls = RefCell::new(Vec::<usize>::new());
+
+        let outcomes = retry_deferred_bisect_with(&deferred, 25, 3, None, &|batch| {
+            calls.borrow_mut().push(batch.len());
+            DeferredBatchAttempt {
+                resolved: batch.iter().map(make_resolved).collect(),
+                pending: Vec::new(),
+            }
+        })
+        .unwrap();
+
+        assert_eq!(calls.into_inner(), vec![13, 13]);
+        assert_eq!(outcomes.len(), 26);
+        assert!(
+            outcomes
+                .into_iter()
+                .all(|outcome| matches!(outcome, DeferredRetryOutcome::Resolved(_)))
+        );
     }
 
     #[test]
