@@ -133,20 +133,7 @@ pub(crate) async fn create_job(
 
         let jobs_fmt = jobs.clone();
         let format_asker = move |_manager: &crate::book_parser::book_manager::BookManager| {
-            let options = vec![
-                dl::BookNameOption {
-                    label: "txt 格式".to_string(),
-                    value: "txt".to_string(),
-                },
-                dl::BookNameOption {
-                    label: "epub 格式".to_string(),
-                    value: "epub".to_string(),
-                },
-                dl::BookNameOption {
-                    label: "pdf 格式".to_string(),
-                    value: "pdf".to_string(),
-                },
-            ];
+            let options = dl::collect_output_format_options();
             let (tx, rx) = std::sync::mpsc::channel();
             jobs_fmt.set_format_options(id, options, tx);
             rx.recv().ok().flatten()

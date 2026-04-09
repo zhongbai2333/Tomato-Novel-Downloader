@@ -11,6 +11,39 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{ConfigSpec, FieldMeta};
 
+pub const OUTPUT_FORMAT_TXT: &str = "txt";
+pub const OUTPUT_FORMAT_EPUB: &str = "epub";
+pub const OUTPUT_FORMAT_PDF: &str = "pdf";
+pub const OUTPUT_FORMAT_BULK_TXT: &str = "bulk_txt";
+pub const OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD: &str = "ask_after_download";
+
+pub fn output_format_choices() -> &'static [(&'static str, &'static str)] {
+    static CHOICES: [(&str, &str); 5] = [
+        (OUTPUT_FORMAT_TXT, "txt 格式"),
+        (OUTPUT_FORMAT_EPUB, "epub 格式"),
+        (OUTPUT_FORMAT_PDF, "pdf 格式"),
+        (OUTPUT_FORMAT_BULK_TXT, "散装文件"),
+        (OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD, "下载后选择"),
+    ];
+    &CHOICES
+}
+
+pub fn output_format_label(choice: &str) -> &'static str {
+    let normalized = choice.trim().to_ascii_lowercase();
+    output_format_choices()
+        .iter()
+        .find(|(value, _)| *value == normalized)
+        .map(|(_, label)| *label)
+        .unwrap_or("txt 格式")
+}
+
+pub fn output_format_value_from_label(label: &str) -> Option<&'static str> {
+    output_format_choices()
+        .iter()
+        .find(|(_, candidate)| *candidate == label)
+        .map(|(value, _)| *value)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     // 程序配置
@@ -369,7 +402,7 @@ impl ConfigSpec for Config {
             },
             FieldMeta {
                 name: "ask_format_after_download",
-                description: "下载完成后询问用户选择输出格式 (true/false)",
+                description: "是否在下载完成后询问用户选择输出格式（true 时可选 txt/epub/pdf/散装文件）",
             },
         ];
         &FIELDS
@@ -377,6 +410,83 @@ impl ConfigSpec for Config {
 }
 
 impl Config {
+    pub fn configured_output_format_choice(&self) -> &'static str {
+        if self.bulk_files && self.novel_format.eq_ignore_ascii_case(OUTPUT_FORMAT_TXT) {
+            return OUTPUT_FORMAT_BULK_TXT;
+        }
+
+        match self.novel_format.trim().to_ascii_lowercase().as_str() {
+            OUTPUT_FORMAT_EPUB => OUTPUT_FORMAT_EPUB,
+            OUTPUT_FORMAT_PDF => OUTPUT_FORMAT_PDF,
+            _ => OUTPUT_FORMAT_TXT,
+        }
+    }
+
+    pub fn current_output_format_choice(&self) -> &'static str {
+        if self.ask_format_after_download {
+            return OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD;
+        }
+        self.configured_output_format_choice()
+    }
+
+    pub fn apply_output_format_choice(&mut self, choice: &str) -> Result<(), String> {
+        let normalized = choice.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            OUTPUT_FORMAT_TXT => {
+                self.novel_format = OUTPUT_FORMAT_TXT.to_string();
+                self.bulk_files = false;
+                self.ask_format_after_download = false;
+            }
+            OUTPUT_FORMAT_EPUB => {
+                self.novel_format = OUTPUT_FORMAT_EPUB.to_string();
+                self.bulk_files = false;
+                self.ask_format_after_download = false;
+            }
+            OUTPUT_FORMAT_PDF => {
+                self.novel_format = OUTPUT_FORMAT_PDF.to_string();
+                self.bulk_files = false;
+                self.ask_format_after_download = false;
+            }
+            OUTPUT_FORMAT_BULK_TXT => {
+                self.novel_format = OUTPUT_FORMAT_TXT.to_string();
+                self.bulk_files = true;
+                self.ask_format_after_download = false;
+            }
+            OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD => {
+                self.ask_format_after_download = true;
+                self.bulk_files = false;
+                if self.novel_format.trim().is_empty() {
+                    self.novel_format = default_novel_format();
+                }
+            }
+            _ => {
+                return Err("保存格式仅支持 txt/epub/pdf/散装文件/下载后选择".to_string());
+            }
+        }
+
+        self.normalize_output_format_fields();
+        Ok(())
+    }
+
+    pub fn normalize_output_format_fields(&mut self) {
+        let mut normalized = self.novel_format.trim().to_ascii_lowercase();
+        if normalized == OUTPUT_FORMAT_BULK_TXT {
+            normalized = OUTPUT_FORMAT_TXT.to_string();
+            self.bulk_files = true;
+        }
+        if normalized != OUTPUT_FORMAT_TXT
+            && normalized != OUTPUT_FORMAT_EPUB
+            && normalized != OUTPUT_FORMAT_PDF
+        {
+            normalized = default_novel_format();
+        }
+
+        self.novel_format = normalized;
+        if self.ask_format_after_download || self.novel_format != OUTPUT_FORMAT_TXT {
+            self.bulk_files = false;
+        }
+    }
+
     /// 解析 PDF 字体路径：用户指定 > 系统自动检测
     pub fn resolve_pdf_font_path(&self) -> Option<PathBuf> {
         if let Some(ref p) = self.pdf_font_path {
@@ -599,7 +709,9 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{
+        Config, OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD, OUTPUT_FORMAT_BULK_TXT, OUTPUT_FORMAT_TXT,
+    };
 
     #[test]
     fn status_folder_path_reuses_existing_folder_when_only_book_name_changes() {
@@ -615,6 +727,73 @@ mod tests {
         assert_eq!(resolved, old_folder);
         assert!(!temp_dir.path().join("123_新书名").exists());
     }
+
+    #[test]
+    fn bulk_output_mode_is_mapped_to_txt_plus_bulk_flag() {
+        let mut config = Config::default();
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_BULK_TXT)
+            .unwrap();
+
+        assert_eq!(config.novel_format, OUTPUT_FORMAT_TXT);
+        assert!(config.bulk_files);
+        assert!(!config.ask_format_after_download);
+        assert_eq!(
+            config.current_output_format_choice(),
+            OUTPUT_FORMAT_BULK_TXT
+        );
+    }
+
+    #[test]
+    fn ask_after_download_clears_bulk_flag() {
+        let mut config = Config {
+            bulk_files: true,
+            novel_format: OUTPUT_FORMAT_TXT.to_string(),
+            ..Config::default()
+        };
+
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD)
+            .unwrap();
+
+        assert!(config.ask_format_after_download);
+        assert!(!config.bulk_files);
+        assert_eq!(
+            config.current_output_format_choice(),
+            OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD
+        );
+    }
+
+    #[test]
+    fn configured_output_format_choice_preserves_real_default_when_asking_later() {
+        let mut config = Config::default();
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_BULK_TXT)
+            .unwrap();
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD)
+            .unwrap();
+
+        assert_eq!(
+            config.current_output_format_choice(),
+            OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD
+        );
+        assert_eq!(config.configured_output_format_choice(), OUTPUT_FORMAT_TXT);
+
+        config.bulk_files = true;
+        assert_eq!(
+            config.configured_output_format_choice(),
+            OUTPUT_FORMAT_BULK_TXT
+        );
+    }
+
+    #[test]
+    fn safe_fs_name_replaces_windows_double_quote() {
+        let sanitized = super::safe_fs_name("第1章 \"你好\"", "_", 120);
+
+        assert!(!sanitized.contains('"'));
+        assert!(sanitized.contains('＂'));
+    }
 }
 
 pub fn safe_fs_name(name: &str, replacement: &str, max_len: usize) -> String {
@@ -623,7 +802,7 @@ pub fn safe_fs_name(name: &str, replacement: &str, max_len: usize) -> String {
         .map(|ch| match ch {
             // Convert forbidden Windows filename characters to Chinese equivalents
             ':' => '：',        // English colon to Chinese colon
-            '"' => '"',         // English quotes to Chinese left double quote
+            '"' => '＂',        // English quotes to fullwidth quote
             '<' => '《',        // Less than to Chinese left angle quote
             '>' => '》',        // Greater than to Chinese right angle quote
             '/' | '\\' => '、', // Slashes to Chinese comma

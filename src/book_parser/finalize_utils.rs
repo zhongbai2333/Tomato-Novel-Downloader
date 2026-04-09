@@ -23,6 +23,7 @@ use super::book_manager::BookManager;
 use super::finalize_epub::finalize_epub;
 use super::finalize_pdf::finalize_pdf;
 use crate::base_system::context::safe_fs_name;
+use crate::download::downloader;
 
 /// 生成最终输出；返回是否需要延迟清理缓存。
 pub fn run_finalize(
@@ -53,7 +54,9 @@ pub fn run_finalize(
         && let Some(chosen) = prompt_format_selection(manager)
     {
         info!(target: "book_manager", "用户选择输出格式: {}", chosen);
-        manager.config.novel_format = chosen;
+        if let Err(err) = manager.config.apply_output_format_choice(&chosen) {
+            warn!(target: "book_manager", error = %err, "应用输出格式选择失败");
+        }
         manager.format_selected_after_download = true;
     }
 
@@ -143,7 +146,7 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
 
     // bulk_files: TXT 每章一个文件，输出到"小说名"文件夹
     if fmt == "txt" && manager.config.bulk_files {
-        return Ok(dir);
+        return Ok(dir.join(&safe_book));
     }
 
     let suffix = match fmt {
@@ -691,19 +694,27 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
     Some(chosen)
 }
 
-/// CLI 模式下询问用户选择输出格式（txt / epub）。
-/// 返回 `Some("txt")` 或 `Some("epub")` 表示用户选了格式，`None` 表示保持默认。
+/// CLI 模式下询问用户选择输出格式。
+/// 返回对应的格式值，`None` 表示保持默认。
 fn prompt_format_selection(manager: &BookManager) -> Option<String> {
-    let current = manager.config.novel_format.to_lowercase();
-    let options = ["txt", "epub", "pdf"];
+    let current = manager.config.configured_output_format_choice();
+    let options = downloader::collect_output_format_options();
 
     println!("\n=== 选择输出格式 ===");
-    for (idx, fmt) in options.iter().enumerate() {
-        let marker = if *fmt == current { " (当前)" } else { "" };
-        println!("  {}. {}{}", idx + 1, fmt, marker);
+    for (idx, opt) in options.iter().enumerate() {
+        let marker = if opt.value == current {
+            " (当前)"
+        } else {
+            ""
+        };
+        println!("  {}. {}{}", idx + 1, opt.label, marker);
     }
 
-    let default_idx = options.iter().position(|f| *f == current).unwrap_or(0) + 1;
+    let default_idx = options
+        .iter()
+        .position(|opt| opt.value == current)
+        .unwrap_or(0)
+        + 1;
     print!("请选择 [{}]: ", default_idx);
     io::stdout().flush().ok();
     let mut line = String::new();
@@ -721,7 +732,7 @@ fn prompt_format_selection(manager: &BookManager) -> Option<String> {
         }
     };
 
-    let chosen = options[idx - 1].to_string();
+    let chosen = options[idx - 1].value.clone();
     if chosen == current {
         return None;
     }

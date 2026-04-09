@@ -87,7 +87,7 @@ pub(crate) async fn get_config(State(state): State<AppState>) -> Json<WebConfigV
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     Json(WebConfigView {
-        novel_format: cfg.novel_format,
+        novel_format: cfg.current_output_format_choice().to_string(),
         bulk_files: cfg.bulk_files,
         enable_audiobook: cfg.enable_audiobook,
         audiobook_format: cfg.audiobook_format,
@@ -111,17 +111,18 @@ pub(crate) async fn set_config(
     let (old_cfg, new_cfg) = {
         let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         let old = g.clone();
+        let mut touched_output_mode = false;
 
         if let Some(v) = patch.novel_format {
-            let v = v.trim().to_lowercase();
-            if v != "txt" && v != "epub" && v != "pdf" {
+            if g.apply_output_format_choice(&v).is_err() {
                 return Err(StatusCode::BAD_REQUEST);
             }
-            g.novel_format = v;
+            touched_output_mode = true;
         }
 
         if let Some(v) = patch.bulk_files {
             g.bulk_files = v;
+            touched_output_mode = true;
         }
 
         if let Some(v) = patch.enable_audiobook {
@@ -138,6 +139,14 @@ pub(crate) async fn set_config(
 
         if let Some(v) = patch.ask_format_after_download {
             g.ask_format_after_download = v;
+            touched_output_mode = true;
+        }
+
+        if touched_output_mode {
+            g.normalize_output_format_fields();
+            if g.enable_segment_comments && g.novel_format != "epub" {
+                g.enable_segment_comments = false;
+            }
         }
 
         (old, g.clone())
@@ -256,7 +265,7 @@ pub(crate) async fn set_config_full(
 }
 
 fn normalize_config(cfg: &mut Config) {
-    cfg.novel_format = cfg.novel_format.trim().to_ascii_lowercase();
+    cfg.normalize_output_format_fields();
     cfg.audiobook_format = cfg.audiobook_format.trim().to_ascii_lowercase();
     cfg.audiobook_tts_provider = cfg.audiobook_tts_provider.trim().to_ascii_lowercase();
     cfg.preferred_book_name_field = cfg.preferred_book_name_field.trim().to_ascii_lowercase();

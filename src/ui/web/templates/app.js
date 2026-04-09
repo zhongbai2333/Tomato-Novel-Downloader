@@ -413,29 +413,23 @@ async function refreshStatus() {
 async function refreshConfig() {
   const data = await j('/api/config');
   const nf = document.getElementById('cfgNovelFormat');
-  const bf = document.getElementById('cfgBulkFiles');
   const ea = document.getElementById('cfgEnableAudiobook');
   const af = document.getElementById('cfgAudiobookFormat');
-  if (nf) nf.value = data.ask_format_after_download ? 'ask_after_download' : (data.novel_format || 'txt').toString();
-  if (bf) bf.checked = !!data.bulk_files;
+  if (nf) nf.value = (data.novel_format || 'txt').toString();
   if (ea) ea.checked = !!data.enable_audiobook;
   if (af) af.value = (data.audiobook_format || 'mp3').toString();
 }
 
 async function saveConfig() {
   const nf = document.getElementById('cfgNovelFormat')?.value;
-  const bf = !!document.getElementById('cfgBulkFiles')?.checked;
   const ea = !!document.getElementById('cfgEnableAudiobook')?.checked;
   const af = document.getElementById('cfgAudiobookFormat')?.value;
 
-  const isAskAfter = nf === 'ask_after_download';
   await j('/api/config', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      novel_format: isAskAfter ? undefined : nf,
-      ask_format_after_download: isAskAfter,
-      bulk_files: bf,
+      novel_format: nf,
       enable_audiobook: ea,
       audiobook_format: af
     })
@@ -470,10 +464,13 @@ const FULL_CONFIG_SCHEMA = [
     fields: [
       { key: 'save_path', label: '保存路径', type: 'text' },
       { key: 'novel_format', label: '小说格式', type: 'select', options: [
-        { value: 'txt', label: 'txt' }, { value: 'epub', label: 'epub' }, { value: 'pdf', label: 'pdf' }, { value: 'ask_after_download', label: '下载后选择' }
+        { value: 'txt', label: 'txt' },
+        { value: 'epub', label: 'epub' },
+        { value: 'pdf', label: 'pdf' },
+        { value: 'bulk_txt', label: '散装文件' },
+        { value: 'ask_after_download', label: '下载后选择' }
       ] },
       { key: 'first_line_indent_em', label: '首行缩进(em)', type: 'number', parse: 'float', step: '0.1', min: '0' },
-      { key: 'bulk_files', label: '散装文件保存', type: 'bool' },
       { key: 'auto_clear_dump', label: '自动清理缓存', type: 'bool' },
       { key: 'auto_open_downloaded_files', label: '下载完成后自动打开', type: 'bool' },
       { key: 'allow_overwrite_files', label: '允许覆盖已存在文件', type: 'bool' },
@@ -627,9 +624,10 @@ function renderFullConfigForm(cfg) {
           o.textContent = opt.label;
           input.appendChild(o);
         }
-        // novel_format 下拉框：当 ask_format_after_download 为 true 时显示 "下载后选择"
         if (field.key === 'novel_format' && cfg.ask_format_after_download) {
           input.value = 'ask_after_download';
+        } else if (field.key === 'novel_format' && cfg.bulk_files) {
+          input.value = 'bulk_txt';
         } else {
           input.value = (cfg[field.key] ?? '').toString();
         }
@@ -700,12 +698,17 @@ function collectFullConfig() {
       out[key] = (el.value || '').toString();
     }
   }
-  // 将 novel_format 的 "ask_after_download" 选项映射为 ask_format_after_download 标志
   if (out.novel_format === 'ask_after_download') {
     out.ask_format_after_download = true;
-    delete out.novel_format;
+    out.bulk_files = false;
+    out.novel_format = (currentFullConfig?.novel_format || 'txt').toString();
+  } else if (out.novel_format === 'bulk_txt') {
+    out.ask_format_after_download = false;
+    out.bulk_files = true;
+    out.novel_format = 'txt';
   } else if (out.novel_format) {
     out.ask_format_after_download = false;
+    out.bulk_files = false;
   }
   return out;
 }
