@@ -402,7 +402,7 @@ impl ConfigSpec for Config {
             },
             FieldMeta {
                 name: "ask_format_after_download",
-                description: "下载完成后询问用户选择输出格式 (txt/epub/pdf/散装文件)",
+                description: "是否在下载完成后询问用户选择输出格式（true 时可选 txt/epub/pdf/散装文件）",
             },
         ];
         &FIELDS
