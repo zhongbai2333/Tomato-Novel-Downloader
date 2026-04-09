@@ -410,10 +410,7 @@ impl ConfigSpec for Config {
 }
 
 impl Config {
-    pub fn current_output_format_choice(&self) -> &'static str {
-        if self.ask_format_after_download {
-            return OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD;
-        }
+    pub fn configured_output_format_choice(&self) -> &'static str {
         if self.bulk_files && self.novel_format.eq_ignore_ascii_case(OUTPUT_FORMAT_TXT) {
             return OUTPUT_FORMAT_BULK_TXT;
         }
@@ -423,6 +420,13 @@ impl Config {
             OUTPUT_FORMAT_PDF => OUTPUT_FORMAT_PDF,
             _ => OUTPUT_FORMAT_TXT,
         }
+    }
+
+    pub fn current_output_format_choice(&self) -> &'static str {
+        if self.ask_format_after_download {
+            return OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD;
+        }
+        self.configured_output_format_choice()
     }
 
     pub fn apply_output_format_choice(&mut self, choice: &str) -> Result<(), String> {
@@ -757,6 +761,29 @@ mod tests {
         assert_eq!(
             config.current_output_format_choice(),
             OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD
+        );
+    }
+
+    #[test]
+    fn configured_output_format_choice_preserves_real_default_when_asking_later() {
+        let mut config = Config::default();
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_BULK_TXT)
+            .unwrap();
+        config
+            .apply_output_format_choice(OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD)
+            .unwrap();
+
+        assert_eq!(
+            config.current_output_format_choice(),
+            OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD
+        );
+        assert_eq!(config.configured_output_format_choice(), OUTPUT_FORMAT_TXT);
+
+        config.bulk_files = true;
+        assert_eq!(
+            config.configured_output_format_choice(),
+            OUTPUT_FORMAT_BULK_TXT
         );
     }
 

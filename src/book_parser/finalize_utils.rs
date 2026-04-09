@@ -697,7 +697,7 @@ fn prompt_book_name_selection(manager: &BookManager) -> Option<String> {
 /// CLI 模式下询问用户选择输出格式。
 /// 返回对应的格式值，`None` 表示保持默认。
 fn prompt_format_selection(manager: &BookManager) -> Option<String> {
-    let current = manager.config.current_output_format_choice();
+    let current = manager.config.configured_output_format_choice();
     let options = downloader::collect_output_format_options();
 
     println!("\n=== 选择输出格式 ===");
