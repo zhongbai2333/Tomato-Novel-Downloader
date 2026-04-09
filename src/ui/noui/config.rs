@@ -8,7 +8,9 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 
 use crate::base_system::config::{ConfigSpec, write_with_comments};
-use crate::base_system::context::Config;
+use crate::base_system::context::{
+    Config, output_format_choices, output_format_label, output_format_value_from_label,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum ConfigValueType {
@@ -24,7 +26,6 @@ enum ConfigValueType {
 enum ConfigField {
     SavePath,
     NovelFormat,
-    BulkFiles,
     AutoClearDump,
     AllowOverwriteFiles,
     PreferredBookNameField,
@@ -77,14 +78,9 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
             ty: ConfigValueType::String,
         },
         ConfigOption {
-            name: "小说保存格式(txt/epub/pdf)",
+            name: "小说保存格式",
             field: ConfigField::NovelFormat,
-            ty: ConfigValueType::String,
-        },
-        ConfigOption {
-            name: "是否以散装形式保存小说",
-            field: ConfigField::BulkFiles,
-            ty: ConfigValueType::Bool,
+            ty: ConfigValueType::Selection,
         },
         ConfigOption {
             name: "是否自动清理缓存文件",
@@ -332,8 +328,9 @@ pub(super) fn show_config_menu(config: &mut Config) -> Result<()> {
 fn config_value_display(config: &Config, field: ConfigField) -> String {
     match field {
         ConfigField::SavePath => config.save_path.clone(),
-        ConfigField::NovelFormat => config.novel_format.clone(),
-        ConfigField::BulkFiles => config.bulk_files.to_string(),
+        ConfigField::NovelFormat => {
+            output_format_label(config.current_output_format_choice()).to_string()
+        }
         ConfigField::AutoClearDump => config.auto_clear_dump.to_string(),
         ConfigField::AllowOverwriteFiles => config.allow_overwrite_files.to_string(),
         ConfigField::PreferredBookNameField => {
@@ -415,7 +412,6 @@ fn apply_config_edit(config: &mut Config, opt: ConfigOption, text: &str) -> Resu
 
 fn set_bool(config: &mut Config, field: ConfigField, v: bool) -> Result<()> {
     match field {
-        ConfigField::BulkFiles => config.bulk_files = v,
         ConfigField::AutoClearDump => config.auto_clear_dump = v,
         ConfigField::AllowOverwriteFiles => config.allow_overwrite_files = v,
         ConfigField::EnableAudiobook => config.enable_audiobook = v,
@@ -556,15 +552,14 @@ fn set_string(config: &mut Config, field: ConfigField, v: &str) -> Result<()> {
             config.save_path = p.to_string();
         }
         ConfigField::NovelFormat => {
-            let lower = v.trim().to_ascii_lowercase();
-            if lower != "txt" && lower != "epub" && lower != "pdf" {
-                return Err(anyhow!("保存格式仅支持 txt/epub/pdf"));
-            }
-            if lower == "txt" && config.enable_segment_comments {
+            let choice = output_format_value_from_label(v.trim()).unwrap_or(v.trim());
+            config
+                .apply_output_format_choice(choice)
+                .map_err(anyhow::Error::msg)?;
+            if config.novel_format == "txt" && config.enable_segment_comments {
                 config.enable_segment_comments = false;
                 println!("已自动关闭段评以兼容 TXT 格式。");
             }
-            config.novel_format = lower;
         }
         ConfigField::AudiobookVoice => config.audiobook_voice = v.to_string(),
         ConfigField::AudiobookRate => config.audiobook_rate = v.to_string(),
@@ -637,6 +632,27 @@ fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
 /// 选项模式：展示可选项让用户选择编号
 fn show_selection_prompt(field: ConfigField, current: &str) -> Result<Option<String>> {
     match field {
+        ConfigField::NovelFormat => {
+            println!("\n当前: {}", current);
+            for (idx, (_, label)) in output_format_choices().iter().enumerate() {
+                println!("  {}. {}", idx + 1, label);
+            }
+            println!("  0. 取消");
+            let choice = super::read_line("请选择: ")?;
+            let choice = choice.trim();
+            if choice == "0" || choice.is_empty() {
+                return Ok(None);
+            }
+            let Ok(idx) = choice.parse::<usize>() else {
+                println!("请输入数字编号");
+                return Ok(None);
+            };
+            if idx == 0 || idx > output_format_choices().len() {
+                println!("编号超出范围");
+                return Ok(None);
+            }
+            Ok(Some(output_format_choices()[idx - 1].0.to_string()))
+        }
         ConfigField::PreferredBookNameField => {
             const OPTIONS: &[(&str, &str)] = &[
                 ("默认书名", "book_name"),

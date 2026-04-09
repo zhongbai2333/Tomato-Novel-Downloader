@@ -7,7 +7,10 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 
 use crate::base_system::config::{ConfigSpec, write_with_comments};
-use crate::base_system::context::Config;
+use crate::base_system::context::{
+    Config, OUTPUT_FORMAT_BULK_TXT, OUTPUT_FORMAT_PDF, output_format_label,
+    output_format_value_from_label,
+};
 
 use super::App;
 
@@ -15,7 +18,6 @@ use super::App;
 pub(in crate::ui) enum ConfigField {
     SavePath,
     NovelFormat,
-    BulkFiles,
     AutoClearDump,
     AutoOpenDownloadedFiles,
     AllowOverwriteFiles,
@@ -155,6 +157,14 @@ pub(in crate::ui) const NOVEL_FORMAT_PRESETS: &[VoicePreset] = &[
         label: "epub 格式",
     },
     VoicePreset {
+        name: OUTPUT_FORMAT_PDF,
+        label: "pdf 格式",
+    },
+    VoicePreset {
+        name: OUTPUT_FORMAT_BULK_TXT,
+        label: "散装文件",
+    },
+    VoicePreset {
         name: "ask_after_download",
         label: "下载完后选择",
     },
@@ -194,10 +204,6 @@ pub(in crate::ui) fn build_config_categories() -> Vec<ConfigCategory> {
                 ConfigEntry {
                     title: "首行缩进(em)",
                     field: ConfigField::FirstLineIndentEm,
-                },
-                ConfigEntry {
-                    title: "散装文件保存",
-                    field: ConfigField::BulkFiles,
                 },
                 ConfigEntry {
                     title: "自动清理缓存",
@@ -385,14 +391,9 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
     match field {
         ConfigField::SavePath => app.config.save_path.clone(),
         ConfigField::NovelFormat => {
-            if app.config.ask_format_after_download {
-                novel_format_to_chinese("ask_after_download").to_string()
-            } else {
-                novel_format_to_chinese(&app.config.novel_format).to_string()
-            }
+            output_format_label(app.config.current_output_format_choice()).to_string()
         }
         ConfigField::FirstLineIndentEm => format!("{:.2}", app.config.first_line_indent_em),
-        ConfigField::BulkFiles => app.config.bulk_files.to_string(),
         ConfigField::AutoClearDump => app.config.auto_clear_dump.to_string(),
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files.to_string(),
         ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files.to_string(),
@@ -441,8 +442,7 @@ pub(in crate::ui) fn current_cfg_value(app: &App, field: ConfigField) -> String 
 pub(in crate::ui) fn cfg_field_is_bool(field: ConfigField) -> bool {
     matches!(
         field,
-        ConfigField::BulkFiles
-            | ConfigField::AutoClearDump
+        ConfigField::AutoClearDump
             | ConfigField::AutoOpenDownloadedFiles
             | ConfigField::AllowOverwriteFiles
             | ConfigField::OldCli
@@ -460,7 +460,6 @@ pub(in crate::ui) fn cfg_field_is_bool(field: ConfigField) -> bool {
 
 fn cfg_field_current_bool(app: &App, field: ConfigField) -> Option<bool> {
     let val = match field {
-        ConfigField::BulkFiles => app.config.bulk_files,
         ConfigField::AutoClearDump => app.config.auto_clear_dump,
         ConfigField::AutoOpenDownloadedFiles => app.config.auto_open_downloaded_files,
         ConfigField::AllowOverwriteFiles => app.config.allow_overwrite_files,
@@ -541,24 +540,22 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 if lower == "txt"
                     || lower == "epub"
                     || lower == "pdf"
+                    || lower == OUTPUT_FORMAT_BULK_TXT
                     || lower == "ask_after_download"
                 {
                     lower
                 } else {
-                    app.status =
-                        "请选择：txt 格式、epub 格式、pdf 格式 或 下载完后选择".to_string();
+                    app.status = "请选择：txt 格式、epub 格式、pdf 格式、散装文件 或 下载完后选择"
+                        .to_string();
                     return Ok(());
                 }
             };
-            if field_name == "ask_after_download" {
-                app.config.ask_format_after_download = true;
-            } else {
-                app.config.ask_format_after_download = false;
-                app.config.novel_format = field_name;
-                if app.config.novel_format == "txt" && app.config.enable_segment_comments {
-                    app.config.enable_segment_comments = false;
-                    note = Some("已关闭段评以兼容 txt".to_string());
-                }
+            app.config
+                .apply_output_format_choice(&field_name)
+                .map_err(anyhow::Error::msg)?;
+            if app.config.novel_format == "txt" && app.config.enable_segment_comments {
+                app.config.enable_segment_comments = false;
+                note = Some("已关闭段评以兼容 txt".to_string());
             }
         }
         ConfigField::FirstLineIndentEm => {
@@ -568,10 +565,6 @@ pub(in crate::ui) fn apply_cfg_edit(app: &mut App, cat_idx: usize, entry_idx: us
                 return Ok(());
             }
             app.config.first_line_indent_em = val;
-        }
-        ConfigField::BulkFiles => {
-            let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
-            app.config.bulk_files = val;
         }
         ConfigField::AutoClearDump => {
             let val = parse_bool(raw).ok_or_else(|| anyhow!("请输入 true/false"))?;
@@ -832,24 +825,7 @@ fn chinese_to_book_name_field(chinese: &str) -> Option<String> {
     }
 }
 
-/// 将小说格式英文名转换为中文显示名
-fn novel_format_to_chinese(field: &str) -> &'static str {
-    match field {
-        "txt" => "txt 格式",
-        "epub" => "epub 格式",
-        "pdf" => "pdf 格式",
-        "ask_after_download" => "下载完后选择",
-        _ => "txt 格式",
-    }
-}
-
 /// 将中文显示名转换为小说格式英文名
 fn chinese_to_novel_format(chinese: &str) -> Option<String> {
-    match chinese {
-        "txt 格式" => Some("txt".to_string()),
-        "epub 格式" => Some("epub".to_string()),
-        "pdf 格式" => Some("pdf".to_string()),
-        "下载完后选择" => Some("ask_after_download".to_string()),
-        _ => None,
-    }
+    output_format_value_from_label(chinese).map(ToString::to_string)
 }

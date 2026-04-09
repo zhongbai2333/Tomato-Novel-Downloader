@@ -103,20 +103,7 @@ pub(super) fn start_download_task(
         };
         let format_ask_tx = tx.clone();
         let format_asker = move |_manager: &crate::book_parser::book_manager::BookManager| {
-            let options = vec![
-                downloader::BookNameOption {
-                    label: "txt 格式".to_string(),
-                    value: "txt".to_string(),
-                },
-                downloader::BookNameOption {
-                    label: "epub 格式".to_string(),
-                    value: "epub".to_string(),
-                },
-                downloader::BookNameOption {
-                    label: "pdf 格式".to_string(),
-                    value: "pdf".to_string(),
-                },
-            ];
+            let options = downloader::collect_output_format_options();
             let (resp_tx, resp_rx) = std::sync::mpsc::channel();
             let _ = format_ask_tx.send(WorkerMsg::AskFormat {
                 options,

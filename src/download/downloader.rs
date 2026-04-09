@@ -991,7 +991,9 @@ pub(crate) fn finalize_from_manager(
         && let Some(chosen_fmt) = asker(manager)
     {
         info!(target: "download", "用户选择输出格式: {}", chosen_fmt);
-        manager.config.novel_format = chosen_fmt;
+        if let Err(err) = manager.config.apply_output_format_choice(&chosen_fmt) {
+            warn!(target: "download", error = %err, "应用输出格式选择失败");
+        }
         manager.format_selected_after_download = true;
     }
 
@@ -1110,6 +1112,27 @@ pub(crate) fn collect_book_name_options(manager: &BookManager) -> Vec<BookNameOp
     }
 
     options
+}
+
+pub(crate) fn collect_output_format_options() -> Vec<BookNameOption> {
+    vec![
+        BookNameOption {
+            label: "txt 格式".to_string(),
+            value: "txt".to_string(),
+        },
+        BookNameOption {
+            label: "epub 格式".to_string(),
+            value: "epub".to_string(),
+        },
+        BookNameOption {
+            label: "pdf 格式".to_string(),
+            value: "pdf".to_string(),
+        },
+        BookNameOption {
+            label: "散装文件".to_string(),
+            value: "bulk_txt".to_string(),
+        },
+    ]
 }
 
 // ── 工具函数 ──────────────────────────────────────────────────
