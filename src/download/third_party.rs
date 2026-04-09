@@ -154,7 +154,7 @@ pub(crate) fn fetch_group_third_party(
 
     for attempt in 0..tries {
         let ep = {
-            let guard = endpoints.lock().unwrap();
+            let guard = endpoints.lock().unwrap_or_else(|e| e.into_inner());
             if guard.is_empty() {
                 return Err(anyhow!("第三方 API 地址池已为空（全部判定无效）"));
             }
@@ -166,7 +166,7 @@ pub(crate) fn fetch_group_third_party(
         match client.get_contents_unthrottled(&ids, epub_mode) {
             Ok(v) => {
                 if !has_any_content_for_group(&v, group, cfg) {
-                    let mut guard = endpoints.lock().unwrap();
+                    let mut guard = endpoints.lock().unwrap_or_else(|e| e.into_inner());
                     guard.retain(|x| x != &ep);
                     drop(guard);
                     sleep_backoff(cfg, attempt);

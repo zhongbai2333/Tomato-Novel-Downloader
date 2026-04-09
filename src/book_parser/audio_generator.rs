@@ -6,6 +6,7 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
@@ -93,6 +94,28 @@ fn audio_format_from_simple(fmt: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn re_tags() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"<[^>]+>").expect("hardcoded TTS tag regex should compile"))
+}
+
+fn re_multi_nl() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\n{2,}").expect("hardcoded TTS newline regex should compile"))
+}
+
+fn re_tabs() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"[\t\f\v]+").expect("hardcoded TTS whitespace regex should compile")
+    })
+}
+
+fn re_spaces() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r" {2,}").expect("hardcoded TTS space regex should compile"))
+}
+
 fn sanitize_for_tts(title: &str, content: &str) -> String {
     // Ported from Python: f"{title}。\n{content}" + whitespace/html cleanup.
     let mut combined = format!("{}。\n{}", title, content);
@@ -101,16 +124,12 @@ fn sanitize_for_tts(title: &str, content: &str) -> String {
 
     // Remove HTML tags.
     // NOTE: we keep it simple and consistent with the Python regex.
-    let re_tags = Regex::new(r"<[^>]+>").unwrap();
-    combined = re_tags.replace_all(&combined, " ").to_string();
+    combined = re_tags().replace_all(&combined, " ").to_string();
 
     combined = combined.replace("\r", "\n");
-    let re_multi_nl = Regex::new(r"\n{2,}").unwrap();
-    combined = re_multi_nl.replace_all(&combined, "\n").to_string();
-    let re_tabs = Regex::new(r"[\t\f\v]+").unwrap();
-    combined = re_tabs.replace_all(&combined, " ").to_string();
-    let re_spaces = Regex::new(r" {2,}").unwrap();
-    combined = re_spaces.replace_all(&combined, " ").to_string();
+    combined = re_multi_nl().replace_all(&combined, "\n").to_string();
+    combined = re_tabs().replace_all(&combined, " ").to_string();
+    combined = re_spaces().replace_all(&combined, " ").to_string();
 
     combined.trim().to_string()
 }

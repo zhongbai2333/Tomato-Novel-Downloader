@@ -3,8 +3,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -76,14 +75,15 @@ pub(crate) async fn api_self_update(
     }
 
     let store = state.self_update.clone();
-    let running = Arc::new(AtomicBool::new(true));
-    let ticker_running = running.clone();
     let ticker_store = store.clone();
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
     thread::spawn(move || {
-        while ticker_running.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(600));
-            ticker_store.tick_running();
+        loop {
+            match stop_rx.recv_timeout(Duration::from_millis(600)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => ticker_store.tick_running(),
+            }
         }
     });
 
@@ -94,7 +94,7 @@ pub(crate) async fn api_self_update(
 
         let result = crate::base_system::self_update::check_for_updates(VERSION, true);
 
-        running.store(false, Ordering::Relaxed);
+        let _ = stop_tx.send(());
         match result {
             Ok(SelfUpdateOutcome::UpToDate) => {
                 store.finish_done("done", "已是最新版本，无需更新");
