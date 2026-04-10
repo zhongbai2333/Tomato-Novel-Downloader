@@ -2,10 +2,11 @@
 
 use std::fs;
 use std::io::{Cursor, Read as _, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use epub_builder::{EpubBuilder, EpubContent, EpubVersion, ReferenceType, ZipLibrary};
+use tracing::warn;
 
 use crate::base_system::context::{Config, safe_fs_name};
 
@@ -170,20 +171,34 @@ impl EpubGenerator {
     pub fn generate(&mut self, output_path: &Path, cfg: &Config) -> Result<()> {
         if let Some(base) = cfg.get_status_folder_path() {
             let safe_title = safe_fs_name(&self.title, "_", 120);
-            let cover_path_safe_jpg = base.join(format!("{safe_title}.jpg"));
-            let cover_path_safe_png = base.join(format!("{safe_title}.png"));
-            let cover_path_legacy_jpg = base.join(format!("{}.jpg", self.title));
-            let cover_path_legacy_png = base.join(format!("{}.png", self.title));
-            if let Some(bytes) = read_first_existing(&[
-                &cover_path_safe_jpg,
-                &cover_path_safe_png,
-                &cover_path_legacy_jpg,
-                &cover_path_legacy_png,
-            ]) {
+            let extensions = ["jpg", "jpeg", "png", "webp"];
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            for ext in &extensions {
+                candidates.push(base.join(format!("{safe_title}.{ext}")));
+            }
+            for ext in &extensions {
+                candidates.push(base.join(format!("{}.{ext}", self.title)));
+            }
+            let candidate_refs: Vec<&Path> = candidates.iter().map(|p| p.as_path()).collect();
+            if let Some((found_path, bytes)) = read_first_existing(&candidate_refs) {
+                let mime = mime_from_path(found_path);
+                let cover_name = if mime == "image/png" {
+                    "images/cover.png"
+                } else {
+                    "images/cover.jpg"
+                };
                 let cursor = Cursor::new(bytes);
                 self.book
-                    .add_cover_image("images/cover.jpg", cursor, "image/jpeg")
+                    .add_cover_image(cover_name, cursor, mime)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            } else {
+                warn!(
+                    target: "epub",
+                    title = %self.title,
+                    "cover image not found; searched {} candidates in {}",
+                    candidates.len(),
+                    base.display(),
+                );
             }
         }
 
@@ -291,13 +306,27 @@ impl EpubGenerator {
     }
 }
 
-fn read_first_existing(paths: &[&Path]) -> Option<Vec<u8>> {
+fn read_first_existing<'a>(paths: &[&'a Path]) -> Option<(&'a Path, Vec<u8>)> {
     for p in paths {
         if let Ok(bytes) = fs::read(p) {
-            return Some(bytes);
+            return Some((p, bytes));
         }
     }
     None
+}
+
+fn mime_from_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "image/jpeg",
+    }
 }
 
 fn html_escape(input: &str) -> String {

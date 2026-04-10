@@ -151,14 +151,17 @@ pub(super) fn finalize_pdf(
 
     // ── 封面图 ─────────────────────────────────────────────────
     let safe_title = safe_fs_name(&manager.book_name, "_", 120);
+    let extensions = ["jpg", "jpeg", "png", "webp"];
     let cover_candidates: Vec<PathBuf> = if let Some(base) = manager.config.get_status_folder_path()
     {
-        vec![
-            base.join(format!("{safe_title}.jpg")),
-            base.join(format!("{safe_title}.png")),
-            base.join(format!("{}.jpg", manager.book_name)),
-            base.join(format!("{}.png", manager.book_name)),
-        ]
+        let mut v = Vec::new();
+        for ext in &extensions {
+            v.push(base.join(format!("{safe_title}.{ext}")));
+        }
+        for ext in &extensions {
+            v.push(base.join(format!("{}.{ext}", manager.book_name)));
+        }
+        v
     } else {
         vec![]
     };
