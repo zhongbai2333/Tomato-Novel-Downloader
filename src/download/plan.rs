@@ -95,32 +95,12 @@ pub fn prepare_download_plan(
         completed_meta.book_name = Some(preferred_name);
     }
 
-    // 如果需要封面，按实际书名（已应用用户偏好）构建目标路径后重新获取并下载封面。
-    if completed_meta.cover_url.is_some() {
+    // 直接使用已有的 cover_url 下载封面，避免冗余的第二次 API 调用（该调用
+    // 容易因速率限制/冷却而间歇性失败，导致封面概率丢失）。
+    if completed_meta.cover_url.is_some() || completed_meta.detail_cover_url.is_some() {
         let cover_dir =
             book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
-        if let Ok(with_cover) =
-            directory.fetch_directory_with_cover(book_id, api_url, Some(&cover_dir))
-        {
-            dir = with_cover;
-        }
-
-        // 如果下载到的封面实际是 HEIC（官方 API 的 cover_url 常返回 HEIC），
-        // 尝试从 web 页面的 <img> 标签获取浏览器兼容格式的封面 URL 来替换。
-        if let Some(ref cover_path) = dir.meta.cover_path
-            && cover_path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("heic") || e.eq_ignore_ascii_case("heif"))
-        {
-            info!(target: "download", book_id, "封面为 HEIC 格式，尝试从 web 页面获取 JPEG 封面替换");
-            if let Some(jpeg_path) =
-                try_replace_heic_cover_with_web_img(config, book_id, cover_path)
-            {
-                // 删除旧 HEIC 文件，更新路径
-                let _ = std::fs::remove_file(cover_path);
-                dir.meta.cover_path = Some(jpeg_path);
-            }
-        }
+        download_cover_direct(config, book_id, &completed_meta, &cover_dir);
     }
 
     if let Some(web_plan) = web_plan.as_ref() {
@@ -414,16 +394,117 @@ pub(crate) fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) 
     }
 }
 
-// ── HEIC 封面替换 ────────────────────────────────────────────
+// ── 封面直接下载 ────────────────────────────────────────────
 
-/// 当官方 API 下载的封面是 HEIC 格式时，尝试从 Web 页面的
-/// `<img class="book-cover-img">` 获取浏览器兼容格式的封面并保存为 JPEG。
+/// 直接使用已知的封面 URL 下载封面到目标目录，带超时和重试。
+/// 避免通过重新调用 `fetch_directory_with_cover` 下载（该方式是多余的完整 API
+/// 调用，容易因速率限制/冷却导致间歇性失败）。
+///
+/// 使用 Downloader 侧的 `safe_fs_name` 命名，确保与 EPUB 生成器查找逻辑一致。
 #[cfg(feature = "official-api")]
-fn try_replace_heic_cover_with_web_img(
+fn download_cover_direct(
     config: &Config,
     book_id: &str,
-    heic_path: &std::path::Path,
-) -> Option<std::path::PathBuf> {
+    meta: &BookMeta,
+    cover_dir: &std::path::Path,
+) {
+    use crate::base_system::context::safe_fs_name;
+
+    let book_name = meta.book_name.as_deref().unwrap_or("cover");
+    let safe_name = safe_fs_name(book_name, "_", 120);
+
+    // 检查是否已有封面文件（任何受支持的扩展名）
+    let extensions = ["jpg", "jpeg", "png", "webp"];
+    for ext in &extensions {
+        let existing = cover_dir.join(format!("{safe_name}.{ext}"));
+        if existing.exists() {
+            info!(target: "download", book_id, path = %existing.display(), "封面文件已存在，跳过下载");
+            return;
+        }
+    }
+
+    let _ = std::fs::create_dir_all(cover_dir);
+    let timeout = Duration::from_millis(10_000);
+    let max_retries = 3u32;
+
+    // 优先尝试 detail_cover_url，其次 cover_url
+    let urls: Vec<&str> = [meta.detail_cover_url.as_deref(), meta.cover_url.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|u| {
+            let t = u.trim();
+            !t.is_empty() && (t.starts_with("http://") || t.starts_with("https://"))
+        })
+        .collect();
+
+    for url in &urls {
+        for attempt in 0..max_retries {
+            if attempt > 0 {
+                let base_ms = 300u64 * (1u64 << attempt.min(3));
+                std::thread::sleep(Duration::from_millis(base_ms));
+            }
+
+            let bytes = match crate::third_party::media_fetch::fetch_bytes(url, timeout) {
+                Some(b) if !b.is_empty() => b,
+                _ => {
+                    warn!(
+                        target: "download",
+                        book_id,
+                        url,
+                        attempt = attempt + 1,
+                        max_retries,
+                        "封面下载失败，重试中"
+                    );
+                    continue;
+                }
+            };
+
+            // 通过 magic bytes 嗅探实际格式（不依赖 URL 扩展名，后者不可靠）
+            let is_heic = bytes.len() >= 12
+                && &bytes[4..8] == b"ftyp"
+                && matches!(&bytes[8..12], b"heic" | b"heix" | b"mif1" | b"msf1");
+
+            if is_heic {
+                info!(target: "download", book_id, "封面为 HEIC 格式，尝试从 web 页面获取 JPEG 封面替换");
+                // HEIC 无法直接在 EPUB 中使用，尝试 web 页面获取 JPEG 替代
+                if let Some(jpeg_bytes) = fetch_web_cover_jpeg(config, book_id) {
+                    let path = cover_dir.join(format!("{safe_name}.jpg"));
+                    if std::fs::write(&path, &jpeg_bytes).is_ok() {
+                        info!(target: "download", book_id, path = %path.display(), "HEIC 封面已替换为 web 页面 JPEG");
+                        return;
+                    }
+                }
+                // web 页面也失败，保存原始 HEIC（作为兜底）
+                let path = cover_dir.join(format!("{safe_name}.heic"));
+                let _ = std::fs::write(&path, &bytes);
+                warn!(target: "download", book_id, "所有 JPEG 替换尝试失败，保留 HEIC 封面");
+                return;
+            }
+
+            // 非 HEIC：根据嗅探结果确定扩展名
+            let ext = if bytes.len() >= 8 && bytes[0] == 0x89 && &bytes[1..4] == b"PNG" {
+                "png"
+            } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+                "webp"
+            } else {
+                // JPEG 或无法识别，统一用 jpg
+                "jpg"
+            };
+
+            let path = cover_dir.join(format!("{safe_name}.{ext}"));
+            if std::fs::write(&path, &bytes).is_ok() {
+                info!(target: "download", book_id, path = %path.display(), "封面下载成功");
+                return;
+            }
+        }
+    }
+
+    warn!(target: "download", book_id, "所有封面 URL 均下载失败");
+}
+
+/// 从 web 页面 `<img class="book-cover-img">` 获取浏览器兼容格式（通常 JPEG）的封面字节。
+#[cfg(feature = "official-api")]
+fn fetch_web_cover_jpeg(config: &Config, book_id: &str) -> Option<Vec<u8>> {
     let web_cfg = FanqieWebConfig {
         request_timeout: Duration::from_secs(config.request_timeout.max(1)),
         max_retries: 2,
@@ -448,12 +529,5 @@ fn try_replace_heic_cover_with_web_img(
         }
     }
 
-    // 以同名但 .jpg 扩展名保存
-    let jpg_path = heic_path.with_extension("jpg");
-    if std::fs::write(&jpg_path, &bytes).is_ok() {
-        info!(target: "download", book_id, path = %jpg_path.display(), "HEIC 封面已替换为 JPEG");
-        Some(jpg_path)
-    } else {
-        None
-    }
+    Some(bytes)
 }
