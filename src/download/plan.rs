@@ -95,12 +95,11 @@ pub fn prepare_download_plan(
         completed_meta.book_name = Some(preferred_name);
     }
 
-    // 直接使用已有的 cover_url 下载封面，避免冗余的第二次 API 调用（该调用
-    // 容易因速率限制/冷却而间歇性失败，导致封面概率丢失）。
-    if completed_meta.cover_url.is_some() || completed_meta.detail_cover_url.is_some() {
+    // 封面下载：仅使用 web 页面抓取的封面（稳定），不再依赖 API 提供的 cover_url。
+    {
         let cover_dir =
             book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
-        download_cover_direct(config, book_id, &completed_meta, &cover_dir);
+        download_web_cover(config, book_id, &completed_meta, &cover_dir);
     }
 
     if let Some(web_plan) = web_plan.as_ref() {
@@ -224,7 +223,12 @@ fn prepare_download_plan_web(
         completed_meta.book_name = Some(preferred_name);
     }
 
-    // no-official：目前不做封面下载（cover_url 往往缺失），避免额外请求与逻辑分叉
+    // 封面下载：使用 web 页面抓取的封面
+    {
+        let cover_dir =
+            book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
+        download_web_cover(config, book_id, &completed_meta, &cover_dir);
+    }
 
     let raw = serde_json::json!({
         "book_id": book_id,
@@ -394,15 +398,11 @@ pub(crate) fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) 
     }
 }
 
-// ── 封面直接下载 ────────────────────────────────────────────
+// ── 封面下载（仅从 web 页面抓取）────────────────────────────────
 
-/// 直接使用已知的封面 URL 下载封面到目标目录，带超时和重试。
-/// 避免通过重新调用 `fetch_directory_with_cover` 下载（该方式是多余的完整 API
-/// 调用，容易因速率限制/冷却导致间歇性失败）。
-///
-/// 使用 Downloader 侧的 `safe_fs_name` 命名，确保与 EPUB 生成器查找逻辑一致。
-#[cfg(feature = "official-api")]
-fn download_cover_direct(
+/// 从番茄小说 web 页面抓取封面图片并保存到目标目录。
+/// 不再使用 API 提供的 cover_url（该路径不稳定，容易间歇性丢失）。
+fn download_web_cover(
     config: &Config,
     book_id: &str,
     meta: &BookMeta,
@@ -424,110 +424,77 @@ fn download_cover_direct(
     }
 
     let _ = std::fs::create_dir_all(cover_dir);
-    let timeout = Duration::from_millis(10_000);
-    let max_retries = 3u32;
 
-    // 优先尝试 detail_cover_url，其次 cover_url
-    let urls: Vec<&str> = [meta.detail_cover_url.as_deref(), meta.cover_url.as_deref()]
-        .into_iter()
-        .flatten()
-        .filter(|u| {
-            let t = u.trim();
-            !t.is_empty() && (t.starts_with("http://") || t.starts_with("https://"))
-        })
-        .collect();
-
-    for url in &urls {
-        for attempt in 0..max_retries {
-            if attempt > 0 {
-                let base_ms = 300u64 * (1u64 << attempt.min(3));
-                std::thread::sleep(Duration::from_millis(base_ms));
-            }
-
-            let bytes = match crate::third_party::media_fetch::fetch_bytes(url, timeout) {
-                Some(b) if !b.is_empty() => b,
-                _ => {
-                    warn!(
-                        target: "download",
-                        book_id,
-                        url,
-                        attempt = attempt + 1,
-                        max_retries,
-                        "封面下载失败，重试中"
-                    );
-                    continue;
-                }
-            };
-
-            // 通过 magic bytes 嗅探实际格式（不依赖 URL 扩展名，后者不可靠）
-            let is_heic = bytes.len() >= 12
-                && &bytes[4..8] == b"ftyp"
-                && matches!(&bytes[8..12], b"heic" | b"heix" | b"mif1" | b"msf1");
-
-            if is_heic {
-                info!(target: "download", book_id, "封面为 HEIC 格式，尝试从 web 页面获取 JPEG 封面替换");
-                // HEIC 无法直接在 EPUB 中使用，尝试 web 页面获取 JPEG 替代
-                if let Some(jpeg_bytes) = fetch_web_cover_jpeg(config, book_id) {
-                    let path = cover_dir.join(format!("{safe_name}.jpg"));
-                    if std::fs::write(&path, &jpeg_bytes).is_ok() {
-                        info!(target: "download", book_id, path = %path.display(), "HEIC 封面已替换为 web 页面 JPEG");
-                        return;
-                    }
-                }
-                // web 页面也失败，保存原始 HEIC（作为兜底）
-                let path = cover_dir.join(format!("{safe_name}.heic"));
-                let _ = std::fs::write(&path, &bytes);
-                warn!(target: "download", book_id, "所有 JPEG 替换尝试失败，保留 HEIC 封面");
-                return;
-            }
-
-            // 非 HEIC：根据嗅探结果确定扩展名
-            let ext = if bytes.len() >= 8 && bytes[0] == 0x89 && &bytes[1..4] == b"PNG" {
-                "png"
-            } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-                "webp"
-            } else {
-                // JPEG 或无法识别，统一用 jpg
-                "jpg"
-            };
-
-            let path = cover_dir.join(format!("{safe_name}.{ext}"));
-            if std::fs::write(&path, &bytes).is_ok() {
-                info!(target: "download", book_id, path = %path.display(), "封面下载成功");
-                return;
-            }
-        }
-    }
-
-    warn!(target: "download", book_id, "所有封面 URL 均下载失败");
-}
-
-/// 从 web 页面 `<img class="book-cover-img">` 获取浏览器兼容格式（通常 JPEG）的封面字节。
-#[cfg(feature = "official-api")]
-fn fetch_web_cover_jpeg(config: &Config, book_id: &str) -> Option<Vec<u8>> {
+    // 从 web 页面获取 html_img_cover_url
     let web_cfg = FanqieWebConfig {
         request_timeout: Duration::from_secs(config.request_timeout.max(1)),
         max_retries: 2,
         ..Default::default()
     };
-    let web = FanqieWebNetwork::new(web_cfg).ok()?;
+    let web = match FanqieWebNetwork::new(web_cfg) {
+        Ok(w) => w,
+        Err(e) => {
+            warn!(target: "download", book_id, error = %e, "初始化 FanqieWebNetwork 失败，跳过封面下载");
+            return;
+        }
+    };
     let (_, _, _, _, _, _, html_img_cover_url, _, _) = web.get_book_info(book_id);
-    let img_url = html_img_cover_url?;
-    if img_url.trim().is_empty() {
-        return None;
-    }
+    let img_url = match html_img_cover_url {
+        Some(ref u) if !u.trim().is_empty() => u.as_str(),
+        _ => {
+            warn!(target: "download", book_id, "web 页面未提取到封面 URL，跳过封面下载");
+            return;
+        }
+    };
 
-    let bytes =
-        crate::third_party::media_fetch::fetch_bytes(&img_url, Duration::from_millis(10_000))?;
+    let timeout = Duration::from_millis(10_000);
+    let max_retries = 3u32;
 
-    // 确认下载到的确实不是 HEIC
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        let brand = &bytes[8..12];
-        if brand == b"heic" || brand == b"heix" || brand == b"mif1" || brand == b"msf1" {
-            warn!(target: "download", book_id, "web 页面封面仍为 HEIC，放弃替换");
-            return None;
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            let base_ms = 300u64 * (1u64 << attempt.min(3));
+            std::thread::sleep(Duration::from_millis(base_ms));
+        }
+
+        let bytes = match crate::third_party::media_fetch::fetch_bytes(img_url, timeout) {
+            Some(b) if !b.is_empty() => b,
+            _ => {
+                warn!(
+                    target: "download",
+                    book_id,
+                    url = img_url,
+                    attempt = attempt + 1,
+                    max_retries,
+                    "web 封面下载失败，重试中"
+                );
+                continue;
+            }
+        };
+
+        // 跳过 HEIC（EPUB 不支持）
+        if bytes.len() >= 12
+            && &bytes[4..8] == b"ftyp"
+            && matches!(&bytes[8..12], b"heic" | b"heix" | b"mif1" | b"msf1")
+        {
+            warn!(target: "download", book_id, "web 封面为 HEIC 格式，EPUB 不支持，跳过");
+            return;
+        }
+
+        // 根据 magic bytes 嗅探格式
+        let ext = if bytes.len() >= 8 && bytes[0] == 0x89 && &bytes[1..4] == b"PNG" {
+            "png"
+        } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+            "webp"
+        } else {
+            "jpg"
+        };
+
+        let path = cover_dir.join(format!("{safe_name}.{ext}"));
+        if std::fs::write(&path, &bytes).is_ok() {
+            info!(target: "download", book_id, path = %path.display(), "web 封面下载成功");
+            return;
         }
     }
 
-    Some(bytes)
+    warn!(target: "download", book_id, "web 封面下载失败（已重试 {} 次）", max_retries);
 }
