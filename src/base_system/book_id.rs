@@ -10,6 +10,7 @@ static RE_SHORT_LINK: OnceLock<Regex> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
 
 /// Known domains that issue short-link share URLs of the form `/t/<token>`.
+/// The token is URL-safe and may contain `_` / `-` in addition to letters and digits.
 /// Only these hosts are followed during redirect resolution to prevent SSRF.
 const ALLOWED_SHORT_LINK_HOSTS: &[&str] = &[
     "changdunovel.com",
@@ -34,7 +35,8 @@ fn re_page() -> &'static Regex {
 
 fn re_short_link() -> &'static Regex {
     RE_SHORT_LINK.get_or_init(|| {
-        Regex::new(r"(?i)https?://[^/\s]+/t/[A-Za-z0-9]+/?").expect("compile RE_SHORT_LINK")
+        Regex::new(r"(?i)^https?://[^/\s]+/t/[A-Za-z0-9_-]+/?(?:[?#][^\s]*)?$")
+            .expect("compile RE_SHORT_LINK")
     })
 }
 
@@ -87,7 +89,7 @@ pub fn parse_book_id(input: &str) -> Option<String> {
 }
 
 /// Returns `true` if `input` contains a short-redirect share link from a
-/// known allowed domain (e.g. `https://changdunovel.com/t/550lVQoKokk/`).
+/// known allowed domain (e.g. `https://changdunovel.com/t/E_HDbOHpMJA/`).
 pub fn is_short_link(input: &str) -> bool {
     let trimmed = input.trim();
     let target = re_url()
@@ -135,4 +137,38 @@ pub fn resolve_book_id(input: &str) -> Option<String> {
         tracing::warn!(url = %url, final_url = %final_url, "短链接跳转后仍无法解析 book_id");
     }
     book_id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_short_link, parse_book_id};
+
+    #[test]
+    fn parse_plain_numeric_book_id() {
+        assert_eq!(
+            parse_book_id("7423591956359416856"),
+            Some("7423591956359416856".into())
+        );
+    }
+
+    #[test]
+    fn parse_book_id_from_share_page_url() {
+        let url = "https://changdunovel.com/ug/pages/book-share?share_type=11&aid=1967&book_id=7423591956359416856";
+        assert_eq!(parse_book_id(url), Some("7423591956359416856".into()));
+    }
+
+    #[test]
+    fn recognize_short_link_with_underscore_token() {
+        assert!(is_short_link("https://changdunovel.com/t/E_HDbOHpMJA/"));
+    }
+
+    #[test]
+    fn recognize_short_link_with_dash_token() {
+        assert!(is_short_link("https://changdunovel.com/t/AbC-Def_123/"));
+    }
+
+    #[test]
+    fn reject_short_link_from_unknown_host() {
+        assert!(!is_short_link("https://example.com/t/E_HDbOHpMJA/"));
+    }
 }

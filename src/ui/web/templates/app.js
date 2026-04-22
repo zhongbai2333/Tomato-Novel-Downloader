@@ -171,7 +171,7 @@ function parseBookId(input) {
   const page = target.match(/\/page\/([0-9]+)/i);
   if (page && page[1]) return page[1];
 
-  // Short link (e.g. https://changdunovel.com/t/XXXXX/) – return the URL so
+  // Short link (e.g. https://changdunovel.com/t/E_HDbOHpMJA/) – return the URL so
   // the server can follow the redirect and extract the book ID.
   // Restrict to known share-link hosts to prevent forwarding arbitrary URLs.
   const allowedShortLinkHosts = new Set(['changdunovel.com', 'www.changdunovel.com', 'fanqienovel.com', 'www.fanqienovel.com', 'fqnovel.com', 'www.fqnovel.com']);
@@ -180,7 +180,7 @@ function parseBookId(input) {
     if (
       (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
       allowedShortLinkHosts.has(parsed.hostname.toLowerCase()) &&
-      /^\/t\/[A-Za-z0-9]+\/?$/.test(parsed.pathname)
+      /^\/t\/[A-Za-z0-9_-]+\/?$/.test(parsed.pathname)
     ) {
       return target;
     }
