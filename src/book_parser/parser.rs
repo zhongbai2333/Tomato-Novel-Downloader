@@ -199,7 +199,8 @@ impl ContentParser {
         if paragraphs.is_empty() {
             let plain = Self::strip_tags(&body);
             for line in plain.split('\n') {
-                let trimmed = line.trim();
+                let decoded = Self::unescape_html_entities(line);
+                let trimmed = decoded.trim();
                 if !trimmed.is_empty() {
                     paragraphs.push(format!("<p>{}</p>", Self::escape_html(trimmed)));
                 }
@@ -237,7 +238,8 @@ impl ContentParser {
         // 保留换行，将 <br> 视为换行，去掉其他标签。
         let with_newlines = re_br_normalize().replace_all(inner, "\n");
         let text = Self::strip_tags(&with_newlines);
-        let trimmed = text.trim();
+        let decoded = Self::unescape_html_entities(text.trim());
+        let trimmed = decoded.trim();
         if trimmed.is_empty() {
             return String::new();
         }
@@ -255,6 +257,28 @@ impl ContentParser {
     fn unescape_html_entities(s: &str) -> String {
         // Decode common HTML entities that may appear in the API response
         // Note: &amp; must be replaced last to avoid double-decoding issues
+        if !(s.contains('&')) {
+            return s.to_string();
+        }
+
+        let mut result = s.to_string();
+        for _ in 0..4 {
+            let decoded = Self::unescape_html_entities_once(&result);
+            if decoded == result {
+                break;
+            }
+            result = decoded;
+            if !result.contains('&') {
+                break;
+            }
+        }
+        result
+    }
+
+    fn unescape_html_entities_once(s: &str) -> String {
+        // Decode common HTML entities that may appear in the API response.
+        // `&amp;` must be replaced last so `&amp;#34;` can be decoded by the
+        // next bounded pass instead of being over/under-decoded in one pass.
         if !(s.contains('&')) {
             return s.to_string();
         }
@@ -368,5 +392,36 @@ mod tests {
         let out = ContentParser::clean_plain(raw, "第1章 开局");
         assert!(out.contains("引子"));
         assert!(out.contains("正文第一段"));
+    }
+
+    #[test]
+    fn clean_xhtml_decodes_entities_before_reescaping() {
+        let raw = "<p>他说&#34;A&amp;B&#34;，还写了&#x27;C&#x27;</p>";
+        let out = ContentParser::clean_xhtml(raw, "第1章 开局");
+
+        assert_eq!(out, "<p>他说&quot;A&amp;B&quot;，还写了&#39;C&#39;</p>");
+        assert!(!out.contains("&amp;#34;"));
+        assert!(!out.contains("&amp;amp;"));
+    }
+
+    #[test]
+    fn clean_plain_decodes_double_escaped_cached_entities() {
+        let raw = "<p>他说&amp;#34;A&amp;amp;B&amp;#34;，还写了&amp;#x27;C&amp;#x27;</p>";
+        let out = ContentParser::clean_plain(raw, "第1章 开局");
+
+        assert!(out.contains("他说\"A&B\"，还写了'C'"));
+        assert!(!out.contains("&#34;"));
+        assert!(!out.contains("&amp;"));
+    }
+
+    #[test]
+    fn clean_xhtml_then_clean_plain_restores_text_entities() {
+        let raw = "<p>他说&#34;A&amp;B&#34;</p>";
+        let cached = ContentParser::clean_xhtml(raw, "第1章 开局");
+        let out = ContentParser::clean_plain(&cached, "第1章 开局");
+
+        assert!(out.contains("他说\"A&B\""));
+        assert!(!out.contains("&#34;"));
+        assert!(!out.contains("&amp;"));
     }
 }

@@ -29,6 +29,16 @@ fn re_all_tags() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"(?is)<[^>]+>").unwrap())
 }
 
+fn re_decimal_entity() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"&#(\d+);").unwrap())
+}
+
+fn re_hex_entity() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"&#[xX]([0-9a-fA-F]+);").unwrap())
+}
+
 // ── 实体解码 ────────────────────────────────────────────────────
 
 pub(crate) fn decode_xhtml_attr_url(src: &str) -> std::borrow::Cow<'_, str> {
@@ -39,30 +49,88 @@ pub(crate) fn decode_xhtml_attr_url(src: &str) -> std::borrow::Cow<'_, str> {
 }
 
 pub(crate) fn unescape_basic_entities(s: &str) -> std::borrow::Cow<'_, str> {
-    if !(s.contains("&amp;")
+    if !contains_basic_entity(s) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut result = s.to_string();
+    for _ in 0..4 {
+        if !contains_basic_entity(&result) {
+            break;
+        }
+
+        let decoded = unescape_basic_entities_once(&result);
+        if decoded == result {
+            break;
+        }
+        result = decoded;
+    }
+
+    std::borrow::Cow::Owned(result)
+}
+
+fn contains_basic_entity(s: &str) -> bool {
+    s.contains("&#")
+        || s.contains("&amp;")
         || s.contains("&lt;")
         || s.contains("&gt;")
         || s.contains("&quot;")
+        || s.contains("&apos;")
         || s.contains("&#34;")
         || s.contains("&#39;")
         || s.contains("&#x27;")
         || s.contains("&#x22;")
-        || s.contains("&nbsp;"))
-    {
-        return std::borrow::Cow::Borrowed(s);
-    }
+        || s.contains("&nbsp;")
+        || s.contains("&ldquo;")
+        || s.contains("&rdquo;")
+        || s.contains("&lsquo;")
+        || s.contains("&rsquo;")
+        || s.contains("&ndash;")
+        || s.contains("&mdash;")
+        || s.contains("&hellip;")
+}
 
-    std::borrow::Cow::Owned(
-        s.replace("&nbsp;", " ")
-            .replace("&quot;", "\"")
-            .replace("&#34;", "\"")
-            .replace("&#x22;", "\"")
-            .replace("&#39;", "'")
-            .replace("&#x27;", "'")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&"),
-    )
+fn unescape_basic_entities_once(s: &str) -> String {
+    let mut result = s.to_string();
+
+    result = re_decimal_entity()
+        .replace_all(&result, |caps: &regex::Captures| {
+            caps.get(1)
+                .and_then(|m| m.as_str().parse::<u32>().ok())
+                .and_then(char::from_u32)
+                .map(|ch| ch.to_string())
+                .unwrap_or_else(|| caps[0].to_string())
+        })
+        .to_string();
+
+    result = re_hex_entity()
+        .replace_all(&result, |caps: &regex::Captures| {
+            caps.get(1)
+                .and_then(|m| u32::from_str_radix(m.as_str(), 16).ok())
+                .and_then(char::from_u32)
+                .map(|ch| ch.to_string())
+                .unwrap_or_else(|| caps[0].to_string())
+        })
+        .to_string();
+
+    result
+        .replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#34;", "\"")
+        .replace("&#x22;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&ldquo;", "\u{201C}")
+        .replace("&rdquo;", "\u{201D}")
+        .replace("&lsquo;", "\u{2018}")
+        .replace("&rsquo;", "\u{2019}")
+        .replace("&ndash;", "\u{2013}")
+        .replace("&mdash;", "\u{2014}")
+        .replace("&hellip;", "\u{2026}")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 // ── HTML 转义 ───────────────────────────────────────────────────
@@ -300,4 +368,24 @@ pub(crate) fn clean_epub_body(html: &str) -> String {
     }
 
     out.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clean_epub_body, unescape_basic_entities};
+
+    #[test]
+    fn unescape_basic_entities_decodes_nested_entities() {
+        let out = unescape_basic_entities("他说&amp;#34;A&amp;amp;B&amp;#34;");
+        assert_eq!(out.as_ref(), "他说\"A&B\"");
+    }
+
+    #[test]
+    fn clean_epub_body_decodes_entities_before_reescaping() {
+        let out = clean_epub_body("<p>他说&amp;#34;A&amp;amp;B&amp;#34;</p>");
+
+        assert_eq!(out, "<p>他说&quot;A&amp;B&quot;</p>");
+        assert!(!out.contains("&amp;#34;"));
+        assert!(!out.contains("&amp;amp;"));
+    }
 }
