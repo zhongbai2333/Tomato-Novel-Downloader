@@ -26,6 +26,10 @@ use super::book_manager::BookManager;
 use crate::base_system::context::safe_fs_name;
 use crate::download::downloader::{ProgressReporter, SavePhase};
 
+// Edge Read Aloud 对单次 SSML 文本长度存在服务端限制。这里按字符数做保守切块，
+// 给 SSML 包装和 XML 转义留下余量，避免长章节整章合成失败。
+const TTS_CHUNK_MAX_CHARS: usize = 1800;
+
 struct ChapterJob {
     idx: usize,
     title: String,
@@ -155,6 +159,282 @@ fn write_atomic(path: &Path, tmp_path: &Path, bytes: &[u8]) -> std::io::Result<(
     }
     fs::rename(tmp_path, path)?;
     Ok(())
+}
+
+fn is_tts_sentence_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '。' | '！' | '？' | '；' | '：' | '，' | '、' | '…' | '!' | '?' | ';' | ':' | ','
+    )
+}
+
+fn flush_tts_chunk(current: &mut String, current_chars: &mut usize, chunks: &mut Vec<String>) {
+    let chunk = current.trim();
+    if !chunk.is_empty() {
+        chunks.push(chunk.to_string());
+    }
+    current.clear();
+    *current_chars = 0;
+}
+
+fn split_oversized_tts_unit(unit: &str, chunks: &mut Vec<String>) {
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+
+    for ch in unit.chars() {
+        current.push(ch);
+        current_chars += 1;
+
+        if current_chars >= TTS_CHUNK_MAX_CHARS {
+            flush_tts_chunk(&mut current, &mut current_chars, chunks);
+        }
+    }
+
+    flush_tts_chunk(&mut current, &mut current_chars, chunks);
+}
+
+fn append_tts_unit(
+    unit: &str,
+    current: &mut String,
+    current_chars: &mut usize,
+    chunks: &mut Vec<String>,
+) {
+    let unit_chars = unit.chars().count();
+    if unit_chars == 0 {
+        return;
+    }
+
+    if unit_chars > TTS_CHUNK_MAX_CHARS {
+        flush_tts_chunk(current, current_chars, chunks);
+        split_oversized_tts_unit(unit, chunks);
+        return;
+    }
+
+    if *current_chars > 0 && *current_chars + unit_chars > TTS_CHUNK_MAX_CHARS {
+        flush_tts_chunk(current, current_chars, chunks);
+    }
+
+    current.push_str(unit);
+    *current_chars += unit_chars;
+}
+
+fn split_tts_text(text: &str) -> Vec<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    if text.chars().count() <= TTS_CHUNK_MAX_CHARS {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    let mut start = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        if is_tts_sentence_boundary(ch) {
+            let end = idx + ch.len_utf8();
+            append_tts_unit(
+                &text[start..end],
+                &mut current,
+                &mut current_chars,
+                &mut chunks,
+            );
+            start = end;
+        }
+    }
+
+    if start < text.len() {
+        append_tts_unit(
+            &text[start..],
+            &mut current,
+            &mut current_chars,
+            &mut chunks,
+        );
+    }
+    flush_tts_chunk(&mut current, &mut current_chars, &mut chunks);
+
+    chunks
+}
+
+fn is_wav_audio_format(audio_format: &str) -> bool {
+    let f = audio_format.trim().to_ascii_lowercase();
+    f.starts_with("riff-") || f.contains("wav") || f.contains("pcm")
+}
+
+struct WavParts<'a> {
+    fmt: &'a [u8],
+    data: &'a [u8],
+}
+
+fn extract_wav_parts(bytes: &[u8]) -> std::result::Result<WavParts<'_>, String> {
+    if bytes.len() < 12 {
+        return Err("文件头过短".to_string());
+    }
+    if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("不是 RIFF/WAVE 数据".to_string());
+    }
+
+    let mut fmt = None;
+    let mut data = None;
+    let mut pos = 12usize;
+    while pos + 8 <= bytes.len() {
+        let id = &bytes[pos..pos + 4];
+        let size = u32::from_le_bytes([
+            bytes[pos + 4],
+            bytes[pos + 5],
+            bytes[pos + 6],
+            bytes[pos + 7],
+        ]) as usize;
+        let start = pos + 8;
+        let end = start
+            .checked_add(size)
+            .ok_or_else(|| "chunk 大小溢出".to_string())?;
+        if end > bytes.len() {
+            return Err("chunk 数据不完整".to_string());
+        }
+
+        match id {
+            b"fmt " if fmt.is_none() => fmt = Some(&bytes[start..end]),
+            b"data" if data.is_none() => data = Some(&bytes[start..end]),
+            _ => {}
+        }
+
+        pos = end;
+        if size % 2 == 1 && pos < bytes.len() {
+            pos += 1;
+        }
+    }
+
+    let fmt = fmt.ok_or_else(|| "缺少 fmt chunk".to_string())?;
+    let data = data.ok_or_else(|| "缺少 data chunk".to_string())?;
+    Ok(WavParts { fmt, data })
+}
+
+fn push_u32_le(out: &mut Vec<u8>, value: usize, what: &str) -> std::result::Result<(), String> {
+    let value = u32::try_from(value).map_err(|_| format!("{what} 超出 WAV 4GiB 限制"))?;
+    out.extend_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn build_wav(fmt: &[u8], data: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let fmt_pad = fmt.len() % 2;
+    let data_pad = data.len() % 2;
+    let riff_size = 4usize
+        .checked_add(8 + fmt.len() + fmt_pad)
+        .and_then(|v| v.checked_add(8 + data.len() + data_pad))
+        .ok_or_else(|| "WAV 大小溢出".to_string())?;
+
+    let mut out = Vec::with_capacity(8 + riff_size);
+    out.extend_from_slice(b"RIFF");
+    push_u32_le(&mut out, riff_size, "RIFF 大小")?;
+    out.extend_from_slice(b"WAVE");
+
+    out.extend_from_slice(b"fmt ");
+    push_u32_le(&mut out, fmt.len(), "fmt chunk 大小")?;
+    out.extend_from_slice(fmt);
+    if fmt_pad == 1 {
+        out.push(0);
+    }
+
+    out.extend_from_slice(b"data");
+    push_u32_le(&mut out, data.len(), "data chunk 大小")?;
+    out.extend_from_slice(data);
+    if data_pad == 1 {
+        out.push(0);
+    }
+
+    Ok(out)
+}
+
+fn concatenate_wav_chunks(chunks: Vec<Vec<u8>>) -> std::result::Result<Vec<u8>, String> {
+    let mut fmt: Option<Vec<u8>> = None;
+    let mut data = Vec::new();
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let parts =
+            extract_wav_parts(chunk).map_err(|e| format!("第 {} 段 WAV 无效：{}", idx + 1, e))?;
+        match fmt.as_deref() {
+            Some(existing) if existing != parts.fmt => {
+                return Err(format!("第 {} 段 WAV 参数与前文不一致", idx + 1));
+            }
+            Some(_) => {}
+            None => fmt = Some(parts.fmt.to_vec()),
+        }
+        data.extend_from_slice(parts.data);
+    }
+
+    let fmt = fmt.ok_or_else(|| "没有可拼接的 WAV 数据".to_string())?;
+    build_wav(&fmt, &data)
+}
+
+fn concatenate_audio_chunks(
+    audio_format: &str,
+    chunks: Vec<Vec<u8>>,
+) -> std::result::Result<Vec<u8>, String> {
+    if chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+    if chunks.len() == 1 {
+        return Ok(chunks.into_iter().next().unwrap_or_default());
+    }
+
+    if is_wav_audio_format(audio_format) {
+        return concatenate_wav_chunks(chunks);
+    }
+
+    let total_len = chunks.iter().try_fold(0usize, |acc, chunk| {
+        acc.checked_add(chunk.len())
+            .ok_or_else(|| "音频大小溢出".to_string())
+    })?;
+    let mut out = Vec::with_capacity(total_len);
+    for chunk in chunks {
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+fn tts_cancelled(cancel: Option<&Arc<std::sync::atomic::AtomicBool>>) -> bool {
+    cancel
+        .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+fn synthesize_tts_chunks<F>(
+    chunks: Vec<String>,
+    audio_format: &str,
+    mut synthesize: F,
+    cancel: Option<&Arc<std::sync::atomic::AtomicBool>>,
+) -> std::result::Result<Vec<u8>, String>
+where
+    F: FnMut(&str) -> std::result::Result<Vec<u8>, String>,
+{
+    if chunks.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if chunks.len() == 1 {
+        return synthesize(&chunks[0]);
+    }
+
+    let total = chunks.len();
+    let mut audio_chunks = Vec::with_capacity(total);
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        if tts_cancelled(cancel) {
+            return Err("已取消".to_string());
+        }
+
+        let bytes = synthesize(&chunk)
+            .map_err(|e| format!("第 {}/{} 段合成失败：{}", idx + 1, total, e))?;
+        if bytes.is_empty() {
+            return Err(format!("第 {}/{} 段未返回音频", idx + 1, total));
+        }
+        audio_chunks.push(bytes);
+    }
+
+    concatenate_audio_chunks(audio_format, audio_chunks).map_err(|e| format!("音频拼接失败：{}", e))
 }
 
 /// 将已下载章节内容转换为音频文件（使用 Edge TTS / Read Aloud）。
@@ -456,18 +736,33 @@ pub fn generate_audiobook(
                     Err(channel::RecvTimeoutError::Timeout) => continue,
                     Err(channel::RecvTimeoutError::Disconnected) => break,
                 };
-                let r: std::result::Result<Vec<u8>, String> = match &mut backend {
-                    #[cfg(feature = "tts")]
-                    Backend::Ms(tts) => tts
-                        .synthesize(&job.text, &make_ms_config(&config))
-                        .map(|a| a.audio_bytes)
-                        .map_err(|e| e.to_string()),
-                    #[cfg(feature = "tts-native")]
-                    Backend::Edge(tts) => tts
-                        .synthesize(&job.text, &make_edge_config(&config))
-                        .map(|a| a.audio_bytes)
-                        .map_err(|e| e.to_string()),
-                };
+                let chunks = split_tts_text(&job.text);
+                if chunks.len() > 1 {
+                    pb.println(format!(
+                        "[TTS] 章节 {}《{}》文本较长，拆分为 {} 段合成",
+                        job.idx,
+                        job.title,
+                        chunks.len()
+                    ));
+                }
+                let audio_format = config.audio_format.clone();
+                let r = synthesize_tts_chunks(
+                    chunks,
+                    &audio_format,
+                    |chunk| match &mut backend {
+                        #[cfg(feature = "tts")]
+                        Backend::Ms(tts) => tts
+                            .synthesize(chunk, &make_ms_config(&config))
+                            .map(|a| a.audio_bytes)
+                            .map_err(|e| e.to_string()),
+                        #[cfg(feature = "tts-native")]
+                        Backend::Edge(tts) => tts
+                            .synthesize(chunk, &make_edge_config(&config))
+                            .map(|a| a.audio_bytes)
+                            .map_err(|e| e.to_string()),
+                    },
+                    cancel.as_ref(),
+                );
 
                 match r {
                     Ok(bytes) => {
@@ -533,4 +828,76 @@ pub fn generate_audiobook(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TTS_CHUNK_MAX_CHARS, concatenate_audio_chunks, extract_wav_parts, split_tts_text};
+
+    fn wav_bytes(data: &[u8]) -> Vec<u8> {
+        let fmt: [u8; 16] = [
+            1, 0, // PCM
+            1, 0, // mono
+            0xC0, 0x5D, 0, 0, // 24000 Hz
+            0x80, 0xBB, 0, 0, // 48000 bytes/sec
+            2, 0, // block align
+            16, 0, // bits/sample
+        ];
+        super::build_wav(&fmt, data).unwrap()
+    }
+
+    #[test]
+    fn split_tts_text_prefers_sentence_boundaries() {
+        let sentence = "这是一个用于测试的句子。";
+        let text = sentence.repeat(TTS_CHUNK_MAX_CHARS / sentence.chars().count() + 3);
+
+        let chunks = split_tts_text(&text);
+
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= TTS_CHUNK_MAX_CHARS)
+        );
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn split_tts_text_hard_splits_oversized_unit() {
+        let text = "长".repeat(TTS_CHUNK_MAX_CHARS + 37);
+
+        let chunks = split_tts_text(&text);
+
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= TTS_CHUNK_MAX_CHARS)
+        );
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn concatenate_audio_chunks_concatenates_mp3_like_streams() {
+        let bytes = concatenate_audio_chunks(
+            "audio-24khz-48kbitrate-mono-mp3",
+            vec![b"aaa".to_vec(), b"bbb".to_vec(), b"ccc".to_vec()],
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"aaabbbccc");
+    }
+
+    #[test]
+    fn concatenate_audio_chunks_rewrites_single_wav_header() {
+        let bytes = concatenate_audio_chunks(
+            "riff-24khz-16bit-mono-pcm",
+            vec![wav_bytes(&[1, 2, 3, 4]), wav_bytes(&[5, 6])],
+        )
+        .unwrap();
+        let parts = extract_wav_parts(&bytes).unwrap();
+
+        assert_eq!(parts.data, &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(bytes.windows(4).filter(|w| *w == b"RIFF").count(), 1);
+    }
 }
