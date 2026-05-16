@@ -388,4 +388,14 @@ mod tests {
         assert!(!out.contains("&amp;#34;"));
         assert!(!out.contains("&amp;amp;"));
     }
+
+    #[test]
+    fn clean_epub_body_preserves_ascii_emoticons_and_symbols() {
+        let out = clean_epub_body("<p>(^_^)/ ~~ \"hi\" it&#39;s ok :-)</p>");
+
+        assert_eq!(out, "<p>(^_^)/ ~~ &quot;hi&quot; it&#39;s ok :-)</p>");
+        assert!(!out.contains("（＾＿＾）／"));
+        assert!(!out.contains("＂hi＂"));
+        assert!(!out.contains("：-）"));
+    }
 }

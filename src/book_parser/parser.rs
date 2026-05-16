@@ -415,6 +415,17 @@ mod tests {
     }
 
     #[test]
+    fn clean_plain_preserves_ascii_emoticons_and_symbols() {
+        let raw = "<p>(^_^)/ ~~ \"hi\" it's ok :-)</p>";
+        let out = ContentParser::clean_plain(raw, "第1章 开局");
+
+        assert!(out.contains("(^_^)/ ~~ \"hi\" it's ok :-)"));
+        assert!(!out.contains("（＾＿＾）／"));
+        assert!(!out.contains("＂hi＂"));
+        assert!(!out.contains("：-）"));
+    }
+
+    #[test]
     fn clean_xhtml_then_clean_plain_restores_text_entities() {
         let raw = "<p>他说&#34;A&amp;B&#34;</p>";
         let cached = ContentParser::clean_xhtml(raw, "第1章 开局");

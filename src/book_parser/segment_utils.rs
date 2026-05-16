@@ -3,6 +3,8 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
+use super::html_utils::{escape_html, unescape_basic_entities};
+
 // Compiled regexes for performance (compiled once, reused across calls)
 fn class_attr_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
@@ -125,7 +127,9 @@ pub fn extract_para_snippet(chapter_html: &str, target_idx: usize) -> String {
         }
         if content_idx == target_idx {
             let inner = cap.get(2).map(|m| m.as_str()).unwrap_or("");
-            let inner_text = strip_tags(inner).trim().to_string();
+            let inner_text = strip_tags(inner);
+            let inner_text = unescape_basic_entities(&inner_text);
+            let inner_text = inner_text.trim().to_string();
             if inner_text.is_empty() {
                 return String::new();
             }
@@ -172,6 +176,7 @@ pub fn inject_segment_links(
         // This is a paragraph (groups 1-3)
         let mut open_tag = caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string();
         let mut inner = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
+        inner = normalize_html_text_nodes(&inner);
         let close_tag = caps.get(3).map(|m| m.as_str()).unwrap_or("");
 
         // Skip non-content paragraphs to match API's paragraph counting
@@ -227,6 +232,46 @@ fn strip_tags(raw: &str) -> String {
     html_tags_regex().replace_all(raw, "").to_string()
 }
 
+fn normalize_html_text_nodes(fragment: &str) -> String {
+    if !fragment.contains('&') {
+        return fragment.to_string();
+    }
+
+    let mut out = String::with_capacity(fragment.len());
+    let mut text_buf = String::new();
+    let mut in_tag = false;
+
+    for ch in fragment.chars() {
+        match ch {
+            '<' if !in_tag => {
+                if !text_buf.is_empty() {
+                    out.push_str(&normalize_text_segment(&text_buf));
+                    text_buf.clear();
+                }
+                in_tag = true;
+                out.push(ch);
+            }
+            '>' if in_tag => {
+                in_tag = false;
+                out.push(ch);
+            }
+            _ if in_tag => out.push(ch),
+            _ => text_buf.push(ch),
+        }
+    }
+
+    if !text_buf.is_empty() {
+        out.push_str(&normalize_text_segment(&text_buf));
+    }
+
+    out
+}
+
+fn normalize_text_segment(text: &str) -> String {
+    let decoded = unescape_basic_entities(text);
+    escape_html(decoded.as_ref())
+}
+
 fn emoji_map() -> std::collections::HashMap<&'static str, String> {
     use std::collections::HashMap;
     let mut m = HashMap::new();
@@ -254,4 +299,36 @@ fn emoji_map() -> std::collections::HashMap<&'static str, String> {
     m.insert("翻白眼", "🙄".to_string());
     m.insert("石化", "🗿".to_string());
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_para_snippet, inject_segment_links};
+    use serde_json::json;
+
+    #[test]
+    fn extract_para_snippet_decodes_html_entities() {
+        let html = "<p>她说&amp;#34;你好&amp;#34;。</p>";
+
+        assert_eq!(extract_para_snippet(html, 0), "她说\"你好\"。");
+    }
+
+    #[test]
+    fn inject_segment_links_normalizes_text_nodes_but_preserves_attrs() {
+        let mut seg_counts = serde_json::Map::new();
+        seg_counts.insert("0".to_string(), json!(3));
+
+        let out = inject_segment_links(
+            r#"<p class="content" data-ref="a&amp;b">她说&amp;#34;你好&amp;#34;<span>It&amp;#39;s me</span></p>"#,
+            "aux_00001.xhtml",
+            &seg_counts,
+        );
+
+        assert!(out.contains(r#"data-ref="a&amp;b""#));
+        assert!(out.contains("她说&quot;你好&quot;<span>It&#39;s me</span>"));
+        assert!(out.contains(r#"id="p-0""#));
+        assert!(out.contains(r#"href="aux_00001.xhtml#para-0""#));
+        assert!(!out.contains("&amp;#34;"));
+        assert!(!out.contains("&amp;#39;"));
+    }
 }
