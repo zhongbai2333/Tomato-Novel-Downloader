@@ -17,7 +17,7 @@ pub(crate) struct SearchQuery {
 pub(crate) async fn api_search(
     State(state): State<AppState>,
     Query(q): Query<SearchQuery>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     #[cfg(not(feature = "official-api"))]
     {
         let keyword = q.q.trim();
@@ -38,19 +38,18 @@ pub(crate) async fn api_search(
         }
 
         // 并发限制：最多 2 个同时进行的上游 API 请求。
-        let _permit = state
-            .api_semaphore
-            .acquire()
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let _permit =
+            state.api_semaphore.acquire().await.map_err(|_| {
+                api_error(StatusCode::SERVICE_UNAVAILABLE, "上游 API 并发限制已关闭")
+            })?;
 
         let resp = tokio::task::spawn_blocking(move || {
             let client = SearchClient::new()?;
             client.search_books(&keyword)
         })
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "搜索任务执行失败"))?
+        .map_err(|err| api_error(StatusCode::BAD_GATEWAY, format!("搜索失败: {err}")))?;
 
         let items: Vec<Value> = resp
             .books
@@ -67,4 +66,8 @@ pub(crate) async fn api_search(
 
         Ok(Json(json!({"items": items})))
     }
+}
+
+fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({ "error": message.into() })))
 }

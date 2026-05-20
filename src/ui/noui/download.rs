@@ -349,7 +349,7 @@ fn find_cover_image(folder: &Path) -> Option<PathBuf> {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+        if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp") {
             return Some(p);
         }
     }

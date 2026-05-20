@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,6 +28,8 @@ pub(crate) struct AppState {
     pub(crate) library_root: Arc<PathBuf>,
     pub(crate) jobs: Arc<JobStore>,
     pub(crate) self_update: Arc<SelfUpdateStore>,
+    pub(crate) library_scan: Arc<LibraryScanStore>,
+    pub(crate) update_scan: Arc<UpdateScanStore>,
     pub(crate) auth: Option<AuthState>,
     /// 限制同时访问上游 API（search / preview）的并发数，防止 WebUI 被用作多用户 API 代理。
     /// 仅在启用 official-api feature 时有意义，其他 feature 下置 None。
@@ -128,6 +130,248 @@ impl SelfUpdateStore {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct LibraryScanRow {
+    pub(crate) kind: String,
+    pub(crate) name: String,
+    pub(crate) rel_path: String,
+    pub(crate) ext: String,
+    pub(crate) size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) file_count: Option<u64>,
+    pub(crate) modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct LibraryScanInfo {
+    pub(crate) path: String,
+    pub(crate) running: bool,
+    pub(crate) scanned: usize,
+    pub(crate) items: Vec<LibraryScanRow>,
+    pub(crate) error: Option<String>,
+    pub(crate) started_ms: u64,
+    pub(crate) updated_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct LibraryScanState {
+    infos: HashMap<String, LibraryScanInfo>,
+    running: HashSet<String>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LibraryScanStore {
+    inner: Mutex<LibraryScanState>,
+}
+
+impl LibraryScanStore {
+    pub(crate) fn try_start(&self, path: String) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !g.running.insert(path.clone()) {
+            return false;
+        }
+
+        let now = now_ms();
+        g.infos.insert(
+            path.clone(),
+            LibraryScanInfo {
+                path,
+                running: true,
+                scanned: 0,
+                items: Vec::new(),
+                error: None,
+                started_ms: now,
+                updated_ms: now,
+            },
+        );
+        true
+    }
+
+    pub(crate) fn push_item(&self, path: &str, item: LibraryScanRow, scanned: usize) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(info) = g.infos.get_mut(path) {
+            info.running = true;
+            info.scanned = scanned;
+            info.items.push(item);
+            info.updated_ms = now_ms();
+        }
+    }
+
+    pub(crate) fn finish(&self, path: &str, mut items: Vec<LibraryScanRow>) {
+        items.sort_by(|a, b| {
+            b.modified_ms
+                .cmp(&a.modified_ms)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.running.remove(path);
+        let now = now_ms();
+        let started_ms = g.infos.get(path).map(|info| info.started_ms).unwrap_or(now);
+        g.infos.insert(
+            path.to_string(),
+            LibraryScanInfo {
+                path: path.to_string(),
+                running: false,
+                scanned: items.len(),
+                items,
+                error: None,
+                started_ms,
+                updated_ms: now,
+            },
+        );
+    }
+
+    pub(crate) fn finish_failed(&self, path: &str, error: String) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.running.remove(path);
+        let now = now_ms();
+        let info = g.infos.entry(path.to_string()).or_insert(LibraryScanInfo {
+            path: path.to_string(),
+            running: false,
+            scanned: 0,
+            items: Vec::new(),
+            error: None,
+            started_ms: now,
+            updated_ms: now,
+        });
+        info.running = false;
+        info.error = Some(error);
+        info.updated_ms = now;
+    }
+
+    pub(crate) fn snapshot(&self, path: &str) -> Option<LibraryScanInfo> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .infos
+            .get(path)
+            .cloned()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct UpdateScanRow {
+    pub(crate) book_id: String,
+    pub(crate) book_name: String,
+    pub(crate) folder: String,
+    pub(crate) local_total: usize,
+    pub(crate) local_failed: usize,
+    pub(crate) remote_total: usize,
+    pub(crate) new_count: usize,
+    pub(crate) has_update: bool,
+    pub(crate) is_ignored: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct UpdateScanInfo {
+    pub(crate) running: bool,
+    pub(crate) scanned: usize,
+    pub(crate) total: usize,
+    pub(crate) save_dir: String,
+    pub(crate) updates: Vec<UpdateScanRow>,
+    pub(crate) no_updates: Vec<UpdateScanRow>,
+    pub(crate) error: Option<String>,
+    pub(crate) started_ms: u64,
+    pub(crate) updated_ms: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct UpdateScanStore {
+    running: AtomicBool,
+    inner: Mutex<UpdateScanInfo>,
+}
+
+impl Default for UpdateScanStore {
+    fn default() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            inner: Mutex::new(UpdateScanInfo {
+                running: false,
+                scanned: 0,
+                total: 0,
+                save_dir: String::new(),
+                updates: Vec::new(),
+                no_updates: Vec::new(),
+                error: None,
+                started_ms: 0,
+                updated_ms: now_ms(),
+            }),
+        }
+    }
+}
+
+impl UpdateScanStore {
+    pub(crate) fn try_start(&self, save_dir: String) -> bool {
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+
+        let now = now_ms();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        *g = UpdateScanInfo {
+            running: true,
+            scanned: 0,
+            total: 0,
+            save_dir,
+            updates: Vec::new(),
+            no_updates: Vec::new(),
+            error: None,
+            started_ms: now,
+            updated_ms: now,
+        };
+        true
+    }
+
+    pub(crate) fn push_progress(&self, row: UpdateScanRow, scanned: usize, total: usize) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.running = true;
+        g.scanned = scanned;
+        g.total = total;
+        g.updated_ms = now_ms();
+        if row.is_ignored || !row.has_update {
+            g.no_updates.push(row);
+        } else {
+            g.updates.push(row);
+        }
+    }
+
+    pub(crate) fn finish(
+        &self,
+        save_dir: String,
+        updates: Vec<UpdateScanRow>,
+        no_updates: Vec<UpdateScanRow>,
+    ) {
+        let total = updates.len() + no_updates.len();
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.running = false;
+        g.scanned = total;
+        g.total = total;
+        g.save_dir = save_dir;
+        g.updates = updates;
+        g.no_updates = no_updates;
+        g.error = None;
+        g.updated_ms = now_ms();
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn finish_failed(&self, error: String) {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.running = false;
+        g.error = Some(error);
+        g.updated_ms = now_ms();
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    pub(crate) fn snapshot(&self) -> UpdateScanInfo {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct AuthState {
     pub(crate) password_sha256: [u8; 32],
@@ -218,6 +462,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+pub(crate) const RECENT_DONE_JOB_RETENTION_MS: u64 = 2 * 60 * 60 * 1000;
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum JobState {
@@ -226,6 +472,12 @@ pub(crate) enum JobState {
     Done,
     Failed,
     Canceled,
+}
+
+impl JobState {
+    fn is_auto_prunable(self) -> bool {
+        matches!(self, JobState::Done)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -306,6 +558,12 @@ impl JobStore {
                 .then_with(|| b.id.cmp(&a.id))
         });
         v
+    }
+
+    pub(crate) fn prune_done_older_than(&self, retention_ms: u64) {
+        let cutoff = now_ms().saturating_sub(retention_ms);
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.retain(|_, e| !e.info.state.is_auto_prunable() || e.info.updated_ms >= cutoff);
     }
 
     /// 返回当前处于 Queued 或 Running 状态的任务数量，用于并发限制。

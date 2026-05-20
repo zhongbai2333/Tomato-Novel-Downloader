@@ -629,79 +629,33 @@ pub fn download_with_plan_flow(
 
 // ── Manager 初始化与辅助 ──────────────────────────────────────
 
-fn rename_old_folder_if_needed(config: &Config, book_id: &str, new_book_name: &str) -> Result<()> {
-    let new_folder = book_paths::book_folder_path(config, book_id, Some(new_book_name));
-
-    if new_folder.exists() {
-        return Ok(());
-    }
-
-    let Some(old_folder) = config.find_existing_status_folder_by_book_id(book_id, None)? else {
-        return Ok(());
-    };
-
-    if old_folder != new_folder {
-        let old_name = old_folder
-            .file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|name| name.split_once('_').map(|(_, title)| title.to_string()))
-            .unwrap_or_default();
-
+fn rename_old_folder_if_needed(config: &Config, book_id: &str, _new_book_name: &str) -> Result<()> {
+    let stable_folder = config.migrate_status_folder_to_stable(book_id, None)?;
+    if stable_folder.exists() {
         info!(
             target: "download",
-            old = %old_folder.display(),
-            new = %new_folder.display(),
-            "检测到书名变更，按 BookID 命中旧目录并重命名"
+            book_id,
+            folder = %stable_folder.display(),
+            "已按 BookID 解析稳定缓存目录"
         );
-
-        if let Err(e) = std::fs::rename(&old_folder, &new_folder) {
-            debug!(
-                target: "download",
-                error = ?e,
-                "重命名文件夹失败，将继续复用旧目录"
-            );
-        } else {
-            rename_cover_files_if_needed(&new_folder, &old_name, new_book_name);
-            return Ok(());
-        }
     }
-
     Ok(())
 }
 
 fn rename_cover_files_if_needed(folder: &Path, old_book_name: &str, new_book_name: &str) {
-    use crate::base_system::context::safe_fs_name;
+    let before = book_paths::find_existing_cover_file(folder, Some(old_book_name));
+    let migrated = book_paths::migrate_legacy_cover_file(folder, Some(old_book_name))
+        .or_else(|| book_paths::migrate_legacy_cover_file(folder, Some(new_book_name)));
 
-    let old_safe_name = safe_fs_name(old_book_name, "_", 120);
-    let new_safe_name = safe_fs_name(new_book_name, "_", 120);
-
-    if old_safe_name == new_safe_name {
-        return;
-    }
-
-    let extensions = ["jpg", "jpeg", "png", "webp"];
-
-    for ext in &extensions {
-        let old_cover = folder.join(format!("{}.{}", old_safe_name, ext));
-        if old_cover.exists() {
-            let new_cover = folder.join(format!("{}.{}", new_safe_name, ext));
-            if let Err(e) = std::fs::rename(&old_cover, &new_cover) {
-                debug!(
-                    target: "download",
-                    error = ?e,
-                    old = %old_cover.display(),
-                    new = %new_cover.display(),
-                    "重命名封面文件失败"
-                );
-            } else {
-                info!(
-                    target: "download",
-                    old = %old_cover.display(),
-                    new = %new_cover.display(),
-                    "重命名封面文件"
-                );
-            }
-        }
+    if let (Some(before), Some(after)) = (before, migrated)
+        && before != after
+    {
+        info!(
+            target: "download",
+            old = %before.display(),
+            new = %after.display(),
+            "迁移封面文件到稳定名称"
+        );
     }
 }
 
@@ -1006,6 +960,7 @@ pub(crate) fn finalize_from_manager(
         manager.book_name = chosen_name.clone();
         manager.book_name_selected_after_download = true;
         if old_name != chosen_name {
+            manager.remember_previous_book_name(&old_name);
             rename_cover_files_if_needed(manager.book_folder(), &old_name, &chosen_name);
         }
     }
@@ -1633,6 +1588,7 @@ mod tests {
         assert_eq!(msg, "章节下载失败：测试章节 (123)");
     }
 
+    #[cfg(feature = "official-api")]
     #[test]
     fn map_report_to_deferred_marks_only_missing_ids() {
         let group = vec![
@@ -1657,6 +1613,7 @@ mod tests {
         assert_eq!(deferred[0].reason, "缺 1 章");
     }
 
+    #[cfg(feature = "official-api")]
     #[test]
     fn should_escalate_full_group_retry_only_for_complete_group_failure() {
         let all_missing = ContentFetchReport {
@@ -1839,7 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_old_folder_by_book_id_even_if_api_book_name_changed() {
+    fn migrate_old_folder_to_stable_book_id_cache_even_if_api_book_name_changed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut config = crate::base_system::context::Config::default();
         config.save_path = temp_dir.path().display().to_string();
@@ -1850,8 +1807,9 @@ mod tests {
 
         rename_old_folder_if_needed(&config, "123", "新书名").unwrap();
 
-        let new_folder = temp_dir.path().join("123_新书名");
-        assert!(new_folder.exists());
+        let new_folder = temp_dir.path().join("123");
+        assert!(new_folder.join("status.json").exists());
         assert!(!old_folder.exists());
+        assert!(!temp_dir.path().join("123_新书名").exists());
     }
 }

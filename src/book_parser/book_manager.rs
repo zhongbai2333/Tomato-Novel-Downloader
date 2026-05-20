@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::{debug, info};
 
-use crate::base_system::context::{Config, safe_fs_name};
+use crate::base_system::{book_paths, context::Config};
 
 pub type DownloadedMap = HashMap<String, (String, Option<String>)>;
 
@@ -31,6 +31,8 @@ pub struct BookManager {
     pub original_book_name: Option<String>,
     /// 短书名（用于"下载完后选择"功能）
     pub book_short_name: Option<String>,
+    /// 从旧状态文件/本轮改名流程中捕获到的历史书名，用于归档旧导出文件。
+    pub previous_book_names: Vec<String>,
     /// 是否已在下载完成后确认过书名
     pub book_name_selected_after_download: bool,
     pub downloaded: DownloadedMap,
@@ -57,11 +59,7 @@ impl BookManager {
         let target = match config.status_folder_path(book_name, book_id, None) {
             Ok(p) => p,
             Err(_) => {
-                let fallback = config.default_save_dir().join(format!(
-                    "{}_{}",
-                    book_id,
-                    safe_fs_name(book_name, "_", 120)
-                ));
+                let fallback = book_paths::book_folder_path(&config, book_id, Some(book_name));
                 fs::create_dir_all(&fallback)?;
                 fallback
             }
@@ -87,6 +85,7 @@ impl BookManager {
             category: None,
             original_book_name: None,
             book_short_name: None,
+            previous_book_names: Vec::new(),
             book_name_selected_after_download: false,
             downloaded: HashMap::new(),
             ignore_updates: false,
@@ -132,6 +131,22 @@ impl BookManager {
                         .insert(cid.clone(), (title.to_string(), content));
                 }
             }
+        }
+
+        let stored_book_name = data
+            .get("book_name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string());
+        let current_book_name = if self.book_name.trim().is_empty() {
+            book_name
+        } else {
+            self.book_name.as_str()
+        };
+        if let Some(old_name) = stored_book_name.as_deref()
+            && old_name != current_book_name
+        {
+            self.remember_previous_book_name(old_name);
         }
 
         self.book_id = if self.book_id.is_empty() {
@@ -332,6 +347,17 @@ impl BookManager {
 
     pub fn book_folder(&self) -> &Path {
         &self.status_folder
+    }
+
+    pub fn remember_previous_book_name(&mut self, name: &str) {
+        let trimmed = name.trim();
+        if trimmed.is_empty() || trimmed == self.book_name.trim() {
+            return;
+        }
+        if self.previous_book_names.iter().any(|n| n == trimmed) {
+            return;
+        }
+        self.previous_book_names.push(trimmed.to_string());
     }
 
     fn resume_journal_path(&self) -> PathBuf {

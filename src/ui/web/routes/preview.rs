@@ -145,16 +145,25 @@ fn resolve_local_preview_cover_key_with_web_fallback(
     resolve_local_preview_cover_key(cfg, &web_meta)
 }
 
+fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({ "error": message.into() })))
+}
+
 pub(crate) async fn api_preview(
     State(state): State<AppState>,
     Path(book_id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let book_id = tokio::task::spawn_blocking(move || resolve_book_id(&book_id))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::BAD_REQUEST)?;
+        .map_err(|_| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "解析 book_id 任务执行失败",
+            )
+        })?
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "无法解析 book_id"))?;
     if book_id.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(api_error(StatusCode::BAD_REQUEST, "book_id 为空"));
     }
 
     // 并发限制：与 search 共用同一个信号量，最多 2 个上游 API 请求并发。
@@ -163,7 +172,7 @@ pub(crate) async fn api_preview(
         .api_semaphore
         .acquire()
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        .map_err(|_| api_error(StatusCode::SERVICE_UNAVAILABLE, "上游 API 并发限制已关闭"))?;
 
     let cfg = state
         .config
@@ -177,8 +186,8 @@ pub(crate) async fn api_preview(
         dl::prepare_download_plan(&cfg_for_plan, &book_id_for_plan, dl::BookMeta::default())
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "预览任务执行失败"))?
+    .map_err(|err| api_error(StatusCode::BAD_GATEWAY, format!("加载目录失败: {err}")))?;
 
     let meta = &plan.meta;
     let chapter_count = plan.chapters.len();
@@ -194,7 +203,7 @@ pub(crate) async fn api_preview(
         )
     })
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "封面缓存任务执行失败"))?;
 
     let local_cover_url = cover_key
         .map(|k| format!("/api/preview-cover/{k}"))

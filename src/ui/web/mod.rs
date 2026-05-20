@@ -13,7 +13,7 @@ use anyhow::{Result, anyhow};
 use tracing::{info, warn};
 
 use crate::base_system::context::Config;
-use state::{AppState, AuthState, ConfigView, JobStore};
+use state::{AppState, AuthState, ConfigView, JobStore, LibraryScanStore};
 
 pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
     let bind_raw = std::env::var("TOMATO_WEB_ADDR").unwrap_or_else(|_| DEFAULT_BIND.to_string());
@@ -131,12 +131,20 @@ async fn run_async(
         library_root: Arc::new(library_root),
         jobs: Arc::new(JobStore::default()),
         self_update: Arc::new(state::SelfUpdateStore::default()),
+        library_scan: Arc::new(LibraryScanStore::default()),
+        update_scan: Arc::new(state::UpdateScanStore::default()),
         auth,
         // 最多允许 2 个并发的上游 API 请求（search / preview），
         // 单用户正常使用完全够用，SaaS 滥用场景下无法并发服务多用户。
         #[cfg(feature = "official-api")]
         api_semaphore: Arc::new(tokio::sync::Semaphore::new(2)),
     };
+
+    routes::library::spawn_library_scan(
+        state.library_root.as_ref().clone(),
+        String::new(),
+        state.library_scan.clone(),
+    );
 
     let locked = state.auth.is_some();
 

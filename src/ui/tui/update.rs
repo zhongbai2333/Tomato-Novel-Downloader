@@ -236,54 +236,74 @@ pub(super) fn show_update_menu(app: &mut App) -> Result<()> {
     let tx = app.worker_tx.clone();
     info!(target: "ui", "启动更新扫描");
     thread::spawn(move || {
-        let result = scan_updates(&cfg);
+        let progress_tx = tx.clone();
+        let result = scan_updates(&cfg, move |progress| {
+            let row = progress.row;
+            let is_update = row.has_update && !row.is_ignored;
+            let entry = update_entry_from_row(row);
+            let _ = progress_tx.send(WorkerMsg::UpdateScanProgress {
+                entry,
+                is_update,
+                scanned: progress.scanned,
+                total: progress.total,
+            });
+        });
         let _ = tx.send(WorkerMsg::UpdateScanned(result));
     });
     Ok(())
 }
 
-fn scan_updates(config: &Config) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
+fn scan_updates<F>(config: &Config, on_progress: F) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>
+where
+    F: FnMut(novel_updates::NovelUpdateProgress),
+{
     let save_dir = config.default_save_dir();
-    let scan = novel_updates::scan_novel_updates(&save_dir)?;
-
-    let to_entry = |it: novel_updates::NovelUpdateRow| {
-        let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
-        let label = if it.new_count > 0 && it.local_failed > 0 {
-            format!(
-                "{}《{}》({}) — 新章节: {} | 失败章节: {}",
-                ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
-            )
-        } else if it.new_count > 0 {
-            format!(
-                "{}《{}》({}) — 新章节: {}",
-                ignore_marker, it.book_name, it.book_id, it.new_count
-            )
-        } else if it.local_failed > 0 {
-            format!(
-                "{}《{}》({}) — 失败章节: {}",
-                ignore_marker, it.book_name, it.book_id, it.local_failed
-            )
-        } else {
-            format!(
-                "{}《{}》({}) — 新章节: 0",
-                ignore_marker, it.book_name, it.book_id
-            )
-        };
-
-        UpdateEntry {
-            book_id: it.book_id.clone(),
-            book_name: it.book_name.clone(),
-            folder: it.folder.clone(),
-            label,
-            _new_count: it.new_count,
-            _has_update: it.has_update,
-        }
-    };
+    let scan = novel_updates::scan_novel_updates_with_progress(&save_dir, on_progress)?;
 
     Ok((
-        scan.updates.into_iter().map(to_entry).collect(),
-        scan.no_updates.into_iter().map(to_entry).collect(),
+        scan.updates
+            .into_iter()
+            .map(update_entry_from_row)
+            .collect(),
+        scan.no_updates
+            .into_iter()
+            .map(update_entry_from_row)
+            .collect(),
     ))
+}
+
+fn update_entry_from_row(it: novel_updates::NovelUpdateRow) -> UpdateEntry {
+    let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
+    let label = if it.new_count > 0 && it.local_failed > 0 {
+        format!(
+            "{}《{}》({}) — 新章节: {} | 失败章节: {}",
+            ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
+        )
+    } else if it.new_count > 0 {
+        format!(
+            "{}《{}》({}) — 新章节: {}",
+            ignore_marker, it.book_name, it.book_id, it.new_count
+        )
+    } else if it.local_failed > 0 {
+        format!(
+            "{}《{}》({}) — 失败章节: {}",
+            ignore_marker, it.book_name, it.book_id, it.local_failed
+        )
+    } else {
+        format!(
+            "{}《{}》({}) — 新章节: 0",
+            ignore_marker, it.book_name, it.book_id
+        )
+    };
+
+    UpdateEntry {
+        book_id: it.book_id.clone(),
+        book_name: it.book_name.clone(),
+        folder: it.folder.clone(),
+        label,
+        _new_count: it.new_count,
+        _has_update: it.has_update,
+    }
 }
 
 pub(super) fn draw_update(frame: &mut ratatui::Frame, app: &mut App) {

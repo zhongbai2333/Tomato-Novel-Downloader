@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::base_system::book_id::resolve_book_id;
 use crate::download::downloader as dl;
-use crate::ui::web::state::{AppState, JobState};
+use crate::ui::web::state::{AppState, JobState, RECENT_DONE_JOB_RETENTION_MS};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ListJobsQuery {
@@ -17,6 +17,8 @@ pub(crate) struct ListJobsQuery {
     pub(crate) id: Option<u64>,
     /// 按书名/书ID关键词模糊过滤（忽略大小写）
     pub(crate) name: Option<String>,
+    /// 返回全部任务；默认会自动隐藏/清理 2 小时前已完成的任务。
+    pub(crate) all: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,6 +32,11 @@ pub(crate) async fn list_jobs(
     State(state): State<AppState>,
     Query(q): Query<ListJobsQuery>,
 ) -> Json<Value> {
+    if q.id.is_none() && !q.all.unwrap_or(false) {
+        state
+            .jobs
+            .prune_done_older_than(RECENT_DONE_JOB_RETENTION_MS);
+    }
     let mut items = state.jobs.list();
     if let Some(id) = q.id {
         items.retain(|j| j.id == id);
@@ -45,7 +52,10 @@ pub(crate) async fn list_jobs(
                 || j.book_id.to_lowercase().contains(&kw_lower)
         });
     }
-    Json(json!({ "items": items }))
+    Json(json!({
+        "items": items,
+        "done_retention_ms": RECENT_DONE_JOB_RETENTION_MS,
+    }))
 }
 
 pub(crate) async fn create_job(

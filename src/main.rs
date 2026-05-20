@@ -113,7 +113,13 @@ fn main() -> Result<()> {
             // `prewarm_iid()` 现在会优先复用本地文件缓存，仅在缓存缺失或过期时才注册新的 IID。
             match prewarm_iid() {
                 Ok(_) => info!(target: "startup", "IID 预热完成"),
-                Err(err) => warn!(target: "startup", "IID 预热失败: {err}"),
+                Err(err) => {
+                    prewarm_state::mark_prewarm_failed(err.to_string());
+                    if let Some(message) = prewarm_state::prewarm_error() {
+                        warn!(target: "startup", "{message}");
+                    }
+                    return;
+                }
             }
         }
 

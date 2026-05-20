@@ -408,19 +408,12 @@ fn download_web_cover(
     meta: &BookMeta,
     cover_dir: &std::path::Path,
 ) {
-    use crate::base_system::context::safe_fs_name;
+    let book_name = meta.book_name.as_deref();
 
-    let book_name = meta.book_name.as_deref().unwrap_or("cover");
-    let safe_name = safe_fs_name(book_name, "_", 120);
-
-    // 检查是否已有封面文件（任何受支持的扩展名）
-    let extensions = ["jpg", "jpeg", "png", "webp"];
-    for ext in &extensions {
-        let existing = cover_dir.join(format!("{safe_name}.{ext}"));
-        if existing.exists() {
-            info!(target: "download", book_id, path = %existing.display(), "封面文件已存在，跳过下载");
-            return;
-        }
+    // 检查并迁移旧版“书名.*”封面；新版统一保存为 cover.*。
+    if let Some(existing) = book_paths::migrate_legacy_cover_file(cover_dir, book_name) {
+        info!(target: "download", book_id, path = %existing.display(), "封面文件已存在，跳过下载");
+        return;
     }
 
     let _ = std::fs::create_dir_all(cover_dir);
@@ -489,7 +482,7 @@ fn download_web_cover(
             "jpg"
         };
 
-        let path = cover_dir.join(format!("{safe_name}.{ext}"));
+        let path = book_paths::canonical_cover_path(cover_dir, ext);
         if std::fs::write(&path, &bytes).is_ok() {
             info!(target: "download", book_id, path = %path.display(), "web 封面下载成功");
             return;

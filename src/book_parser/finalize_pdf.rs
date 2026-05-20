@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 use super::book_manager::BookManager;
 use super::finalize_utils::volume_title_map_for_chapters;
 use super::parser::ContentParser;
-use crate::base_system::context::safe_fs_name;
+use crate::base_system::book_paths;
 
 /// 查找第一个存在的路径。
 fn find_first_existing(paths: &[PathBuf]) -> Option<PathBuf> {
@@ -150,18 +150,9 @@ pub(super) fn finalize_pdf(
     doc.set_line_spacing(1.5);
 
     // ── 封面图 ─────────────────────────────────────────────────
-    let safe_title = safe_fs_name(&manager.book_name, "_", 120);
-    let extensions = ["jpg", "jpeg", "png", "webp"];
     let cover_candidates: Vec<PathBuf> = if let Some(base) = manager.config.get_status_folder_path()
     {
-        let mut v = Vec::new();
-        for ext in &extensions {
-            v.push(base.join(format!("{safe_title}.{ext}")));
-        }
-        for ext in &extensions {
-            v.push(base.join(format!("{}.{ext}", manager.book_name)));
-        }
-        v
+        book_paths::cover_file_candidates(&base, Some(&manager.book_name))
     } else {
         vec![]
     };

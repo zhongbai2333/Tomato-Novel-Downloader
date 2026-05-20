@@ -2,13 +2,13 @@
 
 use std::fs;
 use std::io::{Cursor, Read as _, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use epub_builder::{EpubBuilder, EpubContent, EpubVersion, ReferenceType, ZipLibrary};
 use tracing::warn;
 
-use crate::base_system::context::{Config, safe_fs_name};
+use crate::base_system::{book_paths, context::Config};
 
 /// 用于从 book_id 确定性生成 UUID v5 的命名空间。
 /// 这保证同一本书（同 book_id）的 dc:identifier 永远不变。
@@ -170,15 +170,7 @@ impl EpubGenerator {
 
     pub fn generate(&mut self, output_path: &Path, cfg: &Config) -> Result<()> {
         if let Some(base) = cfg.get_status_folder_path() {
-            let safe_title = safe_fs_name(&self.title, "_", 120);
-            let extensions = ["jpg", "jpeg", "png", "webp"];
-            let mut candidates: Vec<PathBuf> = Vec::new();
-            for ext in &extensions {
-                candidates.push(base.join(format!("{safe_title}.{ext}")));
-            }
-            for ext in &extensions {
-                candidates.push(base.join(format!("{}.{ext}", self.title)));
-            }
+            let candidates = book_paths::cover_file_candidates(&base, Some(&self.title));
             let candidate_refs: Vec<&Path> = candidates.iter().map(|p| p.as_path()).collect();
             if let Some((found_path, bytes)) = read_first_existing(&candidate_refs) {
                 let mime = mime_from_path(found_path);

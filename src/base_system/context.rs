@@ -4,7 +4,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -541,10 +541,77 @@ impl Config {
             return Ok(None);
         }
 
+        let canonical_path = Self::canonical_status_folder_path(&save_dir, book_id);
+        if canonical_path.is_dir() && Self::status_folder_has_book_record(&canonical_path, book_id)
+        {
+            return Ok(Some(canonical_path));
+        }
+
+        Ok(Self::legacy_status_folders_by_book_id(&save_dir, book_id)?
+            .into_iter()
+            .next())
+    }
+
+    pub fn migrate_status_folder_to_stable(
+        &self,
+        book_id: &str,
+        save_dir: Option<&Path>,
+    ) -> io::Result<PathBuf> {
+        let save_dir = save_dir
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.default_save_dir());
+        let canonical_path = Self::canonical_status_folder_path(&save_dir, book_id);
+        let legacy_folders = if save_dir.exists() {
+            Self::legacy_status_folders_by_book_id(&save_dir, book_id)?
+        } else {
+            Vec::new()
+        };
+
+        if canonical_path.exists() {
+            if canonical_path.is_dir() {
+                for legacy in legacy_folders {
+                    if legacy != canonical_path {
+                        let _ = merge_dir_contents(&legacy, &canonical_path);
+                    }
+                }
+            }
+            return Ok(canonical_path);
+        }
+
+        let mut legacy_iter = legacy_folders.into_iter();
+        let Some(first_legacy) = legacy_iter.next() else {
+            return Ok(canonical_path);
+        };
+
+        match fs::rename(&first_legacy, &canonical_path) {
+            Ok(_) => {
+                for legacy in legacy_iter {
+                    let _ = merge_dir_contents(&legacy, &canonical_path);
+                }
+                Ok(canonical_path)
+            }
+            Err(_) => Ok(first_legacy),
+        }
+    }
+
+    fn canonical_status_folder_path(save_dir: &Path, book_id: &str) -> PathBuf {
+        let safe_book_id = safe_fs_name(book_id, "_", 120);
+        save_dir.join(safe_book_id)
+    }
+
+    fn legacy_status_folders_by_book_id(
+        save_dir: &Path,
+        book_id: &str,
+    ) -> io::Result<Vec<PathBuf>> {
+        if !save_dir.exists() {
+            return Ok(Vec::new());
+        }
+
         let safe_book_id = safe_fs_name(book_id, "_", 120);
         let prefix = format!("{}_", safe_book_id);
+        let mut folders = Vec::new();
 
-        for entry in fs::read_dir(&save_dir)? {
+        for entry in fs::read_dir(save_dir)? {
             let entry = entry?;
             let path = entry.path();
             if !path.is_dir() {
@@ -560,18 +627,28 @@ impl Config {
             }
 
             if Self::status_folder_has_book_record(&path, book_id) {
-                return Ok(Some(path));
+                folders.push(path);
             }
         }
 
-        Ok(None)
+        folders.sort();
+        Ok(folders)
     }
 
     fn status_folder_has_book_record(path: &Path, book_id: &str) -> bool {
-        path.join("status.json").exists()
-            || path
-                .join(format!("chapter_status_{}.json", book_id))
-                .exists()
+        let status = path.join("status.json");
+        if status.exists() {
+            if let Ok(raw) = fs::read_to_string(&status)
+                && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw)
+                && let Some(id) = value.get("book_id").and_then(|v| v.as_str())
+            {
+                return id == book_id;
+            }
+            return true;
+        }
+
+        path.join(format!("chapter_status_{}.json", book_id))
+            .exists()
             || path.join("downloaded_chapters.jsonl").exists()
     }
 
@@ -644,27 +721,15 @@ impl Config {
 
     pub fn status_folder_path(
         &mut self,
-        book_name: &str,
+        _book_name: &str,
         book_id: &str,
         save_dir: Option<&Path>,
     ) -> io::Result<PathBuf> {
         let save_dir = save_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_save_dir());
-        let safe_book_id = safe_fs_name(book_id, "_", 120);
-        let safe_book_name = safe_fs_name(book_name, "_", 120);
-        let desired_path = save_dir.join(format!("{}_{}", safe_book_id, safe_book_name));
-        let path = if desired_path.exists() {
-            desired_path
-        } else if let Some(existing) =
-            self.find_existing_status_folder_by_book_id(book_id, Some(&save_dir))?
-        {
-            existing
-        } else {
-            fs::create_dir_all(&desired_path)?;
-            desired_path
-        };
-        let existed_before = path.exists();
+        let path = self.migrate_status_folder_to_stable(book_id, Some(&save_dir))?;
+        let existed_before = path.exists() && Self::status_folder_has_book_record(&path, book_id);
         if !path.exists() {
             fs::create_dir_all(&path)?;
         }
@@ -707,6 +772,114 @@ impl Config {
     }
 }
 
+fn merge_dir_contents(src: &Path, dst: &Path) -> io::Result<()> {
+    merge_dir_contents_at_depth(src, dst, true)
+}
+
+fn merge_dir_contents_at_depth(src: &Path, dst: &Path, root_level: bool) -> io::Result<()> {
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if root_level && src_path.is_file() && is_cover_image_file(&src_path) {
+            merge_root_cover_file(&src_path, dst)?;
+            continue;
+        }
+
+        if !dst_path.exists() {
+            if fs::rename(&src_path, &dst_path).is_err() {
+                if src_path.is_dir() {
+                    fs::create_dir_all(&dst_path)?;
+                    merge_dir_contents_at_depth(&src_path, &dst_path, false)?;
+                    let _ = fs::remove_dir_all(&src_path);
+                } else {
+                    fs::copy(&src_path, &dst_path)?;
+                    fs::remove_file(&src_path)?;
+                }
+            }
+            continue;
+        }
+
+        if src_path.is_dir() && dst_path.is_dir() {
+            merge_dir_contents_at_depth(&src_path, &dst_path, false)?;
+            let _ = fs::remove_dir(&src_path);
+        } else if src_path.is_file() && dst_path.is_file() {
+            merge_conflicting_file(&src_path, &dst_path)?;
+        } else if src_path.is_dir() {
+            let _ = fs::remove_dir_all(&src_path);
+        } else {
+            let _ = fs::remove_file(&src_path);
+        }
+    }
+
+    let _ = fs::remove_dir(src);
+    Ok(())
+}
+
+fn is_cover_image_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(OsStr::to_str) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "heic" | "heif"
+    )
+}
+
+fn merge_root_cover_file(src: &Path, dst_folder: &Path) -> io::Result<()> {
+    let ext = src.extension().and_then(OsStr::to_str).unwrap_or("jpg");
+    let canonical = dst_folder.join(format!("cover.{ext}"));
+    if canonical.exists() {
+        fs::remove_file(src)?;
+        return Ok(());
+    }
+
+    if fs::rename(src, &canonical).is_err() {
+        fs::copy(src, &canonical)?;
+        fs::remove_file(src)?;
+    }
+    Ok(())
+}
+
+fn merge_conflicting_file(src: &Path, dst: &Path) -> io::Result<()> {
+    let file_name = src.file_name().and_then(OsStr::to_str).unwrap_or_default();
+
+    if file_name == "downloaded_chapters.jsonl" {
+        let bytes = fs::read(src)?;
+        let mut out = fs::OpenOptions::new().append(true).open(dst)?;
+        if !bytes.is_empty() {
+            out.write_all(b"\n")?;
+            out.write_all(&bytes)?;
+        }
+        fs::remove_file(src)?;
+        return Ok(());
+    }
+
+    if file_name == "status.json" && status_downloaded_count(src) > status_downloaded_count(dst) {
+        fs::copy(src, dst)?;
+    }
+
+    let _ = fs::remove_file(src);
+    Ok(())
+}
+
+fn status_downloaded_count(path: &Path) -> usize {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return 0;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return 0;
+    };
+    value
+        .get("downloaded")
+        .and_then(|v| v.as_object())
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -714,7 +887,7 @@ mod tests {
     };
 
     #[test]
-    fn status_folder_path_reuses_existing_folder_when_only_book_name_changes() {
+    fn status_folder_path_migrates_legacy_folder_when_only_book_name_changes() {
         let temp_dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.save_path = temp_dir.path().display().to_string();
@@ -724,8 +897,37 @@ mod tests {
         std::fs::write(old_folder.join("status.json"), "{}\n").unwrap();
 
         let resolved = config.status_folder_path("新书名", "123", None).unwrap();
-        assert_eq!(resolved, old_folder);
+        let stable_folder = temp_dir.path().join("123");
+        assert_eq!(resolved, stable_folder);
+        assert!(stable_folder.join("status.json").exists());
+        assert!(!old_folder.exists());
         assert!(!temp_dir.path().join("123_新书名").exists());
+    }
+
+    #[test]
+    fn status_folder_path_merges_legacy_status_into_preview_cover_folder() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+
+        let preview_folder = temp_dir.path().join("123");
+        std::fs::create_dir_all(&preview_folder).unwrap();
+        std::fs::write(preview_folder.join("cover.jpg"), b"cover").unwrap();
+
+        let old_folder = temp_dir.path().join("123_旧书名");
+        std::fs::create_dir_all(&old_folder).unwrap();
+        std::fs::write(
+            old_folder.join("status.json"),
+            r#"{"book_id":"123","downloaded":{"1":["第一章","内容"]}}"#,
+        )
+        .unwrap();
+
+        let resolved = config.status_folder_path("新书名", "123", None).unwrap();
+
+        assert_eq!(resolved, preview_folder);
+        assert!(preview_folder.join("cover.jpg").exists());
+        assert!(preview_folder.join("status.json").exists());
+        assert!(!old_folder.exists());
     }
 
     #[test]

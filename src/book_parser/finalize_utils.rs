@@ -3,7 +3,7 @@
 //! 包括写入最终文件、自动打开产物等"完成后"逻辑。
 //! 具体子模块：`finalize_epub`、`html_utils`、`image_utils`、`segment_comments`、`segment_shared`。
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,8 +44,12 @@ pub fn run_finalize(
         && let Some(chosen) = prompt_book_name_selection(manager)
     {
         info!(target: "book_manager", "用户选择书名: {}", chosen);
+        let old_name = manager.book_name.clone();
         manager.book_name = chosen;
         manager.book_name_selected_after_download = true;
+        if old_name != manager.book_name {
+            manager.remember_previous_book_name(&old_name);
+        }
     }
 
     // "下载完后选择格式"：在生成文件前询问用户选择输出格式（仅 CLI 模式兜底）
@@ -86,6 +90,8 @@ pub fn run_finalize(
         return false;
     }
 
+    archive_previous_main_outputs(manager, &output_path);
+
     info!(target: "book_manager", "written: {}", output_path.display());
 
     if manager.config.auto_open_downloaded_files {
@@ -107,15 +113,18 @@ pub fn run_finalize(
         #[allow(clippy::needless_option_as_deref)]
         reporter.as_deref_mut()
     };
-    if !generate_audiobook(
+    let audiobook_ok = generate_audiobook(
         manager,
         chapters,
         audiobook_bar.as_ref(),
         quiet,
         reporter_ref,
         cancel,
-    ) {
+    );
+    if !audiobook_ok {
         warn!(target: "book_manager", "audiobook generation failed");
+    } else if manager.config.enable_audiobook {
+        archive_previous_audiobook_outputs(manager);
     }
 
     true
@@ -165,6 +174,131 @@ fn prepare_output_path(manager: &BookManager, fmt: &str) -> std::io::Result<Path
     }
 
     Ok(output_path)
+}
+
+fn archive_previous_main_outputs(manager: &BookManager, output_path: &Path) {
+    if manager.previous_book_names.is_empty() {
+        return;
+    }
+
+    let Some(dir) = output_path.parent() else {
+        return;
+    };
+    let current_name = output_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let current_base = output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(current_name);
+    let output_path = output_path.to_path_buf();
+    let mut seen = HashSet::new();
+
+    for old_name in &manager.previous_book_names {
+        let safe_old = safe_fs_name(old_name, "_", 120);
+        if safe_old.is_empty() || safe_old == current_base || !seen.insert(safe_old.clone()) {
+            continue;
+        }
+
+        let candidates = [
+            (dir.join(format!("{safe_old}.epub")), "旧 EPUB"),
+            (dir.join(format!("{safe_old}.txt")), "旧 TXT"),
+            (dir.join(format!("{safe_old}.pdf")), "旧 PDF"),
+            (dir.join(&safe_old), "旧 bulk TXT 目录"),
+        ];
+
+        for (candidate, label) in candidates {
+            if candidate == output_path || (!candidate.is_file() && !candidate.is_dir()) {
+                continue;
+            }
+            archive_candidate(dir, &candidate, label);
+        }
+    }
+}
+
+fn archive_previous_audiobook_outputs(manager: &BookManager) {
+    if manager.previous_book_names.is_empty() {
+        return;
+    }
+
+    let dir = manager.default_save_dir();
+    let current_name = if manager.book_name.trim().is_empty() {
+        manager.book_id.as_str()
+    } else {
+        manager.book_name.as_str()
+    };
+    let current_safe = safe_fs_name(current_name, "_", 120);
+    let current_audio_dir = dir.join(format!("{current_safe}_audio"));
+    let mut seen = HashSet::new();
+
+    for old_name in &manager.previous_book_names {
+        let safe_old = safe_fs_name(old_name, "_", 120);
+        if safe_old.is_empty() || safe_old == current_safe || !seen.insert(safe_old.clone()) {
+            continue;
+        }
+
+        let candidate = dir.join(format!("{safe_old}_audio"));
+        if candidate == current_audio_dir || !candidate.is_dir() {
+            continue;
+        }
+        archive_candidate(&dir, &candidate, "旧有声书目录");
+    }
+}
+
+fn archive_candidate(base_dir: &Path, candidate: &Path, label: &str) {
+    let olds_dir = base_dir.join("olds");
+    if candidate == olds_dir {
+        return;
+    }
+
+    if let Err(e) = fs::create_dir_all(&olds_dir) {
+        warn!(target: "book_manager", error = ?e, dir = %olds_dir.display(), "创建 olds 目录失败，跳过旧输出归档");
+        return;
+    }
+
+    let archive_path = unique_archive_path(&olds_dir, candidate);
+    match fs::rename(candidate, &archive_path) {
+        Ok(_) => info!(
+            target: "book_manager",
+            kind = label,
+            old = %candidate.display(),
+            archived = %archive_path.display(),
+            "检测到书名变化，已归档旧输出"
+        ),
+        Err(e) => warn!(
+            target: "book_manager",
+            kind = label,
+            error = ?e,
+            old = %candidate.display(),
+            archived = %archive_path.display(),
+            "旧输出归档失败"
+        ),
+    }
+}
+
+fn unique_archive_path(olds_dir: &Path, src: &Path) -> PathBuf {
+    let file_name = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("old.epub");
+    let first = olds_dir.join(file_name);
+    if !first.exists() {
+        return first;
+    }
+
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("old");
+    let ext = src.extension().and_then(|s| s.to_str());
+    for idx in 1.. {
+        let candidate = match ext {
+            Some(ext) if !ext.is_empty() => olds_dir.join(format!("{stem}_{idx}.{ext}")),
+            _ => olds_dir.join(format!("{stem}_{idx}")),
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 fn finalize_txt(
@@ -737,4 +871,98 @@ fn prompt_format_selection(manager: &BookManager) -> Option<String> {
         return None;
     }
     Some(chosen)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        archive_previous_audiobook_outputs, archive_previous_main_outputs, prepare_output_path,
+    };
+    use crate::base_system::context::Config;
+    use crate::book_parser::book_manager::BookManager;
+
+    #[test]
+    fn archive_previous_named_outputs_when_book_name_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+        config.novel_format = "epub".to_string();
+
+        let mut manager = BookManager::new(config, "123", "新书名").unwrap();
+        manager.book_id = "123".to_string();
+        manager.book_name = "新书名".to_string();
+        manager.remember_previous_book_name("旧书名");
+
+        let old_epub = temp_dir.path().join("旧书名.epub");
+        let old_txt = temp_dir.path().join("旧书名.txt");
+        let old_pdf = temp_dir.path().join("旧书名.pdf");
+        let old_bulk = temp_dir.path().join("旧书名");
+        std::fs::write(&old_epub, b"old").unwrap();
+        std::fs::write(&old_txt, b"old txt").unwrap();
+        std::fs::write(&old_pdf, b"old pdf").unwrap();
+        std::fs::create_dir_all(&old_bulk).unwrap();
+        std::fs::write(old_bulk.join("0001.txt"), b"old bulk").unwrap();
+
+        let output_path = prepare_output_path(&manager, "epub").unwrap();
+        assert_eq!(output_path, temp_dir.path().join("新书名.epub"));
+        std::fs::write(&output_path, b"new").unwrap();
+
+        archive_previous_main_outputs(&manager, &output_path);
+
+        assert!(output_path.exists());
+        assert!(!old_epub.exists());
+        assert!(!old_txt.exists());
+        assert!(!old_pdf.exists());
+        assert!(!old_bulk.exists());
+        assert!(temp_dir.path().join("olds").join("旧书名.epub").exists());
+        assert!(temp_dir.path().join("olds").join("旧书名.txt").exists());
+        assert!(temp_dir.path().join("olds").join("旧书名.pdf").exists());
+        assert!(temp_dir.path().join("olds").join("旧书名").exists());
+    }
+
+    #[test]
+    fn keep_same_name_outputs_on_normal_overwrite_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+        config.novel_format = "epub".to_string();
+
+        let mut manager = BookManager::new(config, "123", "同书名").unwrap();
+        manager.book_id = "123".to_string();
+        manager.book_name = "同书名".to_string();
+        manager.remember_previous_book_name("同书名");
+
+        let output_path = prepare_output_path(&manager, "epub").unwrap();
+        std::fs::write(&output_path, b"new").unwrap();
+
+        archive_previous_main_outputs(&manager, &output_path);
+
+        assert!(output_path.exists());
+        assert!(!temp_dir.path().join("olds").exists());
+    }
+
+    #[test]
+    fn archive_previous_audiobook_dir_when_book_name_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.save_path = temp_dir.path().display().to_string();
+        config.enable_audiobook = true;
+
+        let mut manager = BookManager::new(config, "123", "新书名").unwrap();
+        manager.book_id = "123".to_string();
+        manager.book_name = "新书名".to_string();
+        manager.remember_previous_book_name("旧书名");
+
+        let old_audio = temp_dir.path().join("旧书名_audio");
+        let current_audio = temp_dir.path().join("新书名_audio");
+        std::fs::create_dir_all(&old_audio).unwrap();
+        std::fs::write(old_audio.join("0001.mp3"), b"old audio").unwrap();
+        std::fs::create_dir_all(&current_audio).unwrap();
+
+        archive_previous_audiobook_outputs(&manager);
+
+        assert!(current_audio.exists());
+        assert!(!old_audio.exists());
+        assert!(temp_dir.path().join("olds").join("旧书名_audio").exists());
+    }
 }

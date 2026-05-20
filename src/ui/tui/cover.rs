@@ -84,37 +84,29 @@ fn cover_candidates(
     folder: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let safe_title = safe_fs_name(title, "_", 120);
 
     if let Some(base) = folder.as_ref() {
-        push_cover_candidates(&mut paths, base, title, &safe_title);
+        push_cover_candidates(&mut paths, base, title);
     }
 
     if let Some(status) = app.config.get_status_folder_path() {
-        push_cover_candidates(&mut paths, &status, title, &safe_title);
+        push_cover_candidates(&mut paths, &status, title);
     }
 
-    let default_folder = app
-        .config
-        .default_save_dir()
-        .join(format!("{}_{}", book_id, safe_title));
-    push_cover_candidates(&mut paths, &default_folder, title, &safe_title);
+    let default_folder =
+        app.config
+            .default_save_dir()
+            .join(crate::base_system::book_paths::book_folder_name(
+                book_id,
+                Some(title),
+            ));
+    push_cover_candidates(&mut paths, &default_folder, title);
 
     paths
 }
 
-fn push_cover_candidates(list: &mut Vec<PathBuf>, base: &Path, title: &str, safe_title: &str) {
-    let names = [
-        format!("{safe_title}.jpg"),
-        format!("{safe_title}.png"),
-        format!("{}.jpg", title),
-        format!("{}.png", title),
-        "cover.jpg".to_string(),
-        "cover.png".to_string(),
-    ];
-
-    for name in names {
-        let path = base.join(&name);
+fn push_cover_candidates(list: &mut Vec<PathBuf>, base: &Path, title: &str) {
+    for path in crate::base_system::book_paths::cover_file_candidates(base, Some(title)) {
         if !list.contains(&path) {
             list.push(path);
         }

@@ -164,6 +164,7 @@ pub(super) fn apply_download_done(app: &mut App, book_id: String, result: Result
         Err(err) => {
             app.status = format!("下载失败: {err}");
             app.push_message(format!("下载失败: {err}"));
+            super::maybe_show_iid_failure(app, err.to_string());
             warn!(target: "ui", book_id = %book_id, "下载失败: {err}");
             app.pending_download = None;
             app.preview_range.clear();

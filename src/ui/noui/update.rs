@@ -1,5 +1,6 @@
 //! 无 UI 的更新检查与提示。
 
+use std::io::{self, Write};
 use std::path::Path;
 
 use crate::base_system::novel_updates;
@@ -100,21 +101,56 @@ fn select_from_list(list: &[UpdateEntry], title: &str) -> Result<Option<String>>
 }
 
 fn scan_updates(_config: &Config, save_dir: &Path) -> Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)> {
-    let scan = novel_updates::scan_novel_updates(save_dir)?;
-
-    let to_entry = |it: novel_updates::NovelUpdateRow| {
-        let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
-        UpdateEntry {
-            book_id: it.book_id.clone(),
-            label: format!(
-                "{}《{}》({}) — 新章节：{}",
-                ignore_marker, it.book_name, it.book_id, it.new_count
-            ),
+    println!("开始扫描更新（会边检查边显示结果）…");
+    let scan = novel_updates::scan_novel_updates_with_progress(save_dir, |progress| {
+        let row = progress.row;
+        print!(
+            "\r已检查 {}/{}，当前：《{}》({})      ",
+            progress.scanned, progress.total, row.book_name, row.book_id
+        );
+        let _ = io::stdout().flush();
+        if row.has_update && !row.is_ignored {
+            println!("\n发现更新：{}", update_label(&row));
         }
+    })?;
+    println!(
+        "\r扫描完成：有更新 {} 本，无更新 {} 本      ",
+        scan.updates.len(),
+        scan.no_updates.len()
+    );
+
+    let to_entry = |it: novel_updates::NovelUpdateRow| UpdateEntry {
+        book_id: it.book_id.clone(),
+        label: update_label(&it),
     };
 
     Ok((
         scan.updates.into_iter().map(to_entry).collect(),
         scan.no_updates.into_iter().map(to_entry).collect(),
     ))
+}
+
+fn update_label(it: &novel_updates::NovelUpdateRow) -> String {
+    let ignore_marker = if it.is_ignored { "[已忽略] " } else { "" };
+    if it.new_count > 0 && it.local_failed > 0 {
+        format!(
+            "{}《{}》({}) — 新章节：{} | 失败章节：{}",
+            ignore_marker, it.book_name, it.book_id, it.new_count, it.local_failed
+        )
+    } else if it.new_count > 0 {
+        format!(
+            "{}《{}》({}) — 新章节：{}",
+            ignore_marker, it.book_name, it.book_id, it.new_count
+        )
+    } else if it.local_failed > 0 {
+        format!(
+            "{}《{}》({}) — 失败章节：{}",
+            ignore_marker, it.book_name, it.book_id, it.local_failed
+        )
+    } else {
+        format!(
+            "{}《{}》({}) — 新章节：0",
+            ignore_marker, it.book_name, it.book_id
+        )
+    }
 }

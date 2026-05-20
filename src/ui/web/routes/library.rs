@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -6,25 +8,15 @@ use axum::extract::{Query, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::ui::web::state::AppState;
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct LibraryItem {
-    kind: String,
-    name: String,
-    rel_path: String,
-    ext: String,
-    size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    file_count: Option<u64>,
-    modified_ms: Option<u64>,
-}
+use crate::ui::web::state::{AppState, LibraryScanRow, LibraryScanStore};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LibraryQuery {
     pub(crate) path: Option<String>,
     /// 按文件名/文件夹名关键词模糊过滤（忽略大小写）
     pub(crate) name: Option<String>,
+    /// 是否启动一次新扫描。默认 true；轮询/启动预缓存时会传 false。
+    pub(crate) start: Option<bool>,
 }
 
 pub(crate) async fn api_library(
@@ -32,13 +24,22 @@ pub(crate) async fn api_library(
     Query(q): Query<LibraryQuery>,
 ) -> Json<Value> {
     let base = state.library_root.clone();
-    let base_for_task = base.clone();
-    let rel = q.path.unwrap_or_default();
-    let rel_for_task = rel.clone();
-    let mut items =
-        tokio::task::spawn_blocking(move || scan_library(&base_for_task, &rel_for_task))
-            .await
-            .unwrap_or_default();
+    let rel = normalize_rel(q.path.unwrap_or_default());
+    let should_start = q.start.unwrap_or(true) || state.library_scan.snapshot(&rel).is_none();
+
+    if should_start {
+        spawn_library_scan(
+            base.as_ref().clone(),
+            rel.clone(),
+            state.library_scan.clone(),
+        );
+    }
+
+    let snapshot = state
+        .library_scan
+        .snapshot(&rel)
+        .unwrap_or_else(|| empty_snapshot(rel.clone()));
+    let mut items = snapshot.items;
 
     if let Some(ref kw) = q.name {
         let kw_lower = kw.to_lowercase();
@@ -47,167 +48,134 @@ pub(crate) async fn api_library(
 
     Json(json!({
         "root": base.to_string_lossy(),
-        "path": rel,
+        "path": snapshot.path,
         "items": items,
+        "running": snapshot.running,
+        "scanned": snapshot.scanned,
+        "error": snapshot.error,
+        "started_ms": snapshot.started_ms,
+        "updated_ms": snapshot.updated_ms,
     }))
+}
+
+pub(crate) fn spawn_library_scan(root: PathBuf, rel: String, store: Arc<LibraryScanStore>) {
+    let rel = normalize_rel(rel);
+    if !store.try_start(rel.clone()) {
+        return;
+    }
+
+    thread::spawn(move || {
+        if let Err(err) = scan_library_streaming(&root, &rel, &store) {
+            store.finish_failed(&rel, err.to_string());
+        }
+    });
+}
+
+fn normalize_rel(rel: String) -> String {
+    rel.replace('\\', "/").trim_matches('/').to_string()
+}
+
+fn empty_snapshot(path: String) -> crate::ui::web::state::LibraryScanInfo {
+    crate::ui::web::state::LibraryScanInfo {
+        path,
+        running: false,
+        scanned: 0,
+        items: Vec::new(),
+        error: None,
+        started_ms: 0,
+        updated_ms: 0,
+    }
 }
 
 fn is_allowed_ext(ext: &str) -> bool {
     matches!(ext, "epub" | "txt" | "mp3" | "wav")
 }
 
-fn scan_library(root: &Path, rel: &str) -> Vec<LibraryItem> {
-    let mut out = Vec::new();
-    let Ok(root_canon) = std::fs::canonicalize(root) else {
-        return out;
-    };
+fn scan_library_streaming(root: &Path, rel: &str, store: &LibraryScanStore) -> std::io::Result<()> {
+    let root_canon = std::fs::canonicalize(root)?;
 
     let target = if rel.trim().is_empty() {
         root_canon.clone()
     } else {
         let joined = root_canon.join(rel);
-        let Ok(canon) = std::fs::canonicalize(&joined) else {
-            return out;
-        };
+        let canon = std::fs::canonicalize(&joined)?;
         if !canon.starts_with(&root_canon) {
-            return out;
+            store.finish(rel, Vec::new());
+            return Ok(());
         }
         canon
     };
 
-    let _ = list_level(&root_canon, &target, &mut out);
-    out.sort_by(|a, b| {
-        b.modified_ms
-            .cmp(&a.modified_ms)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    out
-}
-
-fn list_level(root: &Path, dir: &Path, out: &mut Vec<LibraryItem>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
+    let mut items = Vec::new();
+    let mut scanned = 0usize;
+    for entry in std::fs::read_dir(&target)? {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
         let path = entry.path();
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(_) => continue,
         };
 
-        if meta.is_dir() {
-            // 不把文件夹下内容全部递归平铺出来；改为“文件夹汇总”。
-            if let Some(sum) = summarize_dir(&path) {
-                let rel = path.strip_prefix(root).unwrap_or(&path);
-                let rel_path = rel.to_string_lossy().replace('\\', "/");
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&rel_path)
-                    .to_string();
-
-                out.push(LibraryItem {
-                    kind: "dir".to_string(),
-                    name,
-                    rel_path,
-                    ext: String::new(),
-                    size: sum.total_size,
-                    file_count: Some(sum.file_count),
-                    modified_ms: sum.latest_modified_ms,
-                });
-            }
+        let Some(item) = item_from_entry(&root_canon, &path, &meta) else {
             continue;
-        }
+        };
+        scanned += 1;
+        store.push_item(rel, item.clone(), scanned);
+        items.push(item);
+    }
 
-        if !meta.is_file() {
-            continue;
-        }
+    store.finish(rel, items);
+    Ok(())
+}
 
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !is_allowed_ext(&ext) {
-            continue;
-        }
+fn item_from_entry(root: &Path, path: &Path, meta: &std::fs::Metadata) -> Option<LibraryScanRow> {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    let rel_path = rel.to_string_lossy().replace('\\', "/");
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&rel_path)
+        .to_string();
+    let modified_ms = meta.modified().ok().and_then(system_time_ms);
 
-        let rel = path.strip_prefix(root).unwrap_or(&path);
-        let rel_path = rel.to_string_lossy().replace('\\', "/");
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&rel_path)
-            .to_string();
-
-        let modified_ms = meta.modified().ok().and_then(system_time_ms);
-
-        out.push(LibraryItem {
-            kind: "file".to_string(),
+    if meta.is_dir() {
+        return Some(LibraryScanRow {
+            kind: "dir".to_string(),
             name,
             rel_path,
-            ext,
-            size: meta.len(),
+            ext: String::new(),
+            // 不再逐个目录统计子文件，避免书很多时根目录读取被每本书的子目录 IO 放大。
+            size: 0,
             file_count: None,
             modified_ms,
         });
     }
-    Ok(())
-}
 
-#[derive(Debug, Clone, Copy)]
-struct DirSummary {
-    file_count: u64,
-    total_size: u64,
-    latest_modified_ms: Option<u64>,
-}
-
-fn summarize_dir(dir: &Path) -> Option<DirSummary> {
-    let mut sum = DirSummary {
-        file_count: 0,
-        total_size: 0,
-        latest_modified_ms: None,
-    };
-    let _ = walk_dir_summary(dir, &mut sum);
-    if sum.file_count == 0 { None } else { Some(sum) }
-}
-
-fn walk_dir_summary(dir: &Path, sum: &mut DirSummary) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        if meta.is_dir() {
-            let _ = walk_dir_summary(&path, sum);
-            continue;
-        }
-
-        if !meta.is_file() {
-            continue;
-        }
-
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !is_allowed_ext(&ext) {
-            continue;
-        }
-
-        sum.file_count += 1;
-        sum.total_size = sum.total_size.saturating_add(meta.len());
-
-        if let Some(ms) = meta.modified().ok().and_then(system_time_ms) {
-            sum.latest_modified_ms = match sum.latest_modified_ms {
-                Some(prev) => Some(prev.max(ms)),
-                None => Some(ms),
-            };
-        }
+    if !meta.is_file() {
+        return None;
     }
-    Ok(())
+
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !is_allowed_ext(&ext) {
+        return None;
+    }
+
+    Some(LibraryScanRow {
+        kind: "file".to_string(),
+        name,
+        rel_path,
+        ext,
+        size: meta.len(),
+        file_count: None,
+        modified_ms,
+    })
 }
 
 fn system_time_ms(t: SystemTime) -> Option<u64> {

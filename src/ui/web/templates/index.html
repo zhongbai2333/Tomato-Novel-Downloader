@@ -101,6 +101,11 @@
 
             {{FREE_NOTICE_MOBILE}}
 
+            <div id="iidWarningBanner" class="card hidden card-accent-left">
+                <h3>IID 注册失败：请检查网络拦截</h3>
+                <div id="iidWarningBannerBody" class="small text-pre-wrap"></div>
+            </div>
+
             <div id="appUpdateBanner" class="card hidden card-accent-left">
                 <h3>发现新版本</h3>
                 <div class="row"><span class="k">最新版本</span><code id="appUpdateLatest">loading</code></div>
@@ -251,6 +256,7 @@
                     <span class="k">当前路径</span>
                     <code id="libPath">/</code>
                     <button id="libBack" type="button" class="sm">返回上级</button>
+                    <span id="libHint" class="k">loading</span>
                 </div>
             </div>
 
@@ -356,6 +362,24 @@
                 <button type="submit" class="primary">登录</button>
             </form>
             <div id="loginMsg" class="error mt-10"></div>
+        </div>
+    </div>
+
+    <!-- ===== IID Warning Modal ===== -->
+    <div id="iidWarningModal" class="modal hidden">
+        <div class="modalCard">
+            <div class="modalHeader">
+                <h3>IID 注册失败：可能被反广告/校园网拦截</h3>
+                <button id="iidWarningClose" type="button" class="sm">关闭</button>
+            </div>
+            <p class="k mb-16">番茄官方接口需要先注册 IID。如果这里失败，后续搜索、预览或下载可能会异常。</p>
+            <div id="iidWarningBody" class="error text-pre-wrap mb-16"></div>
+            <div class="small text-pre-wrap">
+                建议：将 <code>log.snssdk.com</code> 加入 AdGuard / uBlock / 代理规则 / DNS 过滤 / 公司或校园网网关的放行列表，或临时关闭相关拦截后重试。
+            </div>
+            <div class="row justify-end mb-0 mt-16">
+                <button id="iidWarningOk" type="button" class="primary">我知道了</button>
+            </div>
         </div>
     </div>
 

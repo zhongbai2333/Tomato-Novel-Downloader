@@ -2,6 +2,7 @@
 
 let loginPromise = null;
 let isDockerBuild = false;
+let lastIidWarningMessage = null;
 
 function fetchWithCreds(url, opts) {
   return fetch(url, { credentials: 'same-origin', ...(opts || {}) });
@@ -75,6 +76,30 @@ function showLogin(show) {
   }
 }
 
+function showIidWarningModal(show, message = '') {
+  const modal = document.getElementById('iidWarningModal');
+  if (!modal) return;
+  const body = document.getElementById('iidWarningBody');
+  if (body && message) body.textContent = message;
+  modal.classList.toggle('hidden', !show);
+  document.body.style.overflow = show ? 'hidden' : '';
+}
+
+function maybeShowIidWarning(message) {
+  const text = (message || '').toString().trim();
+  if (!text || lastIidWarningMessage === text) return;
+  lastIidWarningMessage = text;
+  showIidWarningModal(true, text);
+}
+
+function maybeShowIidWarningFromError(message) {
+  const text = (message || '').toString();
+  const lower = text.toLowerCase();
+  if (lower.includes('iid') || lower.includes('log.snssdk.com') || lower.includes('device_register')) {
+    maybeShowIidWarning(text);
+  }
+}
+
 async function requireLogin() {
   if (loginPromise) return loginPromise;
 
@@ -118,14 +143,18 @@ async function j(url, opts) {
     const res2 = await fetchWithCreds(url, opts);
     if (!res2.ok) {
       const text = await res2.text().catch(() => '');
-      throw new Error(`${res2.status} ${res2.statusText}${text ? `: ${text}` : ''}`);
+      const message = `${res2.status} ${res2.statusText}${text ? `: ${text}` : ''}`;
+      maybeShowIidWarningFromError(message);
+      throw new Error(message);
     }
     const ct2 = res2.headers.get('content-type') || '';
     return ct2.includes('application/json') ? res2.json() : res2.text();
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`);
+    const message = `${res.status} ${res.statusText}${text ? `: ${text}` : ''}`;
+    maybeShowIidWarningFromError(message);
+    throw new Error(message);
   }
   const ct = res.headers.get('content-type') || '';
   return ct.includes('application/json') ? res.json() : res.text();
@@ -392,6 +421,7 @@ async function refreshAppUpdate(manual) {
 // ── Status ─────────────────────────────────────────────────────────
 
 let libraryPath = '';
+let libraryPollTimer = null;
 let pendingBookNameJobId = null;
 let pendingBookNameOptions = [];
 let pendingFormatJobId = null;
@@ -400,10 +430,18 @@ let pendingFormatOptions = [];
 async function refreshStatus() {
   const data = await j('/api/status');
   document.getElementById('version').textContent = data.version || '';
-  document.getElementById('prewarm').textContent = data.prewarm_in_progress ? 'warming' : 'ready';
+  const prewarmError = (data.prewarm_error || '').toString();
+  document.getElementById('prewarm').textContent = prewarmError
+    ? 'failed'
+    : (data.prewarm_in_progress ? 'warming' : 'ready');
   document.getElementById('saveDir').textContent = data.save_dir || '';
   document.getElementById('bind').textContent = data.bind_addr || '';
   document.getElementById('locked').textContent = data.locked ? 'locked' : 'unlocked';
+  const iidBanner = document.getElementById('iidWarningBanner');
+  const iidBannerBody = document.getElementById('iidWarningBannerBody');
+  if (iidBanner) iidBanner.classList.toggle('hidden', !prewarmError);
+  if (iidBannerBody && prewarmError) iidBannerBody.textContent = prewarmError;
+  if (prewarmError) maybeShowIidWarning(prewarmError);
   isDockerBuild = !!data.docker_build;
   applyDockerUpdateUi();
 }
@@ -724,16 +762,44 @@ async function saveFullConfig() {
 
 // ── Library ────────────────────────────────────────────────────────
 
-async function refreshLibrary() {
-  const qs = libraryPath ? `?path=${encodeURIComponent(libraryPath)}` : '';
+function scheduleLibraryPoll() {
+  if (libraryPollTimer) clearTimeout(libraryPollTimer);
+  libraryPollTimer = setTimeout(() => {
+    libraryPollTimer = null;
+    refreshLibrary(false).catch(() => {});
+  }, 700);
+}
+
+async function refreshLibrary(start = true) {
+  if (start && libraryPollTimer) {
+    clearTimeout(libraryPollTimer);
+    libraryPollTimer = null;
+  }
+
+  const params = new URLSearchParams();
+  if (libraryPath) params.set('path', libraryPath);
+  params.set('start', start ? 'true' : 'false');
+  const qs = params.toString() ? `?${params.toString()}` : '';
   const data = await j(`/api/library${qs}`);
   const items = data.items || [];
   libraryPath = (data.path || '').toString();
+  const running = !!data.running;
+  const scanned = Number(data.scanned || items.length || 0);
 
   const pathLabel = document.getElementById('libPath');
   const backBtn = document.getElementById('libBack');
+  const hint = document.getElementById('libHint');
   if (pathLabel) pathLabel.textContent = libraryPath ? `/${libraryPath}` : '/';
   if (backBtn) backBtn.disabled = !libraryPath;
+  if (hint) {
+    if (data.error) {
+      hint.textContent = `读取失败：${data.error}`;
+    } else if (running) {
+      hint.textContent = `分批读取中，已发现 ${items.length} 项 / 已检查 ${scanned} 项`;
+    } else {
+      hint.textContent = `共 ${items.length} 项`;
+    }
+  }
 
   const tbody = document.getElementById('libraryBody');
   tbody.innerHTML = '';
@@ -746,7 +812,7 @@ async function refreshLibrary() {
     const hrefFile = `/download/${encodedRel}`;
     const hrefZip = `/download-zip/${encodedRel}`;
     const sizeText = kind === 'dir'
-      ? `${fmtBytes(it.size)} (${Number(it.file_count || 0)} 文件)`
+      ? (it.file_count == null ? '文件夹' : `${fmtBytes(it.size)} (${Number(it.file_count || 0)} 文件)`)
       : fmtBytes(it.size);
     const timeText = fmtTime(it.modified_ms);
 
@@ -767,8 +833,17 @@ async function refreshLibrary() {
     }
     tbody.appendChild(tr);
   }
+
   if (items.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无文件，先下载一本书吧</td></tr>';
+    if (running) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">正在分批读取下载库，结果会陆续出现…</td></tr>';
+    } else {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">暂无文件，先下载一本书吧</td></tr>';
+    }
+  }
+
+  if (running) {
+    scheduleLibraryPoll();
   }
 }
 
@@ -1044,6 +1119,7 @@ async function refreshJobs() {
     // Determine effective visual state
     let vState = (it.state || '').toLowerCase();
     if (vState === 'done' && total > 0 && saved < total) vState = 'partial';
+    if (vState === 'failed' && it.message) maybeShowIidWarningFromError(it.message);
 
     // Row class & CSS custom property for progress gradient
     tr.className = 'job-row state-' + vState;
@@ -1095,7 +1171,7 @@ async function refreshJobs() {
     tbody.appendChild(tr);
   }
   if ((data.items || []).length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无任务</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">暂无任务（已完成超过 2 小时会自动隐藏）</td></tr>';
   }
 }
 
@@ -1143,20 +1219,48 @@ async function refreshHistory() {
 
 // ── Updates ────────────────────────────────────────────────────────
 
-async function refreshUpdates() {
+let updatesPollTimer = null;
+
+function scheduleUpdatesPoll() {
+  if (updatesPollTimer) clearTimeout(updatesPollTimer);
+  updatesPollTimer = setTimeout(() => {
+    updatesPollTimer = null;
+    refreshUpdates(false).catch(() => {});
+  }, 1000);
+}
+
+async function refreshUpdates(start = true) {
   const hint = document.getElementById('updatesHint');
   const tbody = document.getElementById('updatesBody');
   if (!tbody) return;
 
-  if (hint) hint.textContent = '扫描中…';
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="7">加载中…</td></tr>';
+  if (start && updatesPollTimer) {
+    clearTimeout(updatesPollTimer);
+    updatesPollTimer = null;
+  }
+  if (start) {
+    if (hint) hint.textContent = '扫描中…';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">启动扫描中…</td></tr>';
+  }
 
-  const data = await j('/api/updates');
+  const data = await j(start ? '/api/updates' : '/api/updates?start=false');
   const updates = data.updates || [];
   const noUpdates = data.no_updates || [];
   const total = updates.length + noUpdates.length;
+  const scanned = Number(data.scanned || total || 0);
+  const expectedTotal = Number(data.total || total || 0);
+  const running = !!data.running;
 
-  if (hint) hint.textContent = `可更新 ${updates.length} 本 / 无更新 ${noUpdates.length} 本 / 总计 ${total} 本`;
+  if (hint) {
+    if (data.error) {
+      hint.textContent = `扫描失败：${data.error}`;
+    } else if (running) {
+      const progress = expectedTotal > 0 ? `${scanned}/${expectedTotal}` : `${scanned}`;
+      hint.textContent = `扫描中 ${progress}，可更新 ${updates.length} 本 / 无更新 ${noUpdates.length} 本`;
+    } else {
+      hint.textContent = `可更新 ${updates.length} 本 / 无更新 ${noUpdates.length} 本 / 总计 ${total} 本`;
+    }
+  }
 
   tbody.innerHTML = '';
   for (const it of updates) {
@@ -1173,7 +1277,16 @@ async function refreshUpdates() {
     tbody.appendChild(tr);
   }
   if (updates.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无可更新的小说</td></tr>';
+    if (running) {
+      const text = scanned > 0 ? `已检查 ${scanned} 本，暂未发现可更新小说，继续扫描中…` : '扫描中，结果会自动出现…';
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${esc(text)}</td></tr>`;
+    } else {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无可更新的小说</td></tr>';
+    }
+  }
+
+  if (running) {
+    scheduleUpdatesPoll();
   }
 }
 
@@ -1583,6 +1696,11 @@ function wire() {
         hideFormatModal();
         return;
       }
+      const iidWarningModal = document.getElementById('iidWarningModal');
+      if (iidWarningModal && !iidWarningModal.classList.contains('hidden')) {
+        showIidWarningModal(false);
+        return;
+      }
       const loginModal = document.getElementById('loginModal');
       if (loginModal && !loginModal.classList.contains('hidden')) {
         showLogin(false);
@@ -1622,6 +1740,11 @@ function wire() {
 
   const formatClose = document.getElementById('formatClose');
   if (formatClose) formatClose.addEventListener('click', () => hideFormatModal());
+
+  const iidWarningClose = document.getElementById('iidWarningClose');
+  if (iidWarningClose) iidWarningClose.addEventListener('click', () => showIidWarningModal(false));
+  const iidWarningOk = document.getElementById('iidWarningOk');
+  if (iidWarningOk) iidWarningOk.addEventListener('click', () => showIidWarningModal(false));
 }
 
 function highlightLibraryItem(title) {
@@ -1643,14 +1766,16 @@ function highlightLibraryItem(title) {
 async function boot() {
   wire();
   await refreshStatus();
-  if (!isDockerBuild) await refreshAppUpdate(false).catch(() => {});
   await refreshConfig();
   await refreshRawConfig();
-  await refreshUpdates();
-  await refreshJobs();
-  await refreshHistory();
-  await refreshLibrary();
-  await pollSelfUpdateStatus();
+  await Promise.allSettled([
+    refreshJobs(),
+    refreshHistory(),
+    refreshLibrary(false),
+  ]);
+  refreshUpdates().catch(() => {});
+  if (!isDockerBuild) refreshAppUpdate(false).catch(() => {});
+  pollSelfUpdateStatus().catch(() => {});
   setInterval(() => refreshJobs().catch(() => {}), 1500);
   setInterval(() => refreshStatus().catch(() => {}), 5000);
   if (!isDockerBuild) {

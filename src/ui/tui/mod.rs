@@ -48,7 +48,7 @@ mod update;
 use history::show_history_menu;
 use update::show_update_menu;
 
-use crate::base_system::context::{Config, safe_fs_name};
+use crate::base_system::context::Config;
 use crate::base_system::json_extract;
 use crate::base_system::logging::take_broadcast_rx;
 use crate::download::downloader::{BookMeta, ChapterRange, DownloadPlan, ProgressSnapshot};
@@ -132,6 +132,12 @@ enum WorkerMsg {
         respond_to: std::sync::mpsc::Sender<Option<String>>,
     },
     PreviewReady(Box<Result<PendingDownload>>),
+    UpdateScanProgress {
+        entry: UpdateEntry,
+        is_update: bool,
+        scanned: usize,
+        total: usize,
+    },
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
     AppUpdateChecked(Result<crate::base_system::app_update::UpdateCheckReport>),
 }
@@ -280,6 +286,8 @@ pub(super) struct App {
 
     // iid
     iid_prewarm_active: bool,
+    iid_prewarm_error: Option<String>,
+    iid_prewarm_error_seen: Option<String>,
     prewarm_spinner_idx: usize,
     prewarm_spinner_last: Instant,
 
@@ -425,6 +433,8 @@ impl App {
             pending_download: None,
             log_rx: take_broadcast_rx(),
             iid_prewarm_active: prewarm_state::is_prewarm_in_progress(),
+            iid_prewarm_error: None,
+            iid_prewarm_error_seen: None,
             prewarm_spinner_idx: 0,
             prewarm_spinner_last: Instant::now(),
             preview_focus: PreviewFocus::Range,
@@ -558,6 +568,7 @@ fn run_loop(
         terminal.draw(|f| {
             draw_ui(f, &mut app);
             render_prewarm_overlay(f, &app);
+            render_iid_error_overlay(f, &app);
         })?;
 
         if !handle_event(&mut app)? {
@@ -611,6 +622,16 @@ fn handle_event(app: &mut App) -> Result<bool> {
     }
 
     let evt = event::read().context("read event")?;
+    if app.iid_prewarm_error.is_some() {
+        if let Event::Key(key) = evt
+            && key.kind == KeyEventKind::Press
+            && matches!(key.code, KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q'))
+        {
+            app.iid_prewarm_error = None;
+        }
+        return Ok(!app.should_quit);
+    }
+
     if app.book_name_modal_open {
         handle_book_name_modal_event(app, evt)?;
         return Ok(!app.should_quit);
@@ -1236,6 +1257,57 @@ fn render_prewarm_overlay(frame: &mut ratatui::Frame, app: &App) {
     );
 }
 
+fn render_iid_error_overlay(frame: &mut ratatui::Frame, app: &App) {
+    let Some(err) = app.iid_prewarm_error.as_deref() else {
+        return;
+    };
+
+    let area = frame.size();
+    let width = area.width.min(78);
+    let height = area.height.min(12);
+    if width == 0 || height == 0 {
+        return;
+    }
+    let overlay = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    let inner = Rect {
+        x: overlay.x.saturating_add(2),
+        y: overlay.y.saturating_add(1),
+        width: overlay.width.saturating_sub(4).max(1),
+        height: overlay.height.saturating_sub(2).max(1),
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "⚠ IID 注册失败：可能被网络/反广告规则拦截",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from("番茄官方接口需要访问 log.snssdk.com 注册 IID。"),
+        Line::from("公司/校园网、DNS 过滤、代理规则或 AdGuard/uBlock 可能会拦截该域名。"),
+        Line::from("请放行 log.snssdk.com，或临时关闭相关拦截后重试。"),
+        Line::from(""),
+        Line::from(Span::styled(err, Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from(Span::styled(
+            "按 Enter / Esc / q 关闭提示",
+            Style::default().fg(Color::Cyan),
+        )),
+    ];
+
+    frame.render_widget(Clear, overlay);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("IID 网络提示")
+        .title_alignment(Alignment::Center);
+    frame.render_widget(block, overlay);
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
 fn render_book_name_modal(frame: &mut ratatui::Frame, app: &mut App) {
     let area = frame.size();
     let w = (area.width as f32 * 0.70) as u16;
@@ -1364,6 +1436,35 @@ fn sync_prewarm_state(app: &mut App) {
     if app.iid_prewarm_active && !prewarm_state::is_prewarm_in_progress() {
         app.iid_prewarm_active = false;
     }
+    if let Some(err) = prewarm_state::prewarm_error()
+        && app.iid_prewarm_error_seen.as_deref() != Some(err.as_str())
+    {
+        app.iid_prewarm_error_seen = Some(err.clone());
+        app.iid_prewarm_error = Some(err.clone());
+        app.status =
+            "IID 注册失败：请检查 log.snssdk.com 是否被公司/校园网或 AdGuard 等拦截".to_string();
+        app.push_message("IID 注册失败：请放行 log.snssdk.com 或关闭反广告/代理/DNS 拦截后重试");
+        app.push_log(err);
+    }
+}
+
+pub(super) fn maybe_show_iid_failure(app: &mut App, err: impl AsRef<str>) {
+    let err = err.as_ref();
+    let lower = err.to_lowercase();
+    if !(lower.contains("iid")
+        || lower.contains("log.snssdk.com")
+        || lower.contains("device_register"))
+    {
+        return;
+    }
+
+    let message = prewarm_state::format_iid_register_failure(err);
+    app.iid_prewarm_error = Some(message.clone());
+    app.iid_prewarm_error_seen = Some(message.clone());
+    app.status =
+        "IID 注册失败：请检查 log.snssdk.com 是否被公司/校园网或 AdGuard 等拦截".to_string();
+    app.push_message("IID 注册失败：请放行 log.snssdk.com 或关闭反广告/代理/DNS 拦截后重试");
+    app.push_log(message);
 }
 
 fn tick_prewarm_spinner(app: &mut App) {
@@ -1456,6 +1557,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                 Err(err) => {
                     app.status = format!("搜索失败: {err}");
                     app.push_message(format!("搜索失败: {err}"));
+                    maybe_show_iid_failure(app, err.to_string());
                     warn!(target: "ui", "搜索失败: {err}");
                 }
             },
@@ -1491,6 +1593,33 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     app.status = "请选择输出格式（下载已完成）".to_string();
                 }
             }
+            WorkerMsg::UpdateScanProgress {
+                entry,
+                is_update,
+                scanned,
+                total,
+            } => {
+                if is_update {
+                    app.update_entries.push(entry);
+                    app.show_no_update = false;
+                } else {
+                    app.update_no_updates.push(entry);
+                    if app.update_entries.is_empty() {
+                        app.show_no_update = true;
+                    }
+                }
+                if app.update_state.selected().is_none() {
+                    app.update_state.select(Some(0));
+                }
+                app.view = View::Update;
+                app.status = format!(
+                    "扫描中：已检查 {}/{}，有更新 {} 本，无更新 {} 本",
+                    scanned,
+                    total,
+                    app.update_entries.len(),
+                    app.update_no_updates.len()
+                );
+            }
             WorkerMsg::UpdateScanned(res) => match res {
                 Ok((updates, no_updates)) => {
                     if updates.is_empty() && no_updates.is_empty() {
@@ -1517,6 +1646,7 @@ fn poll_worker(app: &mut App) -> Result<()> {
                 Err(err) => {
                     app.status = format!("扫描更新失败: {err}");
                     app.push_message(format!("扫描更新失败: {err}"));
+                    maybe_show_iid_failure(app, err.to_string());
                     warn!(target: "ui", "扫描更新失败: {err}");
                 }
             },

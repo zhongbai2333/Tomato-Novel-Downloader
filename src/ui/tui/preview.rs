@@ -923,5 +923,6 @@ pub(super) fn apply_preview_ready(app: &mut App, pending: PendingDownload) {
 pub(super) fn apply_preview_error(app: &mut App, err: anyhow::Error) {
     app.status = format!("加载目录失败: {err}");
     app.push_message(format!("加载目录失败: {err}"));
+    super::maybe_show_iid_failure(app, err.to_string());
     warn!(target: "ui", "加载目录失败: {err}");
 }

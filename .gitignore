@@ -29,6 +29,7 @@ MANIFEST
 # Test file
 logs/
 /config.yml
+/.tnd_update_cache.json
 chapter_template.txt
 novels/
 

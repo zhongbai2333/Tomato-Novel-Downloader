@@ -11,6 +11,7 @@ use crossterm::execute;
 use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
 
 use crate::base_system::context::Config;
+use crate::prewarm_state;
 
 mod app_update;
 mod config;
@@ -63,7 +64,15 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
     // 每次启动检查程序更新（不影响后续流程，失败直接忽略）。
     app_update::startup_check();
 
+    let mut shown_iid_error: Option<String> = None;
     loop {
+        if let Some(err) = prewarm_state::prewarm_error()
+            && shown_iid_error.as_deref() != Some(err.as_str())
+        {
+            println!("\n⚠️  {}\n", err);
+            shown_iid_error = Some(err);
+        }
+
         let prompt = format!(
             "旧 CLI 已禁用新建下载；请输入命令（s配置 / h下载历史 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
