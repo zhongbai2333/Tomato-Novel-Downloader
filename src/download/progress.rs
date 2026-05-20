@@ -1,5 +1,7 @@
 //! 进度上报与 CLI 进度条管理。
 
+#![cfg_attr(not(feature = "official-api"), allow(dead_code))]
+
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 
 use super::downloader::dynamic_group_count;

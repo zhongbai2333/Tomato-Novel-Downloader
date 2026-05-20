@@ -15,7 +15,7 @@ pub(crate) struct SearchQuery {
 }
 
 pub(crate) async fn api_search(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     #[cfg(not(feature = "official-api"))]
@@ -24,10 +24,10 @@ pub(crate) async fn api_search(
         if keyword.is_empty() {
             return Ok(Json(json!({"items": []})));
         }
-        return Ok(Json(json!({
+        Ok(Json(json!({
             "items": [],
             "error": "search requires `official-api` feature",
-        })));
+        })))
     }
 
     #[cfg(feature = "official-api")]
@@ -39,7 +39,7 @@ pub(crate) async fn api_search(
 
         // 并发限制：最多 2 个同时进行的上游 API 请求。
         let _permit =
-            state.api_semaphore.acquire().await.map_err(|_| {
+            _state.api_semaphore.acquire().await.map_err(|_| {
                 api_error(StatusCode::SERVICE_UNAVAILABLE, "上游 API 并发限制已关闭")
             })?;
 
@@ -68,6 +68,7 @@ pub(crate) async fn api_search(
     }
 }
 
+#[cfg(feature = "official-api")]
 fn api_error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<Value>) {
     (status, Json(json!({ "error": message.into() })))
 }

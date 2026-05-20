@@ -67,6 +67,7 @@ pub(super) fn get_text() -> Result<Option<String>> {
 }
 
 #[cfg(not(feature = "clipboard"))]
+#[allow(dead_code)]
 pub(super) fn get_text() -> Result<Option<String>> {
     Ok(None)
 }

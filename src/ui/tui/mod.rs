@@ -29,6 +29,7 @@ use ratatui::prelude::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+#[cfg(feature = "official-api")]
 use serde_json::Value;
 #[cfg(feature = "official-api")]
 use tomato_novel_official_api::SearchClient;
@@ -49,6 +50,7 @@ use history::show_history_menu;
 use update::show_update_menu;
 
 use crate::base_system::context::Config;
+#[cfg(feature = "official-api")]
 use crate::base_system::json_extract;
 use crate::base_system::logging::take_broadcast_rx;
 use crate::download::downloader::{BookMeta, ChapterRange, DownloadPlan, ProgressSnapshot};
@@ -170,6 +172,7 @@ struct BookDetail {
     cover_primary_color: Option<String>,
 }
 
+#[cfg(feature = "official-api")]
 impl BookDetail {
     fn has_data(&self) -> bool {
         self.description.is_some()
@@ -874,6 +877,7 @@ fn search_books(_query: &str) -> Result<Vec<SearchItem>> {
     anyhow::bail!("当前构建未启用 official-api feature，搜索功能不可用")
 }
 
+#[cfg(feature = "official-api")]
 fn detail_from_search(raw: &Value) -> BookDetail {
     let maps = json_extract::collect_maps(raw);
 

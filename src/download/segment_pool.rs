@@ -4,25 +4,26 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+#[cfg(feature = "official-api")]
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::AtomicBool};
+#[cfg(feature = "official-api")]
 use std::time::Duration;
 
+#[cfg(feature = "official-api")]
 use crossbeam_channel as channel;
 
 use super::progress::ProgressReporter;
 use crate::base_system::context::Config;
 
 // 共享类型与工具函数（与 book_parser 侧去重）
+pub(crate) use crate::book_parser::segment_shared::extract_item_version_map;
 #[cfg(feature = "official-api")]
 pub(crate) use crate::book_parser::segment_shared::{
     SegmentCommentsChapterCache, SegmentCommentsParaCache,
 };
-pub(crate) use crate::book_parser::segment_shared::{
-    extract_item_version_map, extract_para_counts_from_stats, write_atomic,
-};
+#[cfg(feature = "official-api")]
+pub(crate) use crate::book_parser::segment_shared::{extract_para_counts_from_stats, write_atomic};
 
 #[cfg(feature = "official-api")]
 use tomato_novel_official_api::{CommentDownloadOptions, DirectoryClient, ReviewClient};

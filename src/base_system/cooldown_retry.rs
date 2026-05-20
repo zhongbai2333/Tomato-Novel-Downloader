@@ -2,6 +2,7 @@
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
+#[cfg(feature = "official-api")]
 use std::time::Duration;
 
 #[cfg(feature = "official-api")]
@@ -19,7 +20,7 @@ pub fn fetch_with_cooldown_retry(
         let _ = ids;
         let _ = epub_mode;
         let _ = book_id;
-        return Err(anyhow!("no-official-api 构建不支持官方 API cooldown 拉取"));
+        Err(anyhow!("no-official-api 构建不支持官方 API cooldown 拉取"))
     }
 
     #[cfg(feature = "official-api")]
@@ -48,5 +49,6 @@ pub fn fetch_with_cooldown_retry(
             }
         }
     }
+    #[cfg(feature = "official-api")]
     Err(anyhow!("Cooldown exceeded retries"))
 }

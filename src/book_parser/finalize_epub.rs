@@ -5,13 +5,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "official-api")]
 use crossbeam_channel as channel;
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
 use std::sync::OnceLock;
+#[cfg(feature = "official-api")]
 use std::time::Instant;
-use tracing::{debug, info, warn};
+#[cfg(feature = "official-api")]
+use tracing::debug;
+use tracing::{info, warn};
 
 // 编译一次复用的内联图片正则缓存
 fn re_inline_img() -> &'static Regex {
@@ -26,6 +30,7 @@ use super::html_utils::{
     render_description_xhtml_fragment,
 };
 use super::image_utils::{ensure_cached_image, sha1_hex};
+#[cfg(feature = "official-api")]
 use super::segment_shared::{extract_item_version_map, extract_para_counts_from_stats};
 use super::segment_utils;
 
@@ -39,6 +44,7 @@ use tomato_novel_official_api::{CommentDownloadOptions, DirectoryClient, ReviewC
 
 // ── EPUB 入口 ───────────────────────────────────────────────────
 
+#[cfg_attr(not(feature = "official-api"), allow(unused_variables, unused_mut))]
 pub(super) fn finalize_epub(
     manager: &BookManager,
     chapters: &[Value],
@@ -182,20 +188,19 @@ pub(super) fn finalize_epub(
     #[cfg(feature = "official-api")]
     let enable_segment_comments = manager.config.enable_segment_comments
         && manager.config.novel_format.eq_ignore_ascii_case("epub");
-    #[cfg(not(feature = "official-api"))]
-    let enable_segment_comments = false;
 
     #[cfg(feature = "official-api")]
     let mut item_versions = directory_raw
         .map(extract_item_version_map)
         .unwrap_or_default();
-
+    #[cfg(feature = "official-api")]
+    let item_versions_len = item_versions.len();
     #[cfg(not(feature = "official-api"))]
-    let item_versions: HashMap<String, String> = HashMap::new();
+    let item_versions_len = 0usize;
 
     info!(
         target: "segment",
-        item_versions = item_versions.len(),
+        item_versions = item_versions_len,
         "item_version map prepared"
     );
 
@@ -239,8 +244,6 @@ pub(super) fn finalize_epub(
         seg_counts: serde_json::Map<String, Value>,
         #[cfg(feature = "official-api")]
         per_para: Vec<(i32, tomato_novel_official_api::ReviewResponse)>,
-        #[cfg(not(feature = "official-api"))]
-        per_para: Vec<(i32, serde_json::Value)>,
     }
 
     let chapter_count = chapters.len();
@@ -274,8 +277,6 @@ pub(super) fn finalize_epub(
         let mut seg_counts = serde_json::Map::new();
         #[cfg(feature = "official-api")]
         let mut per_para: Vec<(i32, tomato_novel_official_api::ReviewResponse)> = Vec::new();
-        #[cfg(not(feature = "official-api"))]
-        let per_para: Vec<(i32, serde_json::Value)> = Vec::new();
 
         #[cfg(feature = "official-api")]
         if enable_segment_comments && let Some(client) = review_client.as_ref() {
@@ -721,6 +722,7 @@ pub(super) fn finalize_epub(
             title: title.to_string(),
             raw_xhtml: rewritten,
             seg_counts,
+            #[cfg(feature = "official-api")]
             per_para,
         });
 
@@ -729,8 +731,13 @@ pub(super) fn finalize_epub(
 
     // ── 段评页生成 + 正文组装 ───────────────────────────────────
 
+    #[cfg(feature = "official-api")]
     let mut comment_page_for_chapter: HashMap<String, String> = HashMap::new();
+    #[cfg(not(feature = "official-api"))]
+    let comment_page_for_chapter: HashMap<String, String> = HashMap::new();
+    #[cfg(feature = "official-api")]
     let mut comment_pages: Vec<(String, String)> = Vec::new();
+    #[cfg(feature = "official-api")]
     let mut comment_page_index = 0usize;
 
     // #263: 在正文中增加可见目录页（table-of-contents.html），
@@ -757,10 +764,10 @@ pub(super) fn finalize_epub(
         true,
     );
 
+    #[cfg(feature = "official-api")]
     for (idx, b) in builds.iter().enumerate() {
         let chapter_file = format!("chapter_{:05}.xhtml", 1 + idx);
 
-        #[cfg(feature = "official-api")]
         if !b.per_para.is_empty() {
             prefetch_comment_media(&manager.config, &b.per_para, &images_dir);
 
@@ -830,6 +837,7 @@ pub(super) fn finalize_epub(
     }
 
     // 追加段评页
+    #[cfg(feature = "official-api")]
     for (i, (title, html)) in comment_pages.into_iter().enumerate() {
         let file = format!("aux_{:05}.xhtml", base_comment_aux_index + i);
         let _ = epub_gen.add_aux_page_named(file, &title, &html, true);

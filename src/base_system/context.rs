@@ -881,6 +881,7 @@ fn status_downloaded_count(path: &Path) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         Config, OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD, OUTPUT_FORMAT_BULK_TXT, OUTPUT_FORMAT_TXT,
@@ -889,8 +890,10 @@ mod tests {
     #[test]
     fn status_folder_path_migrates_legacy_folder_when_only_book_name_changes() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut config = Config::default();
-        config.save_path = temp_dir.path().display().to_string();
+        let mut config = Config {
+            save_path: temp_dir.path().display().to_string(),
+            ..Config::default()
+        };
 
         let old_folder = temp_dir.path().join("123_旧书名");
         std::fs::create_dir_all(&old_folder).unwrap();
@@ -907,8 +910,10 @@ mod tests {
     #[test]
     fn status_folder_path_merges_legacy_status_into_preview_cover_folder() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut config = Config::default();
-        config.save_path = temp_dir.path().display().to_string();
+        let mut config = Config {
+            save_path: temp_dir.path().display().to_string(),
+            ..Config::default()
+        };
 
         let preview_folder = temp_dir.path().join("123");
         std::fs::create_dir_all(&preview_folder).unwrap();

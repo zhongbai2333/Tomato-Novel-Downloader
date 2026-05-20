@@ -24,7 +24,9 @@ mod ui;
 use base_system::config::{load_or_create, load_or_create_with_base};
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(feature = "official-api")]
+use tracing::warn;
 
 #[cfg(all(feature = "official-api", feature = "no-official-api"))]
 compile_error!(

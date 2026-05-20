@@ -7,15 +7,19 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "official-api")]
 use std::time::Instant;
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(feature = "official-api")]
+use anyhow::Context;
+use anyhow::{Result, anyhow};
 use crossbeam_channel as channel;
 use serde_json::{Map, Value, json};
 use tracing::{debug, error, info, warn};
 
 use crate::base_system::book_paths;
 use crate::base_system::context::Config;
+#[cfg(feature = "official-api")]
 use crate::base_system::cooldown_retry::fetch_with_cooldown_retry;
 use crate::base_system::download_history::{DownloadHistoryRecord, append_download_history};
 use crate::book_parser::book_manager::BookManager;

@@ -4,6 +4,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(feature = "official-api")]
 use std::collections::HashSet;
 
 #[cfg(feature = "official-api")]
@@ -147,6 +148,7 @@ pub enum SavePhase {
 
 // ── 元数据合并工具函数 ──────────────────────────────────────────────────
 
+#[cfg(feature = "official-api")]
 pub(crate) fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
     BookMeta {
         book_name: primary.book_name.or(fallback.book_name),
@@ -174,6 +176,7 @@ pub(crate) fn merge_meta(primary: BookMeta, fallback: BookMeta) -> BookMeta {
     }
 }
 
+#[cfg(feature = "official-api")]
 pub(crate) fn merge_tag_lists(primary: &[String], fallback: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
@@ -189,6 +192,7 @@ pub(crate) fn merge_tag_lists(primary: &[String], fallback: &[String]) -> Vec<St
     out
 }
 
+#[cfg(feature = "official-api")]
 pub(crate) fn drop_tag_equals_category(tags: &[String], category: &Option<String>) -> Vec<String> {
     let Some(cat) = category
         .as_ref()

@@ -11,10 +11,12 @@ use crate::base_system::context::Config;
 use crate::book_parser::parser::ContentParser;
 use crate::third_party::content_client::ThirdPartyContentClient;
 
+#[cfg(feature = "official-api")]
 fn normalize_base(base: &str) -> String {
     base.trim().trim_end_matches('/').to_string()
 }
 
+#[cfg(feature = "official-api")]
 fn ensure_trailing_query_base(url: &str) -> String {
     let u = url.trim();
     if u.ends_with('?') || u.ends_with('&') {
@@ -27,6 +29,7 @@ fn ensure_trailing_query_base(url: &str) -> String {
 }
 
 #[allow(clippy::type_complexity)]
+#[cfg(feature = "official-api")]
 pub(crate) fn resolve_api_urls(
     cfg: &Config,
 ) -> Result<(Option<String>, Option<(String, String)>), anyhow::Error> {

@@ -2,7 +2,9 @@
 //!
 //! 被 `book_parser::finalize_epub` 和 `download::segment_pool` 共同引用。
 
-use std::collections::{BTreeMap, HashMap};
+#[cfg(feature = "official-api")]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde_json::Value;
@@ -99,6 +101,7 @@ pub(crate) fn extract_item_version_map(directory_raw: &Value) -> HashMap<String,
     out
 }
 
+#[cfg(feature = "official-api")]
 pub(crate) fn extract_para_counts_from_stats(stats: &Value) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
 

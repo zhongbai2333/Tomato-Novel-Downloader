@@ -2,6 +2,7 @@
 //!
 //! 负责从官方 API 或 Web 端拉取目录、章节列表，合并元数据，生成 `DownloadPlan`。
 
+#[cfg(feature = "official-api")]
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
@@ -15,9 +16,11 @@ use crate::base_system::json_extract;
 use crate::network_parser::network::{FanqieWebConfig, FanqieWebNetwork};
 
 use super::models::{
-    BookMeta, ChapterRange, ChapterRef, DownloadPlan, drop_tag_equals_category, merge_meta,
-    merge_meta_prefer_hint_name, merge_tag_lists,
+    BookMeta, ChapterRange, ChapterRef, DownloadPlan, merge_meta_prefer_hint_name,
 };
+#[cfg(feature = "official-api")]
+use super::models::{drop_tag_equals_category, merge_meta, merge_tag_lists};
+#[cfg(feature = "official-api")]
 use super::third_party::resolve_api_urls;
 
 #[cfg(feature = "official-api")]
@@ -247,6 +250,7 @@ fn prepare_download_plan_web(
 
 // ── 章节合并 ──────────────────────────────────────────────────
 
+#[cfg(feature = "official-api")]
 pub(crate) fn merge_chapters_with_web(
     official: Vec<ChapterRef>,
     web: &[ChapterRef],
@@ -367,12 +371,6 @@ fn search_metadata(book_id: &str) -> Option<BookMeta> {
         cover_primary_color,
     })
 }
-
-#[cfg(not(feature = "official-api"))]
-fn search_metadata(_book_id: &str) -> Option<BookMeta> {
-    None
-}
-
 // ── 范围过滤 ──────────────────────────────────────────────────
 
 pub(crate) fn apply_range(chapters: &[ChapterRef], range: Option<ChapterRange>) -> Vec<ChapterRef> {

@@ -1,5 +1,7 @@
 //! JSON 提取与容错解析工具。
 
+#![cfg_attr(not(feature = "official-api"), allow(dead_code))]
+
 use serde_json::Value;
 
 pub type JsonMap = serde_json::Map<String, Value>;
