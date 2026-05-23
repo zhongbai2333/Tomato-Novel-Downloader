@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+.gitattributes text eol=lf
+*.sh text eol=lf

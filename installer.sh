@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # 
 # 文件名：installer.sh
 # 功能：
@@ -20,17 +20,6 @@ set -e
 #####################################
 # 0. 通用辅助函数
 #####################################
-#!/usr/bin/env bash
-
-# 文件名：installer.sh
-# 功能：
-#   1. 自动通过 GitHub API 获取 Tomato-Novel-Downloader 最新版本
-#   2. 询问用户安装路径（Termux 下默认 $HOME）
-#   3. 支持 2 种下载方式：直连 / 项目加速源
-#   4. Termux 环境下生成 run.sh（默认 --server）
-#   5. Linux / macOS 下载对应架构二进制并赋予执行权限
-
-set -e
 
 log_info()  { printf "\033[1;32m[INFO]\033[0m %s\n" "$*"; }
 log_warn()  { printf "\033[1;33m[WARN]\033[0m %s\n" "$*"; }
@@ -40,9 +29,11 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 
 IS_TERMUX=false
 if [ -n "${PREFIX:-}" ]; then
-    if [[ "${PREFIX}" == *"com.termux"* ]] || [[ "${PREFIX}" == *"bin.mt.plus"* ]] || [[ "${PREFIX}" == *"com.duoduo.mt"* ]]; then
-        IS_TERMUX=true
-    fi
+    case "${PREFIX}" in
+        *com.termux*|*bin.mt.plus*|*com.duoduo.mt*)
+            IS_TERMUX=true
+            ;;
+    esac
 fi
 
 IS_MUSL=false
@@ -83,10 +74,13 @@ if $IS_TERMUX; then
             echo ""
             echo "是否仍然继续使用该目录？(y/N)："
             read -r CONFIRM_DIR
-            if [[ "$CONFIRM_DIR" != "y" && "$CONFIRM_DIR" != "Y" ]]; then
-                INSTALL_DIR="${HOME}"
-                log_info "已改为安装到：${INSTALL_DIR}"
-            fi
+            case "$CONFIRM_DIR" in
+                y|Y) ;;
+                *)
+                    INSTALL_DIR="${HOME}"
+                    log_info "已改为安装到：${INSTALL_DIR}"
+                    ;;
+            esac
             ;;
     esac
 fi
@@ -95,13 +89,16 @@ if [ ! -d "$INSTALL_DIR" ]; then
     echo ""
     log_warn "目录不存在，是否创建：${INSTALL_DIR} ? (y/N)："
     read -r CREATE_DIR
-    if [[ "$CREATE_DIR" == "y" || "$CREATE_DIR" == "Y" ]]; then
-        mkdir -p "$INSTALL_DIR"
-        log_info "已创建目录：${INSTALL_DIR}"
-    else
-        log_warn "未创建目录，安装退出。"
-        exit 1
-    fi
+    case "$CREATE_DIR" in
+        y|Y)
+            mkdir -p "$INSTALL_DIR"
+            log_info "已创建目录：${INSTALL_DIR}"
+            ;;
+        *)
+            log_warn "未创建目录，安装退出。"
+            exit 1
+            ;;
+    esac
 fi
 
 echo ""
@@ -144,44 +141,56 @@ case "$PLATFORM" in
     Linux)
         if $IS_TERMUX; then
             # 检测 Termux 架构：aarch64 → arm64, armv7l → arm32
-            if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-                ANDROID_ARCH="arm64"
-            elif [[ "$ARCH" == "armv7l" || "$ARCH" == "arm" ]]; then
-                ANDROID_ARCH="arm32"
-            else
-                log_error "不支持的 Android 架构 [${ARCH}]！仅支持 aarch64/arm64 与 armv7l/arm。"
-                exit 1
-            fi
+            case "$ARCH" in
+                aarch64|arm64)
+                    ANDROID_ARCH="arm64"
+                    ;;
+                armv7l|arm)
+                    ANDROID_ARCH="arm32"
+                    ;;
+                *)
+                    log_error "不支持的 Android 架构 [${ARCH}]！仅支持 aarch64/arm64 与 armv7l/arm。"
+                    exit 1
+                    ;;
+            esac
             BINARY_NAME="TomatoNovelDownloader-Android_${ANDROID_ARCH}-v${VERSION}"
             log_info "检测到 Termux（架构：${ANDROID_ARCH}），将使用 Android 原生版本。"
         else
-            if [[ "$ARCH" == "x86_64" || "$ARCH" == "amd64" ]]; then
-                if $IS_MUSL; then
-                    BINARY_NAME="TomatoNovelDownloader-Linux_musl_amd64-v${VERSION}"
-                else
-                    BINARY_NAME="TomatoNovelDownloader-Linux_amd64-v${VERSION}"
-                fi
-            elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-                if $IS_MUSL; then
-                    BINARY_NAME="TomatoNovelDownloader-Linux_musl_arm64-v${VERSION}"
-                else
-                    BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
-                fi
-            else
-                log_error "不支持的 Linux 架构 [${ARCH}]！仅支持 x86_64/amd64 与 aarch64/arm64。"
-                exit 1
-            fi
+            case "$ARCH" in
+                x86_64|amd64)
+                    if $IS_MUSL; then
+                        BINARY_NAME="TomatoNovelDownloader-Linux_musl_amd64-v${VERSION}"
+                    else
+                        BINARY_NAME="TomatoNovelDownloader-Linux_amd64-v${VERSION}"
+                    fi
+                    ;;
+                aarch64|arm64)
+                    if $IS_MUSL; then
+                        BINARY_NAME="TomatoNovelDownloader-Linux_musl_arm64-v${VERSION}"
+                    else
+                        BINARY_NAME="TomatoNovelDownloader-Linux_arm64-v${VERSION}"
+                    fi
+                    ;;
+                *)
+                    log_error "不支持的 Linux 架构 [${ARCH}]！仅支持 x86_64/amd64 与 aarch64/arm64。"
+                    exit 1
+                    ;;
+            esac
         fi
         ;;
     Darwin)
-        if [[ "$ARCH" == "arm64" ]]; then
-            BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
-        elif [[ "$ARCH" == "x86_64" ]]; then
-            BINARY_NAME="TomatoNovelDownloader-macOS_amd64-v${VERSION}"
-        else
-            log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64 与 x86_64。"
-            exit 1
-        fi
+        case "$ARCH" in
+            arm64)
+                BINARY_NAME="TomatoNovelDownloader-macOS_arm64-v${VERSION}"
+                ;;
+            x86_64)
+                BINARY_NAME="TomatoNovelDownloader-macOS_amd64-v${VERSION}"
+                ;;
+            *)
+                log_error "不支持的 macOS 架构 [${ARCH}]！仅支持 arm64 与 x86_64。"
+                exit 1
+                ;;
+        esac
         ;;
     *)
         log_error "不支持的平台 [${PLATFORM}]！仅支持 Linux、macOS（Darwin）以及 Termux。"
@@ -207,19 +216,19 @@ if [ -f "$TARGET_BINARY_PATH" ]; then
     rm -f "$TARGET_BINARY_PATH"
 fi
 
-downloader=""
-if command_exists wget; then
-    downloader="wget -4 -q --show-progress -O \"${TARGET_BINARY_PATH}\" \"${DOWNLOAD_URL}\""
-elif command_exists curl; then
-    downloader="curl -4 -L -o \"${TARGET_BINARY_PATH}\" \"${DOWNLOAD_URL}\""
-else
-    log_error "未检测到 wget 或 curl，请先安装其中之一。"
-    exit 1
-fi
+download_file() {
+    if command_exists wget; then
+        wget -4 -q --show-progress -O "${TARGET_BINARY_PATH}" "${DOWNLOAD_URL}"
+    elif command_exists curl; then
+        curl -4 -L -o "${TARGET_BINARY_PATH}" "${DOWNLOAD_URL}"
+    else
+        log_error "未检测到 wget 或 curl，请先安装其中之一。"
+        return 127
+    fi
+}
 
 log_info "开始下载..."
-# shellcheck disable=SC2086
-eval $downloader || {
+download_file || {
     log_error "下载失败，请检查网络、代理或 URL。"
     exit 1
 }
@@ -265,20 +274,20 @@ EOF
     echo "    ./run.sh"
     echo ""
     echo "提示：如果运行时出现 Permission denied，请把安装目录放在 Termux 目录内（建议 ${HOME}）。"
-elif [[ "$PLATFORM" == "Linux" ]]; then
+elif [ "$PLATFORM" = "Linux" ]; then
     echo ""
     log_info "检测到 Linux 环境。"
     echo "安装完成，文件位于：${TARGET_BINARY_PATH}"
     echo "运行方式："
     echo "    cd ${INSTALL_DIR}"
-    echo "    ./$(printf "%q" "${CANONICAL_NAME}")"
-elif [[ "$PLATFORM" == "Darwin" ]]; then
+    echo "    ./${CANONICAL_NAME}"
+elif [ "$PLATFORM" = "Darwin" ]; then
     echo ""
     log_info "检测到 macOS 环境。"
     echo "安装完成，文件位于：${TARGET_BINARY_PATH}"
     echo "运行方式："
     echo "    cd ${INSTALL_DIR}"
-    echo "    ./$(printf "%q" "${CANONICAL_NAME}")"
+    echo "    ./${CANONICAL_NAME}"
 fi
 
 log_info "全部完成。"
