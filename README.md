@@ -189,8 +189,16 @@ cargo build --release
 - 构建：
 
 ```sh
-cargo build --release --no-default-features --features no-official-api
+# Linux/macOS
+cp Cargo_no_official.toml Cargo.toml
+cargo build --release
+
+# Windows
+copy /Y Cargo_no_official.toml Cargo.toml
+cargo build --release
 ```
+
+仓库根目录提供了 `Cargo_no_official.toml`，该文件**完全不引用** `tomato-novel-official-api` 路径依赖，适合无法获取该 crate 的用户直接使用。
 
 - 行为差异（重点）：
   - **不依赖** `tomato-novel-official-api` crate，可在缺少 Official-API 环境时编译。

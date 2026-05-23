@@ -1,0 +1,90 @@
+# =============================================================================
+# Cargo_no_official.toml — 不依赖 Official-API 的构建配置
+#
+# 使用方法：
+#   将此文件重命名为 Cargo.toml（覆盖原文件），然后正常构建：
+#     cargo build --release
+#
+# 说明：
+#   此配置完全不依赖 tomato-novel-official-api（不开源），适合无法获取
+#   该 crate 的用户。目录/书信息走 web 解析，正文强制第三方模式。
+# =============================================================================
+
+[package]
+name = "tomato-novel-downloader"
+version = "2.4.10"
+edition = "2024"
+
+[features]
+# 默认构建：不依赖 Official-API（目录/书信息走 web 解析；正文强制第三方模式）。
+default = ["tts", "clipboard", "clipboard-arboard"]
+
+# 不依赖 Official-API 的构建：目录/书信息走 web 解析；正文强制第三方模式。
+no-official-api = []
+
+# 有声书（TTS）：默认启用；在 musl/android 等环境可关闭以避免 OpenSSL/curl 等原生依赖。
+tts = ["dep:msedge-tts"]
+
+# 有声书（TTS - Native）：不依赖 msedge-tts（避免 native-tls/curl/openssl 等原生依赖），适合 musl/android。
+tts-native = ["dep:tungstenite"]
+
+# TUI 粘贴板：默认启用。
+# - Android：默认使用 Termux `termux-clipboard-get`（不依赖原生库）。
+# - Desktop：通过 `clipboard-arboard` 启用 arboard 后端。
+clipboard = []
+
+# Desktop 剪贴板后端（arboard）。Android 下不启用。
+clipboard-arboard = ["dep:arboard"]
+
+# Docker 专用构建：禁用程序自更新/热更新逻辑，提示通过重新拉取镜像升级。
+docker = []
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde_json = "1.0"
+time = { version = "0.3", features = ["formatting", "macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "ansi", "registry", "time"] }
+tracing-appender = "0.2"
+crossbeam-channel = "0.5"
+ctrlc = "3.4"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+regex = "1.11"
+ratatui = "0.27"
+crossterm = "0.27"
+indicatif = "0.17"
+base64 = "0.22"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+tempfile = "3.10"
+msedge-tts = { version = "0.3.0", optional = true }
+tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
+uuid = { version = "1", features = ["v4", "v5"] }
+textwrap = "0.16"
+epub-builder = "0.7"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-core = "0.3"
+genpdf = { version = "0.2", features = ["images"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = { version = "3.4", optional = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+debug = false
+panic = "unwind"
+strip = "symbols"
+incremental = false
