@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use genpdf::elements::{Break, PageBreak, Paragraph};
+use genpdf::elements::{Break, PageBreak, Paragraph, Text};
 use genpdf::fonts::FontData;
 use genpdf::style::Style;
 use genpdf::{Alignment, Document, Element, Scale, Size};
@@ -78,22 +78,30 @@ fn is_no_break_before(c: char) -> bool {
     )
 }
 
+/// 禁则标点溢出容差（半宽单位）。当累积宽度超出 max_half_widths 超过此值时，
+/// 即使遇到禁则标点也强制断行，避免 genpdf 因行宽溢出而丢弃整行。
+const WRAP_OVERFLOW_TOLERANCE: usize = 6;
+
 /// genpdf 0.2 的文本换行在 CJK 下会出问题（内部只按 ASCII 空格分词），
 /// 因此按视觉宽度预分行：CJK 字符计 2 个半宽单位，ASCII 计 1 个。
 /// `max_half_widths` 为一行允许的最大半宽单位数。
-/// 同时遵守标点禁则：不在行首放置收尾标点。
+/// 同时遵守标点禁则：不在行首放置收尾标点，但溢出超过容差时强制断行。
 fn pre_wrap_line(line: &str, max_half_widths: usize) -> Vec<String> {
     if line.is_empty() {
         return vec![String::new()];
     }
+    let max_overflow = max_half_widths + WRAP_OVERFLOW_TOLERANCE;
     let mut segments: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut current_width: usize = 0;
 
     for c in line.chars() {
         let w = char_visual_width(c);
-        // 超宽时换行，但如果当前字符是禁止行首的标点则留在本行
-        if current_width + w > max_half_widths && !current.is_empty() && !is_no_break_before(c) {
+        let would_overflow = current_width + w > max_half_widths;
+        let over_tolerance = current_width + w > max_overflow;
+
+        // 超宽时换行，但禁则标点允许少量溢出；超出容差后强制断行
+        if would_overflow && !current.is_empty() && (!is_no_break_before(c) || over_tolerance) {
             segments.push(current);
             current = String::new();
             current_width = 0;
@@ -240,11 +248,7 @@ pub(super) fn finalize_pdf(
                 doc.push(Break::new(0.3));
             } else {
                 for seg in pre_wrap_line(sub_line, MAX_HW_BODY) {
-                    doc.push(
-                        Paragraph::new(seg)
-                            .aligned(Alignment::Left)
-                            .styled(meta_style),
-                    );
+                    doc.push(Text::new(seg).styled(meta_style));
                 }
             }
         }
@@ -288,6 +292,10 @@ pub(super) fn finalize_pdf(
         doc.push(Break::new(0.5));
 
         // 正文：每段首行加两个全角空格缩进
+        // 使用 Text 而非 Paragraph：genpdf 的 Paragraph 按空格分词换行，
+        // CJK 无空格文本在 wrap::Wrapper 中会被视为一个不可分割的"单词"，
+        // 当单词宽度超过页面内容区时会直接丢弃而不渲染，导致吞行。
+        // Text 元素直接单行渲染，即使略超边距也仅溢出而非丢失内容。
         for line in content.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -296,11 +304,7 @@ pub(super) fn finalize_pdf(
                 let indented = format!("\u{3000}\u{3000}{line}");
                 let segs = pre_wrap_line(&indented, MAX_HW_BODY);
                 for seg in segs {
-                    doc.push(
-                        Paragraph::new(seg)
-                            .aligned(Alignment::Left)
-                            .styled(body_style),
-                    );
+                    doc.push(Text::new(seg).styled(body_style));
                 }
             }
         }
