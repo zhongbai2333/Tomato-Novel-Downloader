@@ -43,56 +43,12 @@ jobs:
 
             core.setOutput('comment_id', String(resp.data.id));
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.2.19
-
-      - name: Start Copilot API proxy in local runner (bun)
-        shell: bash
-        env:
-          COPILOT_GH_TOKEN: ${{ secrets.COPILOT_GH_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          TOKEN="${COPILOT_GH_TOKEN:-}"
-
-          if [ -z "$TOKEN" ]; then
-            echo "Missing repository secret: COPILOT_GH_TOKEN"
-            exit 1
-          fi
-
-          rm -rf .copilot-api
-          git clone --depth 1 https://github.com/ericc-ch/copilot-api.git .copilot-api
-
-          pushd .copilot-api >/dev/null
-          bun install --frozen-lockfile
-
-          # 按项目要求使用双 start 命令
-          nohup bun run start start --github-token "$TOKEN" --port 4141 --rate-limit 10 --wait \
-            > "$GITHUB_WORKSPACE/copilot-api.log" 2>&1 &
-          echo $! > "$GITHUB_WORKSPACE/copilot-api.pid"
-          popd >/dev/null
-
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:4141/v1/models >/dev/null 2>&1; then
-              echo "copilot-api is ready"
-              break
-            fi
-            sleep 2
-          done
-
-          if ! curl -fsS http://127.0.0.1:4141/v1/models >/dev/null 2>&1; then
-            echo "copilot-api failed to become ready in time"
-            tail -n 200 "$GITHUB_WORKSPACE/copilot-api.log" || true
-            exit 1
-          fi
-
-      - name: Analyze issue with GPT-5-mini
+      - name: Analyze issue with DeepSeek Flash
         id: analyze
         uses: actions/github-script@v7
         env:
-          OPENAI_BASE_URL: http://127.0.0.1:4141/v1
+          OPENAI_BASE_URL: https://api.deepseek.com
+          OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -212,8 +168,8 @@ jobs:
               notFixPolicyDoc || '（未找到 AI_NOT_FIX_CASES.md）'
             ].join('\n');
 
-            const baseUrl = process.env.OPENAI_BASE_URL || 'http://127.0.0.1:4141/v1';
-            const preferredModel = process.env.OPENAI_MODEL || 'gpt-5-mini';
+            const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.deepseek.com';
+            const preferredModel = process.env.OPENAI_MODEL || 'deepseek-v4-flash';
 
             const headers = {
               'Content-Type': 'application/json'
@@ -234,7 +190,7 @@ jobs:
 
                 if (ids.includes(preferredModel)) return preferredModel;
 
-                const candidates = ['gpt-5-mini', 'gpt-4.1', 'gpt-4o', 'o4-mini', 'o3-mini'];
+                const candidates = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
                 for (const c of candidates) {
                   if (ids.includes(c)) return c;
                 }
@@ -481,27 +437,6 @@ jobs:
             } catch (e) {
               failAnalysis(e?.message || e);
             }
-
-      - name: Stop Copilot API proxy
-        if: always()
-        shell: bash
-        run: |
-          set +e
-
-          if [ -f "$GITHUB_WORKSPACE/copilot-api.pid" ]; then
-            PID="$(cat "$GITHUB_WORKSPACE/copilot-api.pid")"
-            if [ -n "$PID" ] && kill -0 "$PID" >/dev/null 2>&1; then
-              kill "$PID" >/dev/null 2>&1 || true
-              sleep 1
-              kill -9 "$PID" >/dev/null 2>&1 || true
-            fi
-          fi
-
-          pkill -f "bun run start start" >/dev/null 2>&1 || true
-
-          echo "----- copilot-api log (tail 200) -----"
-          tail -n 200 "$GITHUB_WORKSPACE/copilot-api.log" || true
-          echo "copilot-api process cleaned"
 
       - name: Auto add Needs-Info once for low-confidence body review
         if: always() && steps.analyze.outputs.analyze_ok == 'true' && github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
