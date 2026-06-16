@@ -15,7 +15,12 @@ use tracing::{info, warn};
 use crate::base_system::context::Config;
 use state::{AppState, AuthState, ConfigView, JobStore, LibraryScanStore};
 
-pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
+pub fn run(
+    config: &mut Config,
+    password: Option<String>,
+    config_path: PathBuf,
+    cookie_secure: bool,
+) -> Result<()> {
     let bind_raw = std::env::var("TOMATO_WEB_ADDR").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     let bind_addrs: Vec<SocketAddr> = parse_bind_addrs(&bind_raw)?;
 
@@ -35,7 +40,7 @@ pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
             if p.is_empty() {
                 None
             } else {
-                Some(AuthState::from_password(&p))
+                Some(AuthState::from_password(&p, cookie_secure))
             }
         });
 
@@ -47,6 +52,7 @@ pub fn run(config: &mut Config, password: Option<String>) -> Result<()> {
         bind_addrs,
         view,
         config.clone(),
+        config_path,
         library_root,
         auth,
     ))
@@ -121,6 +127,7 @@ async fn run_async(
     bind_addrs: Vec<SocketAddr>,
     view: ConfigView,
     config: Config,
+    config_path: PathBuf,
     library_root: PathBuf,
     auth: Option<AuthState>,
 ) -> Result<()> {
@@ -128,6 +135,7 @@ async fn run_async(
         bind_addrs: Arc::new(bind_addrs.clone()),
         config_view: Arc::new(view),
         config: Arc::new(std::sync::Mutex::new(config)),
+        config_path: Arc::new(config_path),
         library_root: Arc::new(library_root),
         jobs: Arc::new(JobStore::default()),
         self_update: Arc::new(state::SelfUpdateStore::default()),

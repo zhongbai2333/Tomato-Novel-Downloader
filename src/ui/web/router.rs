@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 
 use sha2::{Digest, Sha256};
-use tracing::info;
+use tracing::{info, warn};
 
 use super::routes;
 use super::state::AppState;
@@ -123,7 +123,7 @@ async fn auth_and_log_mw(
             }
 
             if !authorized {
-                info!(target: "web_access", ip = %ip, method = %method, path = %path, status = 401, "unauthorized");
+                warn!(target: "web_security", ip = %ip, method = %method, path = %path, status = 401, "unauthorized");
                 return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
             }
         }

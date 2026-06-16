@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +26,7 @@ pub(crate) struct AppState {
     pub(crate) bind_addrs: Arc<Vec<SocketAddr>>,
     pub(crate) config_view: Arc<ConfigView>,
     pub(crate) config: Arc<Mutex<Config>>, // allow runtime updates via Web UI
+    pub(crate) config_path: Arc<PathBuf>,
     pub(crate) library_root: Arc<PathBuf>,
     pub(crate) jobs: Arc<JobStore>,
     pub(crate) self_update: Arc<SelfUpdateStore>,
@@ -376,12 +378,32 @@ impl UpdateScanStore {
 pub(crate) struct AuthState {
     pub(crate) password_sha256: [u8; 32],
     pub(crate) session_secret: [u8; 32],
+    cookie_secure: bool,
+    login_attempts: Arc<Mutex<HashMap<IpAddr, LoginAttemptState>>>,
 }
 
-const SESSION_TTL_SECS: u64 = 7 * 24 * 60 * 60;
+const SESSION_TTL_SECS: u64 = 24 * 60 * 60;
+const LOGIN_RATE_WINDOW_SECS: u64 = 1;
+const LOGIN_RATE_MAX_ATTEMPTS: usize = 5;
+const LOGIN_LOCK_AFTER_FAILURES: u32 = 10;
+const LOGIN_LOCK_SECS: u64 = 5 * 60;
+
+#[derive(Debug, Default)]
+struct LoginAttemptState {
+    recent_attempts: VecDeque<u64>,
+    failed_count: u32,
+    locked_until: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoginLimitDecision {
+    Allowed,
+    RateLimited { retry_after_secs: u64 },
+    Locked { retry_after_secs: u64 },
+}
 
 impl AuthState {
-    pub(crate) fn from_password(password: &str) -> Self {
+    pub(crate) fn from_password(password: &str, cookie_secure: bool) -> Self {
         let mut h = Sha256::new();
         h.update(password.as_bytes());
         let out = h.finalize();
@@ -401,7 +423,77 @@ impl AuthState {
         Self {
             password_sha256,
             session_secret,
+            cookie_secure,
+            login_attempts: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn check_login_allowed(&self, ip: IpAddr) -> LoginLimitDecision {
+        let now = now_secs();
+        let mut attempts = self
+            .login_attempts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let state = attempts.entry(ip).or_default();
+
+        if let Some(locked_until) = state.locked_until {
+            if locked_until > now {
+                return LoginLimitDecision::Locked {
+                    retry_after_secs: locked_until.saturating_sub(now).max(1),
+                };
+            }
+            state.locked_until = None;
+            state.failed_count = 0;
+            state.recent_attempts.clear();
+        }
+
+        let cutoff = now.saturating_sub(LOGIN_RATE_WINDOW_SECS);
+        while state
+            .recent_attempts
+            .front()
+            .map(|ts| *ts <= cutoff)
+            .unwrap_or(false)
+        {
+            state.recent_attempts.pop_front();
+        }
+
+        if state.recent_attempts.len() >= LOGIN_RATE_MAX_ATTEMPTS {
+            let oldest = *state.recent_attempts.front().unwrap_or(&now);
+            let retry_after_secs = oldest
+                .saturating_add(LOGIN_RATE_WINDOW_SECS)
+                .saturating_sub(now)
+                .max(1);
+            return LoginLimitDecision::RateLimited { retry_after_secs };
+        }
+
+        state.recent_attempts.push_back(now);
+        LoginLimitDecision::Allowed
+    }
+
+    pub(crate) fn record_login_failure(&self, ip: IpAddr) -> Option<u64> {
+        let now = now_secs();
+        let mut attempts = self
+            .login_attempts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let state = attempts.entry(ip).or_default();
+        state.failed_count = state.failed_count.saturating_add(1);
+        if state.failed_count >= LOGIN_LOCK_AFTER_FAILURES {
+            let locked_until = now.saturating_add(LOGIN_LOCK_SECS);
+            state.locked_until = Some(locked_until);
+            state.recent_attempts.clear();
+            Some(LOGIN_LOCK_SECS)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn record_login_success(&self, ip: IpAddr) {
+        let mut attempts = self
+            .login_attempts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        attempts.remove(&ip);
     }
 
     pub(crate) fn issue_session_token(&self) -> String {
@@ -443,6 +535,10 @@ impl AuthState {
         SESSION_TTL_SECS
     }
 
+    pub(crate) fn cookie_secure(&self) -> bool {
+        self.cookie_secure
+    }
+
     fn sign_payload(&self, payload: &str) -> String {
         let mut h = Sha256::new();
         h.update(self.session_secret);
@@ -460,6 +556,55 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    #[test]
+    fn login_rate_limit_allows_five_attempts_per_second() {
+        let auth = AuthState::from_password("secret", false);
+        let ip = IpAddr::from([127, 0, 0, 1]);
+
+        for _ in 0..LOGIN_RATE_MAX_ATTEMPTS {
+            assert_eq!(auth.check_login_allowed(ip), LoginLimitDecision::Allowed);
+        }
+        assert!(matches!(
+            auth.check_login_allowed(ip),
+            LoginLimitDecision::RateLimited { .. }
+        ));
+    }
+
+    #[test]
+    fn repeated_failures_lock_ip_and_success_resets_state() {
+        let auth = AuthState::from_password("secret", false);
+        let ip = IpAddr::from([127, 0, 0, 2]);
+
+        for _ in 1..LOGIN_LOCK_AFTER_FAILURES {
+            assert_eq!(auth.record_login_failure(ip), None);
+        }
+        assert_eq!(auth.record_login_failure(ip), Some(LOGIN_LOCK_SECS));
+        assert!(matches!(
+            auth.check_login_allowed(ip),
+            LoginLimitDecision::Locked { .. }
+        ));
+
+        auth.record_login_success(ip);
+        assert_eq!(auth.check_login_allowed(ip), LoginLimitDecision::Allowed);
+    }
+
+    #[test]
+    fn session_defaults_are_short_lived_and_secure_flag_is_configurable() {
+        let insecure = AuthState::from_password("secret", false);
+        let secure = AuthState::from_password("secret", true);
+
+        assert_eq!(insecure.session_ttl_secs(), 24 * 60 * 60);
+        assert!(!insecure.cookie_secure());
+        assert!(secure.cookie_secure());
+        assert!(secure.verify_session_token(&secure.issue_session_token()));
+    }
 }
 
 pub(crate) const RECENT_DONE_JOB_RETENTION_MS: u64 = 2 * 60 * 60 * 1000;

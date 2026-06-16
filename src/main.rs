@@ -21,7 +21,7 @@ mod prewarm_state;
 mod third_party;
 mod ui;
 
-use base_system::config::{load_or_create, load_or_create_with_base};
+use base_system::config::{ConfigSpec, load_or_create, load_or_create_with_base};
 use base_system::context::Config;
 use base_system::logging::{LogOptions, LogSystem};
 use tracing::info;
@@ -53,6 +53,10 @@ struct Cli {
     /// Web UI 密码（启用锁模式，防止陌生人使用）
     #[arg(long)]
     password: Option<String>,
+
+    /// 为 Web UI 登录 Cookie 添加 Secure 标志（HTTPS/反代部署建议开启）
+    #[arg(long, default_value_t = false)]
+    cookie_secure: bool,
 
     /// 显示版本信息后退出
     #[arg(long, default_value_t = false)]
@@ -158,7 +162,15 @@ fn main() -> Result<()> {
         let password = cli
             .password
             .or_else(|| std::env::var("TOMATO_WEB_PASSWORD").ok());
-        return ui::web::run(&mut config, password);
+        let cookie_secure = cli.cookie_secure
+            || parse_bool_env("TOMATO_WEB_COOKIE_SECURE")
+            || parse_bool_env("TOMATO_COOKIE_SECURE");
+        return ui::web::run(
+            &mut config,
+            password,
+            config_path_from_data_dir(data_dir),
+            cookie_secure,
+        );
     }
 
     loop {
@@ -188,6 +200,26 @@ fn load_config_from_data_dir(data_dir: Option<&std::path::Path>) -> Result<Confi
     } else {
         load_or_create::<Config>(None).map_err(|e| anyhow!(e.to_string()))
     }
+}
+
+fn config_path_from_data_dir(data_dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    if let Some(dir) = data_dir {
+        dir.join(<Config as ConfigSpec>::FILE_NAME)
+    } else {
+        std::path::PathBuf::from(<Config as ConfigSpec>::FILE_NAME)
+    }
+}
+
+fn parse_bool_env(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn init_logging(debug: bool, base_dir: Option<&std::path::Path>) -> Result<LogSystem> {

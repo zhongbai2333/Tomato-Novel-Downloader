@@ -1,6 +1,5 @@
 use std::fs;
 use std::net::SocketAddr;
-use std::path::Path;
 
 use axum::Json;
 use axum::extract::{ConnectInfo, State};
@@ -10,11 +9,12 @@ use axum::response::{AppendHeaders, IntoResponse};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serde_yaml;
-use tracing::info;
+use tracing::{error, info, warn};
 
-use crate::base_system::config::{ConfigSpec, generate_yaml_with_comments, write_with_comments};
+use crate::base_system::config::{generate_yaml_with_comments, write_with_comments};
 use crate::base_system::context::Config;
 use crate::ui::web::state::AppState;
+use crate::ui::web::state::LoginLimitDecision;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginReq {
@@ -32,33 +32,59 @@ pub(crate) async fn api_login(
         return Ok(Json(json!({"ok": true, "locked": false})).into_response());
     };
 
+    match auth.check_login_allowed(addr.ip()) {
+        LoginLimitDecision::Allowed => {}
+        LoginLimitDecision::RateLimited { retry_after_secs } => {
+            warn!(target: "web_security", ip = %addr.ip(), retry_after_secs, "login rate limited");
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+        LoginLimitDecision::Locked { retry_after_secs } => {
+            error!(target: "web_security", ip = %addr.ip(), retry_after_secs, "login rejected while IP is locked");
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
     let provided = req.password.trim();
     if provided.is_empty() {
-        info!(target: "web_auth", ip = %addr, ok = false, "login failed (empty)");
+        if let Some(lock_secs) = auth.record_login_failure(addr.ip()) {
+            error!(target: "web_security", ip = %addr.ip(), lock_secs, "IP locked after repeated empty login attempts");
+        }
+        warn!(target: "web_auth", ip = %addr, ok = false, "login failed (empty)");
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     if !verify_password(auth, provided) {
-        info!(target: "web_auth", ip = %addr, ok = false, "login failed");
+        if let Some(lock_secs) = auth.record_login_failure(addr.ip()) {
+            error!(target: "web_security", ip = %addr.ip(), lock_secs, "IP locked after repeated login failures");
+        }
+        warn!(target: "web_auth", ip = %addr, ok = false, "login failed");
         return Err(StatusCode::UNAUTHORIZED);
     }
+
+    auth.record_login_success(addr.ip());
 
     info!(target: "web_auth", ip = %addr, ok = true, "login ok");
 
     // 使用服务端签名的会话 token，避免在 Cookie 中存储明文密码。
     let token = auth.issue_session_token();
+    let secure_attr = if auth.cookie_secure() { "; Secure" } else { "" };
     let cookie = format!(
-        "tomato_session={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        "tomato_session={}; Path=/; HttpOnly; SameSite=Lax{}; Max-Age={}",
         token,
+        secure_attr,
         auth.session_ttl_secs()
     );
     // 兼容旧前端/旧代理配置：同值下发 auth_token，避免出现“Cookie 已下发但后端不识别”。
     let compat_cookie = format!(
-        "auth_token={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        "auth_token={}; Path=/; HttpOnly; SameSite=Lax{}; Max-Age={}",
         token,
+        secure_attr,
         auth.session_ttl_secs()
     );
-    let clear_legacy_cookie = "tomato_pw=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    let clear_legacy_cookie = format!(
+        "tomato_pw=; Path=/; HttpOnly; SameSite=Lax{}; Max-Age=0",
+        secure_attr
+    );
 
     Ok((
         AppendHeaders([
@@ -152,12 +178,12 @@ pub(crate) async fn set_config(
         (old, g.clone())
     };
 
-    let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
+    let path = state.config_path.as_path();
     if let Err(e) = write_with_comments(&new_cfg, path) {
         // revert memory changes if persistence fails
         let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
-        tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
+        tracing::error!(target: "web_config", path = %path.display(), err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -173,7 +199,7 @@ pub(crate) struct WebConfigRawView {
 pub(crate) async fn get_config_raw(
     State(state): State<AppState>,
 ) -> Result<Json<WebConfigRawView>, StatusCode> {
-    let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
+    let path = state.config_path.as_path();
     if let Ok(raw) = fs::read_to_string(path) {
         return Ok(Json(WebConfigRawView {
             yaml: raw,
@@ -215,11 +241,11 @@ pub(crate) async fn set_config_raw(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
+    let path = state.config_path.as_path();
     if let Err(e) = write_with_comments(&cfg, path) {
         let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
-        tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
+        tracing::error!(target: "web_config", path = %path.display(), err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -250,11 +276,11 @@ pub(crate) async fn set_config_full(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    let path = Path::new(<Config as ConfigSpec>::FILE_NAME);
+    let path = state.config_path.as_path();
     if let Err(e) = write_with_comments(&cfg, path) {
         let mut g = state.config.lock().unwrap_or_else(|e| e.into_inner());
         *g = old_cfg;
-        tracing::error!(target: "web_config", err = %e, "failed to persist config.yml");
+        tracing::error!(target: "web_config", path = %path.display(), err = %e, "failed to persist config.yml");
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
 
