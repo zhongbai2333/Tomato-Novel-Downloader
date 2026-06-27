@@ -46,6 +46,16 @@ impl ProgressReporter {
     pub(crate) fn reset_save_progress(&mut self, total: usize) {
         self.snapshot.saved_chapters = 0;
         self.snapshot.chapter_total = total;
+        self.snapshot.audiobook_generated = 0;
+        self.snapshot.audiobook_skipped = 0;
+        self.snapshot.audiobook_failed = 0;
+        self.emit();
+    }
+
+    pub(crate) fn set_audiobook_stats(&mut self, generated: usize, skipped: usize, failed: usize) {
+        self.snapshot.audiobook_generated = generated;
+        self.snapshot.audiobook_skipped = skipped;
+        self.snapshot.audiobook_failed = failed;
         self.emit();
     }
 
@@ -178,6 +188,9 @@ pub(crate) fn make_reporter(
             comment_fetch: 0,
             comment_total: if segment_enabled(config) { total } else { 0 },
             comment_saved: 0,
+            audiobook_generated: 0,
+            audiobook_skipped: 0,
+            audiobook_failed: 0,
         },
         cb: progress,
         cli,

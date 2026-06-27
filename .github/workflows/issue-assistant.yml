@@ -1,1017 +1,1366 @@
 name: Issue Assistant
 
 on:
-  issues:
-    types:
-      - opened
-      - reopened
-      - labeled
-      - closed
-  issue_comment:
-    types:
-      - created
+    issues:
+        types:
+            - opened
+            - reopened
+            - labeled
+            - closed
+    issue_comment:
+        types:
+            - created
 
 permissions:
-  contents: read
-  issues: write
+    contents: read
+    issues: write
 
 jobs:
-  ai-review:
-    if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened' || (github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')))
-    runs-on: ubuntu-latest
-    concurrency:
-      group: issue-assistant-ai-review-${{ github.repository }}
-      cancel-in-progress: false
-    steps:
-      - name: Create pending AI review comment
-        id: pending_comment
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const resp = await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: [
-                '## 🤖 AI 审查进行中',
-                '',
-                '正在分析该 Issue 并生成总结、标题优化与标签建议，请稍候…'
-              ].join('\n')
-            });
-
-            core.setOutput('comment_id', String(resp.data.id));
-
-      - name: Analyze issue with DeepSeek Flash
-        id: analyze
-        uses: actions/github-script@v7
-        env:
-          OPENAI_BASE_URL: https://api.deepseek.com
-          OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const body = issue.body || '';
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
-            const failAnalysis = (reason) => {
-              const message = String(reason || 'unknown-error').slice(0, 1500);
-              const fallback = {
-                summary: 'AI 审查失败，已回退为人工处理建议。',
-                better_title: String(issue?.title || '未提供标题').slice(0, 200),
-                type: 'Question',
-                negative: 'none',
-                priority: '',
-                needs_info: true,
-                need_more_info_items: ['请补充复现步骤、运行环境与日志压缩包。'],
-                confidence: 0
-              };
-
-              core.setOutput('analysis_result', JSON.stringify(fallback));
-              core.setOutput('analyze_ok', 'false');
-              core.setOutput('analyze_error', message);
-              core.warning('AI analyze failed: ' + message);
-            };
-
-            try {
-
-            let notFixPolicyDoc = '';
-            try {
-              const fileResp = await github.rest.repos.getContent({
-                owner,
-                repo,
-                path: 'AI_NOT_FIX_CASES.md'
-              });
-
-              if (!Array.isArray(fileResp.data) && fileResp.data.content) {
-                notFixPolicyDoc = Buffer.from(fileResp.data.content, 'base64').toString('utf8');
-              }
-            } catch (e) {
-              core.warning('Failed to load AI_NOT_FIX_CASES.md: ' + e.message);
-            }
-
-            const openIssuesRaw = await github.paginate(github.rest.issues.listForRepo, {
-              owner,
-              repo,
-              state: 'open',
-              per_page: 100
-            });
-
-            const openIssues = openIssuesRaw
-              .filter(i => !i.pull_request && i.number !== issue.number)
-              .slice(0, 80)
-              .map(i => {
-                const labels = (i.labels || []).map(l => typeof l === 'string' ? l : l.name).filter(Boolean);
-                const bodyShort = String(i.body || '').replace(/\s+/g, ' ').slice(0, 180);
-                return `#${i.number} | ${i.title} | labels=[${labels.join(', ')}] | body=${bodyShort}`;
-              });
-
-            const allowedType = ['BUG', 'Documentation', 'Enhancement', 'Question'];
-            const allowedNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'];
-            const allowedPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
-
-            const prompt = [
-              '你是一个 GitHub Issue 分诊助手。',
-              '请根据 issue 标题和内容，输出严格 JSON（不要输出 markdown 代码块）。',
-              '语言要求：所有自然语言字段必须使用简体中文（包括 summary、better_title、need_more_info_items）。',
-              '禁止输出英文句子（专有名词与标签名除外）。',
-              '表达要求：summary 与 better_title 必须为客观陈述，不使用疑问语气。',
-              'need_more_info_items 允许使用礼貌提问式表达（如“请问…是否…/能否…”）。',
-              '核心目标：优先“完善用户意图”，而不是要求普通用户写专业方案。',
-              '请将用户原始描述整理为可执行意图，补齐合理上下文（在不臆造事实前提下）。',
-              '只有在“关键信息缺失会阻断处理”时才设置 needs_info=true。',
-              'need_more_info_items 必须是简短、低门槛、非技术化的补充建议（最多 2 条）。',
-              '不要要求普通用户提供架构设计、隐私策略、性能评估、复杂集成说明等专业材料。',
-              '重复判断规则：只与“当前 Open Issues”比较是否重复，不使用 Closed Issues 做重复判定。',
-              '策略规则：可参考 not-fix 策略样例（AI_NOT_FIX_CASES.md）。若命中策略且 Open 中无重复，可给 WontFix；若 Open 中有同类，给 Duplicate。',
-              '必须只从以下枚举中选择标签：',
-              'type: BUG | Documentation | Enhancement | Question',
-              'negative: Duplicate | WontFix | Invalid | none',
-              'priority: 🟪Critical | 🟥High | 🟨Medium | 🟩Low',
-              'needs_info: true | false',
-              '标签释义（必须严格按此理解）：',
-              '- AI-Rerun: Reuse AI review（人工触发重新审查）',
-              '- BUG: Something isn\'t working',
-              '- Confirm: Agree to AI review operation',
-              '- Documentation: Improvements or additions to documentation',
-              '- Duplicate: This issue or pull request already exists',
-              '- Enhancement: New feature or request',
-              '- Invalid: There is no such issue',
-              '- Needs-Info: Issue requires more information',
-              '- NEW: New Issue',
-              '- Question: Question related to the project',
-              '- WontFix: This will not be worked on',
-              '- 🟥High: High priority',
-              '- 🟨Medium: Medium priority',
-              '- 🟩Low: Low priority',
-              '- 🟪Critical: The program has a critical error that prevents it from running',
-              '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多2条)、confidence(0-1)、duplicate_of(number|null)。',
-              '如果信息明显不足，needs_info 必须为 true。',
-              '重复指向规则：若 negative=Duplicate，duplicate_of 必须填写一个合法的 issue 编号。合法来源有两个：①「当前 Open Issues 列表」中的编号，②「AI_NOT_FIX_CASES.md」中明确提及的锚点编号（如 #90、#230、#265 等）。summary 也必须提及"与 #xxx 重复"。',
-              '优先级：若 Open Issues 中存在同类 issue，优先指向 Open 的那条；若 Open 中无同类但命中 AI_NOT_FIX_CASES.md 中的锚点案例，则 duplicate_of 指向该锚点编号。若两个来源都找不到匹配，则不应判 Duplicate，而应判 WontFix。',
-              '标签互斥规则：negative(Duplicate/WontFix/Invalid) 与 type(BUG/Enhancement/...) 互斥，当 negative 不为 none 时，最终标签只保留 negative，不包含 type 和 priority。',
-              '标题规则：negative=Duplicate 时前缀用 [Duplicate]，negative=WontFix 时用 [WontFix]，negative=Invalid 时用 [Invalid]；其余按 type 加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
-              '',
-              'Issue 标题：',
-              issue.title,
-              '',
-              'Issue 正文：',
-              body,
-              '',
-              '当前 Open Issues（用于重复判断，仅此列表参与重复判定）：',
-              openIssues.length ? openIssues.join('\n') : '（无）',
-              '',
-              'Not-Fix 策略样例文档（用于策略参考，不直接作为重复目标）：',
-              notFixPolicyDoc || '（未找到 AI_NOT_FIX_CASES.md）'
-            ].join('\n');
-
-            const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.deepseek.com';
-            const preferredModel = process.env.OPENAI_MODEL || 'deepseek-v4-flash';
-
-            const headers = {
-              'Content-Type': 'application/json'
-            };
-
-            if (process.env.OPENAI_API_KEY) {
-              headers['Authorization'] = 'Bearer ' + process.env.OPENAI_API_KEY;
-            }
-
-            const pickModel = async () => {
-              try {
-                const modelsResp = await fetch(baseUrl + '/models', { headers, method: 'GET' });
-                if (!modelsResp.ok) return preferredModel;
-                const modelsData = await modelsResp.json();
-                const ids = Array.isArray(modelsData?.data)
-                  ? modelsData.data.map(m => String(m?.id || '')).filter(Boolean)
-                  : [];
-
-                if (ids.includes(preferredModel)) return preferredModel;
-
-                const candidates = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
-                for (const c of candidates) {
-                  if (ids.includes(c)) return c;
-                }
-
-                return ids[0] || preferredModel;
-              } catch {
-                return preferredModel;
-              }
-            };
-
-            const model = await pickModel();
-            core.info(`Issue assistant selected model: ${model}`);
-
-            const extractRawContent = (data) => {
-              const choice = data?.choices?.[0] || {};
-              const msg = choice?.message || {};
-
-              if (typeof msg.content === 'string') return msg.content;
-
-              if (Array.isArray(msg.content)) {
-                return msg.content
-                  .map(part => {
-                    if (typeof part === 'string') return part;
-                    if (typeof part?.text === 'string') return part.text;
-                    if (typeof part?.content === 'string') return part.content;
-                    return '';
-                  })
-                  .join('\n')
-                  .trim();
-              }
-
-              if (typeof choice?.text === 'string') return choice.text;
-              return '';
-            };
-
-            const parseJsonObject = (raw) => {
-              const trimmed = String(raw || '').trim();
-              if (!trimmed) throw new Error('empty-content');
-
-              try {
-                return JSON.parse(trimmed);
-              } catch {
-                const cleaned = trimmed
-                  .replace(/^```json\s*/i, '')
-                  .replace(/^```\s*/i, '')
-                  .replace(/```$/i, '')
-                  .trim();
-
-                try {
-                  return JSON.parse(cleaned);
-                } catch {
-                  const first = cleaned.indexOf('{');
-                  const last = cleaned.lastIndexOf('}');
-                  if (first >= 0 && last > first) {
-                    const candidate = cleaned.slice(first, last + 1);
-                    return JSON.parse(candidate);
-                  }
-                  throw new Error('invalid-json-content');
-                }
-              }
-            };
-
-            const doCompletion = async (useJsonResponseFormat) => {
-              const payload = {
-                model,
-                temperature: 0.1,
-                messages: [
-                  { role: 'system', content: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文；summary 与 better_title 必须客观陈述，不使用提问语气。need_more_info_items 允许礼貌提问。' },
-                  { role: 'user', content: prompt }
-                ]
-              };
-
-              if (useJsonResponseFormat) {
-                payload.response_format = { type: 'json_object' };
-              }
-
-              const resp = await fetch(baseUrl + '/chat/completions', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(payload)
-              });
-
-              const respText = await resp.text();
-
-              return { resp, respText };
-            };
-
-            let parsed;
-            let lastError = null;
-            const attemptLogs = [];
-
-            for (const useJsonResponseFormat of [true, false]) {
-              try {
-                const attemptName = `${useJsonResponseFormat ? 'json' : 'plain'}`;
-                const { resp, respText } = await doCompletion(useJsonResponseFormat);
-                if (!resp.ok) {
-                  throw new Error(`completion-${resp.status}: ${respText}`);
-                }
-
-                let data;
-                try {
-                  data = JSON.parse(respText);
-                } catch {
-                  throw new Error('completion-non-json: ' + String(respText || '').slice(0, 1200));
-                }
-
-                const raw = extractRawContent(data);
-                const usage = data?.usage || {};
-                const finishReason = data?.choices?.[0]?.finish_reason || 'unknown';
-                attemptLogs.push(`${attemptName} usage=${JSON.stringify(usage)} finish=${finishReason} rawLen=${raw.length}`);
-                core.info(`AI attempt ${attemptName} rawLen=${raw.length} finish=${finishReason}`);
-
-                parsed = parseJsonObject(raw);
-                break;
-              } catch (e) {
-                lastError = e;
-                attemptLogs.push(`${useJsonResponseFormat ? 'json' : 'plain'} error=${String(e?.message || e).slice(0, 300)}`);
-              }
-            }
-
-            if (!parsed) {
-              failAnalysis('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error') + ' | attempts=' + attemptLogs.join(' ; '));
-              return;
-            }
-
-            const result = {
-              summary: String(parsed.summary || '').slice(0, 300),
-              better_title: String(parsed.better_title || issue.title).slice(0, 200),
-              type: allowedType.includes(parsed.type) ? parsed.type : 'Question',
-              negative: (parsed.negative === 'none' || !parsed.negative)
-                ? 'none'
-                : (allowedNegative.includes(parsed.negative)
-                  ? ({
-                      duplicate: 'Duplicate',
-                      wontfix: 'WontFix',
-                      invalid: 'Invalid'
-                    }[String(parsed.negative).toLowerCase()] || parsed.negative)
-                  : 'none'),
-              priority: allowedPriority.includes(parsed.priority) ? parsed.priority : '🟨Medium',
-              needs_info: Boolean(parsed.needs_info),
-              need_more_info_items: Array.isArray(parsed.need_more_info_items)
-                ? parsed.need_more_info_items.slice(0, 5).map(v => String(v).slice(0, 200))
-                : [],
-              confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6))),
-              duplicate_of: (parsed.duplicate_of && Number.isFinite(Number(parsed.duplicate_of))) ? Number(parsed.duplicate_of) : null
-            };
-
-            // 服务端校验：duplicate_of 必须存在于 Open Issues 或 AI_NOT_FIX_CASES.md 提及的锚点 issue 中
-            if (result.duplicate_of) {
-              const openIssueNumbers = new Set(openIssuesRaw
-                .filter(i => !i.pull_request && i.number !== issue.number)
-                .map(i => i.number));
-
-              // 从 AI_NOT_FIX_CASES.md 提取所有 issue 编号作为合法锚点
-              const policyIssueNumbers = new Set();
-              if (notFixPolicyDoc) {
-                for (const m of notFixPolicyDoc.matchAll(/#(\d+)/g)) {
-                  policyIssueNumbers.add(Number(m[1]));
-                }
-              }
-
-              const isValidTarget = openIssueNumbers.has(result.duplicate_of) || policyIssueNumbers.has(result.duplicate_of);
-              if (!isValidTarget) {
-                core.warning(`duplicate_of=#${result.duplicate_of} not in Open Issues or AI_NOT_FIX_CASES.md; clearing`);
-                if (result.negative === 'Duplicate') {
-                  result.negative = 'WontFix';
-                }
-                result.duplicate_of = null;
-              }
-            }
-
-            // Duplicate 必须有合法的 duplicate_of，否则降级
-            if (result.negative === 'Duplicate' && !result.duplicate_of) {
-              core.warning('negative=Duplicate but no valid duplicate_of; downgrading to WontFix');
-              result.negative = 'WontFix';
-            }
-
-            // Question 不设置紧急度标签
-            if (result.type === 'Question') {
-              result.priority = '';
-            }
-
-            result.need_more_info_items = result.need_more_info_items
-              .map(v => String(v || '').trim())
-              .filter(Boolean)
-              .slice(0, 2);
-
-            // 对普通用户友好：高置信度时默认不索要补充；只有关键阻断时才 needs_info=true
-            if (result.confidence >= 0.75) {
-              result.needs_info = false;
-              result.need_more_info_items = [];
-            }
-
-            if (result.needs_info && result.need_more_info_items.length === 0) {
-              result.need_more_info_items = ['可补充一个具体场景或复现步骤（简短即可），便于更快处理。'];
-            }
-
-            const titlePrefixByType = {
-              BUG: '[BUG]',
-              Enhancement: '[Feature]',
-              Question: '[Question]',
-              Documentation: '[Doc]'
-            };
-            const negativePrefixMap = {
-              Duplicate: '[Duplicate]',
-              WontFix: '[WontFix]',
-              Invalid: '[Invalid]'
-            };
-            const normalizedTitleCore = String(result.better_title || issue.title || '')
-              .replace(/^\s*\[[^\]]+\]\s*/g, '')
-              .trim();
-            const safeTitleCore = normalizedTitleCore || '未提供标题';
-            const prefix = (result.negative !== 'none' && negativePrefixMap[result.negative])
-              ? negativePrefixMap[result.negative]
-              : (titlePrefixByType[result.type] || '[Question]');
-            result.better_title = `${prefix} ${safeTitleCore}`.slice(0, 200);
-
-            if (!result.summary || !result.summary.trim()) {
-              result.summary = '已完成自动分诊，请查看建议标签与补充项。';
-            }
-
-            result.summary = result.summary.replace(/[?？]+/g, '。').trim();
-
-            // 负向标签与 type/priority 互斥：Duplicate/WontFix/Invalid 单独作为标签
-            const labels = [];
-            if (result.negative !== 'none') {
-              labels.push(result.negative);
-            } else {
-              labels.push(result.type);
-              if (result.priority) labels.push(result.priority);
-            }
-            if (result.needs_info) labels.push('Needs-Info');
-
-            result.labels = labels;
-
-            if (!Array.isArray(result.labels) || result.labels.length < 1) {
-              failAnalysis('normalized-result-missing-labels');
-              return;
-            }
-
-            core.setOutput('analysis_result', JSON.stringify(result));
-            core.setOutput('analyze_ok', 'true');
-            core.setOutput('analyze_error', '');
-            } catch (e) {
-              failAnalysis(e?.message || e);
-            }
-
-      - name: Auto add Needs-Info once for low-confidence body review
-        if: always() && steps.analyze.outputs.analyze_ok == 'true' && github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
-        uses: actions/github-script@v7
-        env:
-          AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = issue.number;
-
-            const raw = String(process.env.AI_RESULT || '').trim();
-            if (!raw) return;
-
-            let result;
-            try {
-              result = JSON.parse(raw);
-            } catch {
-              return;
-            }
-
-            const confidence = Number(result?.confidence ?? 0);
-            const needsInfo = Boolean(result?.needs_info);
-            const threshold = 0.75;
-
-            // 仅在低置信度且 AI 判断需要补充信息时自动添加
-            if (!needsInfo || Number.isNaN(confidence) || confidence >= threshold) return;
-
-            // 每个 issue 仅允许自动添加一次：检查历史是否曾经被打过 Needs-Info
-            const events = await github.paginate(github.rest.issues.listEvents, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100
-            });
-
-            const everLabeledNeedsInfo = events.some(e => {
-              const ev = String(e?.event || '').toLowerCase();
-              const ln = String(e?.label?.name || '').toLowerCase();
-              return ev === 'labeled' && ln === 'needs-info';
-            });
-
-            if (everLabeledNeedsInfo) return;
-
-            const currentLabels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
-            const hasNeedsInfoNow = currentLabels.some(l => String(l).toLowerCase() === 'needs-info');
-            if (hasNeedsInfoNow) return;
-
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number,
-              labels: ['Needs-Info']
-            });
-
-      - name: Publish AI review comment
-        if: always() && steps.analyze.outputs.analyze_ok == 'true'
-        uses: actions/github-script@v7
-        env:
-          AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
-          AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const commentId = Number(process.env.AI_COMMENT_ID || 0);
-            const raw = String(process.env.AI_RESULT || '').trim();
-
-            if (!raw) {
-              const body = [
-                '## ⚠️ AI 审查结果为空',
-                '',
-                '本次审查执行完成，但未收到可用的结构化结果（AI_RESULT 为空）。',
-                '请添加 `AI-Rerun` 重试；如持续复现，请检查代理返回格式。'
-              ].join('\n');
-
-              if (commentId > 0) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: commentId,
-                  body
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body
-                });
-              }
-              return;
-            }
-
-            let result;
-            try {
-              result = JSON.parse(raw);
-            } catch (e) {
-              const body = [
-                '## ⚠️ AI 审查结果不可解析',
-                '',
-                '本次审查返回了非 JSON 结果，无法生成建议。',
-                `- 解析错误：\`${String(e?.message || e).replace(/`/g, '\\`')}\``,
-                '请添加 `AI-Rerun` 重试。'
-              ].join('\n');
-
-              if (commentId > 0) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: commentId,
-                  body
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body
-                });
-              }
-              return;
-            }
-
-            if (!Array.isArray(result.labels) || result.labels.length < 1) {
-              const body = [
-                '## ⚠️ AI 审查结果不完整',
-                '',
-                '本次审查返回字段缺失（labels 不完整），已阻止发布无效建议。',
-                '请添加 `AI-Rerun` 重试。'
-              ].join('\n');
-
-              if (commentId > 0) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: commentId,
-                  body
-                });
-              } else {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number,
-                  body
-                });
-              }
-              return;
-            }
-
-            const marker = '<!-- ai-issue-review:' + JSON.stringify(result).replace(/-->/g, '--＞') + ' -->';
-            const lines = [];
-            lines.push('## 🤖 AI 审查结果');
-            lines.push('');
-            lines.push('- **总结**: ' + (result.summary || '（无）'));
-            if (result.duplicate_of) {
-              lines.push('- **重复于**: #' + result.duplicate_of);
-            }
-            lines.push('- **建议标题**: ' + (result.better_title || issue.title));
-            lines.push('- **建议标签**: ' + (Array.isArray(result.labels) && result.labels.length ? result.labels.map(v => '`' + v + '`').join(' ') : '（无）'));
-            lines.push('- **是否需要补充信息**: ' + (result.needs_info ? '是' : '否'));
-            lines.push('- **置信度**: ' + Math.round((Number(result.confidence || 0) * 100)) + '%');
-
-            if (Array.isArray(result.need_more_info_items) && result.need_more_info_items.length > 0) {
-              lines.push('');
-              lines.push(result.needs_info ? '### 建议补充（尽量简短）' : '### 可选补充（如方便）');
-              for (const item of result.need_more_info_items) {
-                lines.push('- ' + item);
-              }
-            }
-
-            lines.push('');
-            lines.push('维护者如同意本次 AI 结果，请添加标签 `Confirm`，系统会自动执行标签落地并移除 `Confirm`。');
-            lines.push('如需再次触发 AI 重审，可添加标签 `AI-Rerun`。');
-            lines.push(marker);
-
-            if (commentId > 0) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: commentId,
-                body: lines.join('\n')
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body: lines.join('\n')
-              });
-            }
-
-      - name: Fallback comment when AI review fails
-        if: always() && steps.analyze.outputs.analyze_ok != 'true'
-        uses: actions/github-script@v7
-        env:
-          ANALYZE_ERROR: ${{ steps.analyze.outputs.analyze_error }}
-          AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const reason = String(process.env.ANALYZE_ERROR || 'unknown-error').slice(0, 1000);
-            const commentId = Number(process.env.AI_COMMENT_ID || 0);
-            const body = [
-              '## ⚠️ AI 审查暂时失败',
-              '',
-              '本次自动审查未成功完成（可能是服务启动失败、网络波动、限流或上游响应异常）。',
-              `- 诊断信息：\`${reason.replace(/`/g, '\\`')}\``,
-              '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
-              '',
-              '维护者也可直接手动打标签处理，不影响正常流程。'
-            ].join('\n');
-
-            if (commentId > 0) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: commentId,
-                body
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                body
-              });
-            }
-
-      - name: Remove ai-rerun label after processing
-        if: always() && github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            for (const name of ['AI-Rerun', 'ai-rerun']) {
-              try {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.payload.issue.number,
-                  name
-                });
-              } catch {
-                // ignore absent label
-              }
-            }
-
-  needs-info-comment-rerun:
-    if: github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.issue.state == 'open'
-    runs-on: ubuntu-latest
-    concurrency:
-      group: issue-assistant-needs-info-comment-${{ github.repository }}-${{ github.event.issue.number }}
-      cancel-in-progress: true
-    steps:
-      - name: Re-trigger AI when issue author follows up under Needs-Info
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const comment = context.payload.comment;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = issue.number;
-
-            const issueAuthor = String(issue.user?.login || '').toLowerCase();
-            const commenter = String(comment.user?.login || '').toLowerCase();
-            if (!issueAuthor || !commenter || issueAuthor !== commenter) {
-              core.info('Skip: commenter is not the issue author.');
-              return;
-            }
-
-            const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
-            const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
-            const hasNeedsInfo = hasLabel('Needs-Info');
-
-            if (!hasNeedsInfo) {
-              core.info('Skip: issue does not have Needs-Info label.');
-              return;
-            }
-
-            for (const name of ['Needs-Info', 'needs-info']) {
-              try {
-                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
-              } catch {
-                // ignore absent label
-              }
-            }
-
-            const labelsToAdd = [];
-            if (!hasLabel('NEW')) labelsToAdd.push('NEW');
-            if (!hasLabel('AI-Rerun')) labelsToAdd.push('AI-Rerun');
-
-            if (labelsToAdd.length > 0) {
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number,
-                labels: labelsToAdd
-              });
-            }
-
-  confirm-apply:
-    if: github.event_name == 'issues' && github.event.action == 'labeled' && (github.event.label.name == 'Confirm' || github.event.label.name == 'confirm')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Apply AI review result after confirm
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = issue.number;
-
-            const typeGroup = ['BUG', 'Documentation', 'Enhancement', 'Question', 'bug', 'documentation', 'enhancement', 'question'];
-            const negativeGroup = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'];
-            const priorityGroup = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100
-            });
-
-            const markerRegex = /<!--\s*ai-issue-review:(.*?)-->/s;
-            let aiPayload = null;
-
-            for (let i = comments.length - 1; i >= 0; i--) {
-              const c = comments[i];
-              if (!c.body) continue;
-              const m = c.body.match(markerRegex);
-              if (!m) continue;
-              try {
-                aiPayload = JSON.parse(m[1].trim());
-                break;
-              } catch (e) {
-                core.warning('Failed to parse AI payload: ' + e.message);
-              }
-            }
-
-            if (!aiPayload) {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: '未找到可应用的 AI 审查结果，请先等待 AI 审查评论生成后再添加 `Confirm`。'
-              });
-              return;
-            }
-
-            // 同步应用 AI 优化标题
-            const aiTitleRaw = String(aiPayload.better_title || '').trim();
-            const currentTitle = String(issue.title || '').trim();
-            if (aiTitleRaw) {
-              const normalizedAiTitle = aiTitleRaw.replace(/\s+/g, ' ').trim().slice(0, 200);
-              if (normalizedAiTitle && normalizedAiTitle !== currentTitle) {
-                await github.rest.issues.update({
-                  owner,
-                  repo,
-                  issue_number,
-                  title: normalizedAiTitle
-                });
-              }
-            }
-
-            // 将 AI 总结追加到 Issue Body 末尾
-            const aiSummaryMarker = '<!-- ai-summary-section -->';
-            const currentBody = String(issue.body || '');
-            const summaryLines = [];
-            summaryLines.push(aiSummaryMarker);
-            summaryLines.push('');
-            summaryLines.push('---');
-            summaryLines.push('');
-            summaryLines.push('### 🤖 AI 审查总结');
-            summaryLines.push('');
-            summaryLines.push('- **总结**: ' + (aiPayload.summary || '（无）'));
-            if (aiPayload.duplicate_of) {
-              summaryLines.push('- **重复于**: #' + aiPayload.duplicate_of);
-            }
-
-            const summaryBlock = summaryLines.join('\n');
-
-            // 如果 body 中已有 AI 总结区域，替换它；否则追加
-            let newBody;
-            const markerIdx = currentBody.indexOf(aiSummaryMarker);
-            if (markerIdx >= 0) {
-              newBody = currentBody.slice(0, markerIdx).trimEnd() + '\n\n' + summaryBlock;
-            } else {
-              newBody = currentBody.trimEnd() + '\n\n' + summaryBlock;
-            }
-
-            await github.rest.issues.update({
-              owner,
-              repo,
-              issue_number,
-              body: newBody
-            });
-
-            const normalizeLabel = (label) => {
-              const text = String(label || '').trim();
-              const low = text.toLowerCase();
-              const map = {
-                bug: 'BUG',
-                documentation: 'Documentation',
-                enhancement: 'Enhancement',
-                question: 'Question',
-                duplicate: 'Duplicate',
-                wontfix: 'WontFix',
-                invalid: 'Invalid',
-                'needs-info': 'Needs-Info'
-              };
-              return map[low] || text;
-            };
-
-            const desiredLabels = new Set((Array.isArray(aiPayload.labels) ? aiPayload.labels : []).map(normalizeLabel));
-
-            // Question 不允许携带紧急度
-            if (desiredLabels.has('Question')) {
-              for (const p of priorityGroup) desiredLabels.delete(p);
-            }
-
-            // Remove conflicting labels first.
-            const current = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name));
-
-            const removeIfConflicts = async (group) => {
-              for (const label of current) {
-                if (group.includes(label) && !desiredLabels.has(label)) {
-                  try {
-                    await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
-                  } catch {
-                    // ignore
-                  }
-                }
-              }
-            };
-
-            await removeIfConflicts(typeGroup);
-            await removeIfConflicts(negativeGroup);
-            await removeIfConflicts(priorityGroup);
-
-            // Apply desired labels from AI.
-            if (desiredLabels.size > 0) {
-              await github.rest.issues.addLabels({
-                owner,
-                repo,
-                issue_number,
-                labels: Array.from(desiredLabels)
-              });
-            }
-
-            // Remove control/status labels as requested.
-            for (const name of ['Confirm', 'confirm', 'NEW', 'new', 'AI-Rerun', 'ai-rerun']) {
-              try {
-                await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
-              } catch {
-                // ignore absent label
-              }
-            }
-
-            // Needs-Info 也需清理：若 AI 不再建议补充信息，残留 Needs-Info 会导致 close-handler 误判
-            if (!desiredLabels.has('Needs-Info')) {
-              for (const name of ['Needs-Info', 'needs-info']) {
-                try {
-                  await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
-                } catch {
-                  // ignore absent label
-                }
-              }
-            }
-
-            const hasNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'].some(l => desiredLabels.has(l));
-
-            if (hasNegative) {
-              const negLabel = ['Duplicate', 'WontFix', 'Invalid'].find(l => desiredLabels.has(l)) || 'Negative';
-              let closeBody = `已根据 \`Confirm\` 应用 AI 审查结果，结论为 \`${negLabel}\`，现自动关闭该 Issue。`;
-              if (negLabel === 'Duplicate' && aiPayload.duplicate_of) {
-                closeBody += `\n\n重复于：#${aiPayload.duplicate_of}`;
-              }
-
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: closeBody
-              });
-
-              await github.rest.issues.update({
-                owner,
-                repo,
-                issue_number,
-                state: 'closed',
-                state_reason: 'not_planned'
-              });
-            } else {
-              const confirmer = context.payload.sender?.login;
-              if (confirmer) {
-                try {
-                  await github.rest.issues.addAssignees({
-                    owner,
-                    repo,
-                    issue_number,
-                    assignees: [confirmer]
-                  });
-                } catch (e) {
-                  core.warning('Failed to add assignee ' + confirmer + ': ' + e.message);
-                }
-              }
-
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: '已根据 `Confirm` 应用 AI 审查标签，流程完成。本次为受理结论，已自动将确认人加入 Assignees。'
-              });
-            }
-
-  close-handler:
-    if: github.event_name == 'issues' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Handle close rules by state reason and labels
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const issue = context.payload.issue;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = issue.number;
-            const reason = String(issue.state_reason || '').toLowerCase(); // completed | not_planned | reopened
-
-            const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
-            const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
-
-            const hasNeedsInfo = hasLabel('Needs-Info');
-            const hasPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'].some(hasLabel);
-            const hasAcceptedType = ['BUG', 'Enhancement', 'Documentation'].some(hasLabel);
-
-            // 1) 保留 Needs-Info 且 Close issue（completed）：移除 Needs-Info，不回复
-            if (hasNeedsInfo && reason === 'completed') {
-              for (const name of ['Needs-Info', 'needs-info']) {
-                try {
-                  await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
-                } catch {
-                  // ignore absent label
-                }
-              }
-              return;
-            }
-
-            // 2) 保留 Needs-Info 且 Close as not planned：保留 Needs-Info，并回复提示
-            if (hasNeedsInfo && reason === 'not_planned') {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: '由于您并未跟进此Issue，现将此Issue临时关闭，若您还有更多信息，可重启此Issue！'
-              });
-              return;
-            }
-
-            // 3) BUG/Enhancement/Documentation 且已受理（有紧急度标签）后关闭：回复修复完成提示
-            if (hasAcceptedType && hasPriority && reason === 'completed') {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body: '感谢您的Issue，现已完成修复，请等待新版本构建并更新！'
-              });
-            }
+    ai-review:
+        if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened' || (github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')))
+        runs-on: ubuntu-latest
+        concurrency:
+            group: issue-assistant-ai-review-${{ github.repository }}-${{ github.event.issue.number }}
+            cancel-in-progress: false
+        steps:
+            - name: Create pending AI review comment
+              id: pending_comment
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = issue.number;
+                      const aiReviewMarker = '<!-- ai-issue-review:';
+                      const pendingMarker = '<!-- ai-issue-review-pending -->';
+                      const pendingBody = [
+                        '## 🤖 AI 审查进行中',
+                        '',
+                        '正在分析该 Issue 并生成总结、标题优化与标签建议，请稍候…',
+                        pendingMarker
+                      ].join('\n');
+
+                      const comments = await github.paginate(github.rest.issues.listComments, {
+                        owner,
+                        repo,
+                        issue_number,
+                        per_page: 100
+                      });
+
+                      const isAiReviewComment = (comment) => {
+                        const text = String(comment?.body || '');
+                        return text.includes(aiReviewMarker) || text.includes(pendingMarker) || text.startsWith('## 🤖 AI 审查结果') || text.startsWith('## ⚠️ AI 审查');
+                      };
+
+                      let latestAiIndex = -1;
+                      for (let i = comments.length - 1; i >= 0; i--) {
+                        if (isAiReviewComment(comments[i])) {
+                          latestAiIndex = i;
+                          break;
+                        }
+                      }
+
+                      if (latestAiIndex >= 0) {
+                        const latestAi = comments[latestAiIndex];
+                        const hasNewerCommentBelow = comments.slice(latestAiIndex + 1).some(c => !isAiReviewComment(c));
+                        if (!hasNewerCommentBelow) {
+                          await github.rest.issues.updateComment({
+                            owner,
+                            repo,
+                            comment_id: latestAi.id,
+                            body: pendingBody
+                          });
+                          core.setOutput('comment_id', String(latestAi.id));
+                          return;
+                        }
+
+                        try {
+                          await github.rest.issues.deleteComment({
+                            owner,
+                            repo,
+                            comment_id: latestAi.id
+                          });
+                        } catch (e) {
+                          core.warning('Failed to delete old AI review comment: ' + e.message);
+                        }
+                      }
+
+                      const resp = await github.rest.issues.createComment({
+                        owner,
+                        repo,
+                        issue_number,
+                        body: pendingBody
+                      });
+
+                      core.setOutput('comment_id', String(resp.data.id));
+
+            - name: Analyze issue with DeepSeek
+              id: analyze
+              uses: actions/github-script@v7
+              env:
+                  OPENAI_BASE_URL: https://api.deepseek.com
+                  OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const body = issue.body || '';
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+
+                      const failAnalysis = (reason) => {
+                        const message = String(reason || 'unknown-error').slice(0, 1500);
+                        const fallback = {
+                          summary: 'AI 审查失败，已回退为人工处理建议。',
+                          better_title: String(issue?.title || '未提供标题').slice(0, 200),
+                          type: 'Question',
+                          negative: 'none',
+                          priority: '',
+                          needs_info: true,
+                          need_more_info_items: ['请补充复现步骤、运行环境与日志压缩包。'],
+                          confidence: 0
+                        };
+
+                        core.setOutput('analysis_result', JSON.stringify(fallback));
+                        core.setOutput('analyze_ok', 'false');
+                        core.setOutput('analyze_error', message);
+                        core.warning('AI analyze failed: ' + message);
+                      };
+
+                      try {
+
+                      let notFixPolicyDoc = '';
+                      try {
+                        const fileResp = await github.rest.repos.getContent({
+                          owner,
+                          repo,
+                          path: 'AI_NOT_FIX_CASES.md'
+                        });
+
+                        if (!Array.isArray(fileResp.data) && fileResp.data.content) {
+                          notFixPolicyDoc = Buffer.from(fileResp.data.content, 'base64').toString('utf8');
+                        }
+                      } catch (e) {
+                        core.warning('Failed to load AI_NOT_FIX_CASES.md: ' + e.message);
+                      }
+
+                      const allowedType = ['BUG', 'Documentation', 'Enhancement', 'Question'];
+                      const allowedNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'];
+                      const allowedPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
+
+                      const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.deepseek.com';
+                      const preferredModel = process.env.OPENAI_MODEL || 'deepseek-v4-flash';
+
+                      if (!process.env.OPENAI_API_KEY) {
+                        failAnalysis('missing DEEPSEEK_API_KEY secret');
+                        return;
+                      }
+
+                      const headers = {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY
+                      };
+
+                      const pickModel = async () => {
+                        try {
+                          const modelsResp = await fetch(baseUrl + '/models', { headers, method: 'GET' });
+                          if (!modelsResp.ok) return preferredModel;
+                          const modelsData = await modelsResp.json();
+                          const ids = Array.isArray(modelsData?.data)
+                            ? modelsData.data.map(m => String(m?.id || '')).filter(Boolean)
+                            : [];
+
+                          if (ids.includes(preferredModel)) return preferredModel;
+
+                          const candidates = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
+                          for (const c of candidates) {
+                            if (ids.includes(c)) return c;
+                          }
+
+                          return ids[0] || preferredModel;
+                        } catch {
+                          return preferredModel;
+                        }
+                      };
+
+                      const model = await pickModel();
+                      const supportsThinking = /deepseek-v4-pro/i.test(model);
+                      core.info(`Issue assistant selected model: ${model}`);
+
+                      const extractRawContent = (data) => {
+                        const choice = data?.choices?.[0] || {};
+                        const msg = choice?.message || {};
+
+                        if (typeof msg.content === 'string') return msg.content;
+
+                        if (Array.isArray(msg.content)) {
+                          return msg.content
+                            .map(part => {
+                              if (typeof part === 'string') return part;
+                              if (typeof part?.text === 'string') return part.text;
+                              if (typeof part?.content === 'string') return part.content;
+                              return '';
+                            })
+                            .join('\n')
+                            .trim();
+                        }
+
+                        if (typeof choice?.text === 'string') return choice.text;
+                        return '';
+                      };
+
+                      const parseJsonObject = (raw) => {
+                        const trimmed = String(raw || '').trim();
+                        if (!trimmed) throw new Error('empty-content');
+
+                        try {
+                          return JSON.parse(trimmed);
+                        } catch {
+                          const cleaned = trimmed
+                            .replace(/^```json\s*/i, '')
+                            .replace(/^```\s*/i, '')
+                            .replace(/```$/i, '')
+                            .trim();
+
+                          try {
+                            return JSON.parse(cleaned);
+                          } catch {
+                            const first = cleaned.indexOf('{');
+                            const last = cleaned.lastIndexOf('}');
+                            if (first >= 0 && last > first) {
+                              const candidate = cleaned.slice(first, last + 1);
+                              return JSON.parse(candidate);
+                            }
+                            throw new Error('invalid-json-content');
+                          }
+                        }
+                      };
+
+                      const retryAfter = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+                      const doCompletion = async (messages, options = {}) => {
+                        const {
+                          useJsonResponseFormat = false,
+                          thinking = 'disabled',
+                          reasoningEffort,
+                          maxTokens = 2000,
+                          maxRetries = 2,
+                          requestModel = model
+                        } = options;
+
+                        let lastError;
+                        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+                          const payload = {
+                            model: requestModel,
+                            max_tokens: maxTokens,
+                            messages
+                          };
+
+                          if (thinking === 'enabled' && supportsThinking) {
+                            payload.thinking = { type: 'enabled' };
+                            if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
+                          } else {
+                            payload.thinking = { type: 'disabled' };
+                            payload.temperature = 0.1;
+                          }
+
+                          if (useJsonResponseFormat) {
+                            payload.thinking = { type: 'disabled' };
+                            payload.response_format = { type: 'json_object' };
+                          }
+
+                          try {
+                            const resp = await fetch(baseUrl + '/chat/completions', {
+                              method: 'POST',
+                              headers,
+                              body: JSON.stringify(payload)
+                            });
+
+                            const respText = await resp.text();
+                            if (resp.ok || ![408, 409, 425, 429, 500, 502, 503, 504].includes(resp.status) || attempt === maxRetries) {
+                              return { resp, respText };
+                            }
+                            lastError = new Error(`retryable-${resp.status}: ${respText.slice(0, 300)}`);
+                            core.warning(`DeepSeek request retry ${attempt + 1}/${maxRetries} after HTTP ${resp.status}`);
+                          } catch (e) {
+                            lastError = e;
+                            if (attempt === maxRetries) throw e;
+                            core.warning(`DeepSeek request retry ${attempt + 1}/${maxRetries} after network error: ${String(e?.message || e).slice(0, 300)}`);
+                          }
+
+                          await retryAfter(750 * Math.pow(2, attempt));
+                        }
+
+                        throw lastError || new Error('completion-retry-exhausted');
+                      };
+
+                      const stopWords = new Set(['issue', 'bug', 'feature', 'question', 'doc', 'update', '问题', '异常', '报错', '功能', '建议', '文档', '使用', '无法', '不能', '没有', 'the', 'and', 'or', 'to', 'of', 'in', 'is']);
+                      const normalizeText = (value) => String(value || '').replace(/https?:\/\/\S+/g, ' ').replace(/<!--.*?-->/gs, ' ').replace(/_No response_/gi, ' ').replace(/\s+/g, ' ').trim();
+                      const sanitizeSearchQuery = (value) => normalizeText(value)
+                        .replace(/\b(?:repo|org|user|is|state|label|labels|author|assignee|mentions|milestone|project|type|reason|created|updated|closed|comments|interactions|in):(?:"[^"]+"|'[^']+'|\S+)/gi, ' ')
+                        .replace(/[(){}[\]<>]/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                        .slice(0, 80);
+                      const localDuplicateQueries = () => {
+                        const title = normalizeText(issue.title).replace(/^\[[^\]]+\]\s*/, '');
+                        const source = `${title} ${normalizeText(body).slice(0, 1000)}`.toLowerCase();
+                        const tokens = Array.from(source.matchAll(/[a-z][a-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}|\d{3,}/g))
+                          .map(m => m[0])
+                          .filter(token => !stopWords.has(token) && token.length <= 30);
+                        const counts = new Map();
+                        for (const token of tokens) counts.set(token, (counts.get(token) || 0) + 1 + (title.toLowerCase().includes(token) ? 3 : 0));
+                        const ranked = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([token]) => token);
+                        return [title, ranked.slice(0, 3).join(' '), ranked.slice(0, 2).join(' '), ranked[0] || '']
+                          .map(sanitizeSearchQuery)
+                          .filter(Boolean);
+                      };
+
+                      const keywordPrompt = [
+                        '你是 GitHub Issue 查重检索助手。',
+                        '请根据当前 issue 生成 1 到 4 个用于 GitHub issue search 的短查询词。',
+                        '要求：只输出严格 JSON，不要 markdown。',
+                        'JSON 格式：{"queries":["关键词1","关键词2"]}',
+                        '每个关键词 1 到 5 个词，优先保留产品对象、错误对象、核心动作；不要包含 issue 模板字段、泛词、URL、版本号噪声。',
+                        '关键词要适合召回相似 Issues（包括 Open 和 Closed）；第一个可以较精确，后续应更短更泛。',
+                        '',
+                        'Issue 标题：',
+                        issue.title,
+                        '',
+                        'Issue 正文：',
+                        body.slice(0, 2500)
+                      ].join('\n');
+
+                      const generateDuplicateQueries = async () => {
+                        const fallback = localDuplicateQueries();
+                        try {
+                          const { resp, respText } = await doCompletion([
+                            { role: 'system', content: '你只输出 JSON，用于 GitHub issue search 关键词生成。' },
+                            { role: 'user', content: keywordPrompt }
+                          ], { useJsonResponseFormat: true, thinking: 'disabled', maxTokens: 600 });
+                          if (!resp.ok) throw new Error(`keyword-${resp.status}: ${respText}`);
+                          const data = JSON.parse(respText);
+                          const parsed = parseJsonObject(extractRawContent(data));
+                          const aiQueries = Array.isArray(parsed.queries) ? parsed.queries.map(sanitizeSearchQuery).filter(Boolean) : [];
+                          return Array.from(new Set([...aiQueries, ...fallback])).slice(0, 6);
+                        } catch (e) {
+                          core.warning('Duplicate keyword generation failed, using local fallback: ' + String(e?.message || e).slice(0, 500));
+                          return Array.from(new Set(fallback)).slice(0, 4);
+                        }
+                      };
+
+                      const duplicateQueries = await generateDuplicateQueries();
+                      core.info('Duplicate search queries: ' + JSON.stringify(duplicateQueries));
+
+                      const searchDuplicateCandidates = async (queries) => {
+                        const candidatesByNumber = new Map();
+                        const now = Date.now();
+                        const addCandidate = (item, query, rank) => {
+                          if (item.number === issue.number || item.pull_request) return;
+                          const labels = (item.labels || []).map(l => typeof l === 'string' ? l : l.name).filter(Boolean);
+                          const labelSet = new Set(labels.map(l => String(l).toLowerCase()));
+                          const state = String(item.state || '').toLowerCase();
+                          const updatedMs = Date.parse(item.updated_at || item.updatedAt || '') || 0;
+                          const ageDays = updatedMs ? Math.max(0, (now - updatedMs) / 86400000) : 3650;
+                          const titleLower = String(item.title || '').toLowerCase();
+                          const queryLower = String(query || '').toLowerCase();
+                          const exactBoost = queryLower && titleLower.includes(queryLower) ? 20 : 0;
+                          const stateBoost = state === 'open' ? 12 : 0;
+                          const duplicateBoost = labelSet.has('duplicate') ? 10 : 0;
+                          const negativeBoost = (labelSet.has('wontfix') || labelSet.has('invalid')) ? -5 : 0;
+                          const recencyBoost = Math.max(0, 12 - Math.log2(ageDays + 1));
+                          const queryBoost = Math.max(0, 10 - rank * 1.5);
+                          const score = queryBoost + exactBoost + stateBoost + duplicateBoost + negativeBoost + recencyBoost;
+                          const prev = candidatesByNumber.get(item.number);
+                          if (!prev || score > prev.score) {
+                            candidatesByNumber.set(item.number, { item, score });
+                          }
+                        };
+
+                        for (const [rank, query] of queries.entries()) {
+                          if (!query) continue;
+                          const q = `repo:${owner}/${repo} is:issue ${query}`;
+                          try {
+                            const result = await github.rest.search.issuesAndPullRequests({ q, sort: 'updated', order: 'desc', per_page: 15 });
+                            for (const item of result.data.items || []) {
+                              addCandidate(item, query, rank);
+                            }
+                          } catch (e) {
+                            core.warning(`Duplicate search failed for query "${query}": ` + String(e?.message || e).slice(0, 500));
+                          }
+                        }
+                        return Array.from(candidatesByNumber.values())
+                          .sort((a, b) => b.score - a.score)
+                          .map(v => v.item)
+                          .slice(0, 30);
+                      };
+
+                      const duplicateCandidatesRaw = await searchDuplicateCandidates(duplicateQueries);
+                      const duplicateCandidateNumbers = new Set(duplicateCandidatesRaw.map(i => i.number));
+                      const duplicateCandidates = duplicateCandidatesRaw.map(i => {
+                        const labels = (i.labels || []).map(l => typeof l === 'string' ? l : l.name).filter(Boolean);
+                        const bodyShort = String(i.body || '').replace(/\s+/g, ' ').slice(0, 240);
+                        const state = String(i.state || 'unknown').toLowerCase();
+                        const stateReason = String(i.state_reason || i.stateReason || '').toLowerCase();
+                        const updatedAt = String(i.updated_at || i.updatedAt || '').replace(/T/, ' ').replace(/Z$/, ' UTC');
+                        return `#${i.number} | state=${state}${stateReason ? `/${stateReason}` : ''} | updated=${updatedAt || 'unknown'} | ${i.title} | labels=[${labels.join(', ')}] | body=${bodyShort}`;
+                      });
+
+                      const prompt = [
+                        '你是一个 GitHub Issue 分诊助手。',
+                        '请根据 issue 标题和内容，输出严格 JSON（不要输出 markdown 代码块）。',
+                        '语言要求：所有自然语言字段必须使用简体中文（包括 summary、better_title、need_more_info_items）。',
+                        '禁止输出英文句子（专有名词与标签名除外）。',
+                        '表达要求：summary 与 better_title 必须为客观陈述，不使用疑问语气。',
+                        'need_more_info_items 允许使用礼貌提问式表达（如“请问…是否…/能否…”）。',
+                        '核心目标：优先“完善用户意图”，而不是要求普通用户写专业方案。',
+                        '请将用户原始描述整理为可执行意图，补齐合理上下文（在不臆造事实前提下）。',
+                        '只有在“关键信息缺失会阻断处理”时才设置 needs_info=true。',
+                        'need_more_info_items 必须是简短、低门槛、非技术化的补充建议（最多 2 条）。',
+                        '不要要求普通用户提供架构设计、隐私策略、性能评估、复杂集成说明等专业材料。',
+                        '项目背景：Tomato-Novel-Downloader 是 Rust 编写的番茄小说下载器，包含 TUI/Web UI、EPUB/TXT 输出、断点续传、搜索、配置、Docker、Termux、Edge TTS、有声小说生成、Official-API/no-official-api 双模式等功能。',
+                        '涉及第三方接口、VIP/登录能力、批量滥用、违法转载等内容时，应参考项目 README 与策略文档，避免要求用户提供敏感信息或引导绕过限制。',
+                        '重复判断规则：只使用两类来源判断重复：① AI 关键词生成 + GitHub Issue Search 召回的候选 Issues；② AI_NOT_FIX_CASES.md 策略文档中维护者精选的锚点案例。',
+                        'Closed 候选或策略锚点只有在语义高度一致时才可作为 Duplicate 目标；不要只因关键词相同就判重复。',
+                        '策略规则：可参考 not-fix 策略样例（AI_NOT_FIX_CASES.md）。若命中维护者明确不处理的方向，可给 WontFix；若命中明确锚点或候选中的同类 issue，可给 Duplicate。',
+                        '必须只从以下枚举中选择标签：',
+                        'type: BUG | Documentation | Enhancement | Question',
+                        'negative: Duplicate | WontFix | Invalid | none',
+                        'priority: 🟪Critical | 🟥High | 🟨Medium | 🟩Low',
+                        'needs_info: true | false',
+                        '标签释义（必须严格按此理解）：',
+                        '- AI-Rerun: Reuse AI review（人工触发重新审查）',
+                        '- BUG: Something isn\'t working',
+                        '- Confirm: Agree to AI review operation',
+                        '- Documentation: Improvements or additions to documentation',
+                        '- Duplicate: This issue or pull request already exists',
+                        '- Enhancement: New feature or request',
+                        '- Invalid: There is no such issue',
+                        '- Needs-Info: Issue requires more information',
+                        '- NEW: New Issue',
+                        '- Question: Question related to the project',
+                        '- WontFix: This will not be worked on',
+                        '- 🟥High: High priority',
+                        '- 🟨Medium: Medium priority',
+                        '- 🟩Low: Low priority',
+                        '- 🟪Critical: The program has a critical error that prevents it from running',
+                        '此外提供 summary(不超过120字)、better_title(简洁明确)、need_more_info_items(数组，最多2条)、confidence(0-1)、duplicate_of(number|null)。',
+                        '如果信息明显不足，needs_info 必须为 true。',
+                        '重复指向规则：若 negative=Duplicate，duplicate_of 必须填写合法 issue 编号。合法来源仅为：①「候选 Issues」中的编号，②「AI_NOT_FIX_CASES.md」中明确提及的锚点编号（如 #90、#243、#265 等）。summary 也必须提及"与 #xxx 重复"。',
+                        '优先级：若候选 Issues 中存在同类 issue，优先指向该 issue；若候选中无同类但命中 AI_NOT_FIX_CASES.md 中的锚点案例，则 duplicate_of 指向该锚点编号。若两个来源都找不到匹配，则不应判 Duplicate，而应判 WontFix 或普通类型。',
+                        '标签互斥规则：negative(Duplicate/WontFix/Invalid) 与 type(BUG/Enhancement/...) 互斥，当 negative 不为 none 时，最终标签只保留 negative，不包含 type 和 priority。',
+                        '标题规则：negative=Duplicate 时前缀用 [Duplicate]，negative=WontFix 时用 [WontFix]，negative=Invalid 时用 [Invalid]；其余按 type 加前缀：BUG=>[BUG]，Enhancement=>[Feature]，Question=>[Question]，Documentation=>[Doc]。',
+                        '',
+                        'Issue 标题：',
+                        issue.title,
+                        '',
+                        'Issue 正文：',
+                        body,
+                        '',
+                        '候选 Issues（由关键词检索召回，可用于重复判断）：',
+                        duplicateCandidates.length ? duplicateCandidates.join('\n') : '（无候选）',
+                        '',
+                        'Not-Fix 策略样例文档（用于策略参考；文中锚点 issue 编号可作为 Duplicate 目标）：',
+                        notFixPolicyDoc || '（未找到 AI_NOT_FIX_CASES.md）'
+                      ].join('\n');
+
+                      let parsed;
+                      let lastError = null;
+                      const attemptLogs = [];
+
+                      const reviewAttempts = [
+                        {
+                          name: 'thinking-pro',
+                          options: { thinking: 'enabled', reasoningEffort: 'high', maxTokens: 2200, requestModel: model },
+                          system: '你是严谨的 issue 审查助手。请先充分分析，再只输出最终 JSON；不要输出 markdown，最终 content 必须是一个 JSON 对象。所有自然语言字段必须为简体中文；summary 与 better_title 必须客观陈述，不使用提问语气。need_more_info_items 允许礼貌提问。'
+                        },
+                        {
+                          name: 'json-fallback',
+                          options: { useJsonResponseFormat: true, thinking: 'disabled', maxTokens: 2000, requestModel: model },
+                          system: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文；summary 与 better_title 必须客观陈述，不使用提问语气。need_more_info_items 允许礼貌提问。'
+                        },
+                        {
+                          name: 'plain-fallback',
+                          options: { thinking: 'disabled', maxTokens: 2000, requestModel: model },
+                          system: '你是严谨的 issue 审查助手，只输出 JSON，且所有自然语言字段必须为简体中文；summary 与 better_title 必须客观陈述，不使用提问语气。need_more_info_items 允许礼貌提问。'
+                        }
+                      ];
+
+                      for (const attempt of reviewAttempts) {
+                        try {
+                          const { resp, respText } = await doCompletion([
+                            { role: 'system', content: attempt.system },
+                            { role: 'user', content: prompt }
+                          ], attempt.options);
+                          if (!resp.ok) {
+                            throw new Error(`completion-${resp.status}: ${respText}`);
+                          }
+
+                          let data;
+                          try {
+                            data = JSON.parse(respText);
+                          } catch {
+                            throw new Error('completion-non-json: ' + String(respText || '').slice(0, 1200));
+                          }
+
+                          const raw = extractRawContent(data);
+                          const usage = data?.usage || {};
+                          const finishReason = data?.choices?.[0]?.finish_reason || 'unknown';
+                          const reasoningLen = String(data?.choices?.[0]?.message?.reasoning_content || '').length;
+                          attemptLogs.push(`${attempt.name} usage=${JSON.stringify(usage)} finish=${finishReason} rawLen=${raw.length} reasoningLen=${reasoningLen}`);
+                          core.info(`AI attempt ${attempt.name} rawLen=${raw.length} reasoningLen=${reasoningLen} finish=${finishReason}`);
+
+                          parsed = parseJsonObject(raw);
+                          break;
+                        } catch (e) {
+                          lastError = e;
+                          attemptLogs.push(`${attempt.name} error=${String(e?.message || e).slice(0, 300)}`);
+                        }
+                      }
+
+                      if (!parsed) {
+                        failAnalysis('AI completion failed or returned invalid JSON: ' + (lastError?.message || 'unknown-error') + ' | attempts=' + attemptLogs.join(' ; '));
+                        return;
+                      }
+
+                      const result = {
+                        summary: String(parsed.summary || '').slice(0, 300),
+                        better_title: String(parsed.better_title || issue.title).slice(0, 200),
+                        type: allowedType.includes(parsed.type) ? parsed.type : 'Question',
+                        negative: (parsed.negative === 'none' || !parsed.negative)
+                          ? 'none'
+                          : (allowedNegative.includes(parsed.negative)
+                            ? ({
+                                duplicate: 'Duplicate',
+                                wontfix: 'WontFix',
+                                invalid: 'Invalid'
+                              }[String(parsed.negative).toLowerCase()] || parsed.negative)
+                            : 'none'),
+                        priority: allowedPriority.includes(parsed.priority) ? parsed.priority : '🟨Medium',
+                        needs_info: Boolean(parsed.needs_info),
+                        need_more_info_items: Array.isArray(parsed.need_more_info_items)
+                          ? parsed.need_more_info_items.slice(0, 5).map(v => String(v).slice(0, 200))
+                          : [],
+                        confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6))),
+                        duplicate_of: (parsed.duplicate_of && Number.isFinite(Number(parsed.duplicate_of))) ? Number(parsed.duplicate_of) : null
+                      };
+
+                      // 服务端校验：duplicate_of 必须存在于 GitHub Search 检索候选或 AI_NOT_FIX_CASES.md 提及的锚点 issue 中
+                      if (result.duplicate_of) {
+                        // 从 AI_NOT_FIX_CASES.md 提取所有 issue 编号作为合法锚点
+                        const policyIssueNumbers = new Set();
+                        if (notFixPolicyDoc) {
+                          for (const m of notFixPolicyDoc.matchAll(/#(\d+)/g)) {
+                            policyIssueNumbers.add(Number(m[1]));
+                          }
+                        }
+
+                        const isValidTarget = duplicateCandidateNumbers.has(result.duplicate_of) || policyIssueNumbers.has(result.duplicate_of);
+                        if (!isValidTarget) {
+                          core.warning(`duplicate_of=#${result.duplicate_of} not in GitHub Search candidates or AI_NOT_FIX_CASES.md; clearing`);
+                          if (result.negative === 'Duplicate') {
+                            result.negative = 'WontFix';
+                          }
+                          result.duplicate_of = null;
+                        }
+                      }
+
+                      // Duplicate 必须有合法的 duplicate_of，否则降级
+                      if (result.negative === 'Duplicate' && !result.duplicate_of) {
+                        core.warning('negative=Duplicate but no valid duplicate_of; downgrading to WontFix');
+                        result.negative = 'WontFix';
+                      }
+
+                      // Question 不设置紧急度标签
+                      if (result.type === 'Question') {
+                        result.priority = '';
+                      }
+
+                      result.need_more_info_items = result.need_more_info_items
+                        .map(v => String(v || '').trim())
+                        .filter(Boolean)
+                        .slice(0, 2);
+
+                      // 对普通用户友好：高置信度时默认不索要补充；只有关键阻断时才 needs_info=true
+                      if (result.confidence >= 0.75) {
+                        result.needs_info = false;
+                        result.need_more_info_items = [];
+                      }
+
+                      if (result.needs_info && result.need_more_info_items.length === 0) {
+                        result.need_more_info_items = ['可补充一个具体场景或复现步骤（简短即可），便于更快处理。'];
+                      }
+
+                      const titlePrefixByType = {
+                        BUG: '[BUG]',
+                        Enhancement: '[Feature]',
+                        Question: '[Question]',
+                        Documentation: '[Doc]'
+                      };
+                      const negativePrefixMap = {
+                        Duplicate: '[Duplicate]',
+                        WontFix: '[WontFix]',
+                        Invalid: '[Invalid]'
+                      };
+                      const normalizedTitleCore = String(result.better_title || issue.title || '')
+                        .replace(/^\s*\[[^\]]+\]\s*/g, '')
+                        .trim();
+                      const safeTitleCore = normalizedTitleCore || '未提供标题';
+                      const prefix = (result.negative !== 'none' && negativePrefixMap[result.negative])
+                        ? negativePrefixMap[result.negative]
+                        : (titlePrefixByType[result.type] || '[Question]');
+                      result.better_title = `${prefix} ${safeTitleCore}`.slice(0, 200);
+
+                      if (!result.summary || !result.summary.trim()) {
+                        result.summary = '已完成自动分诊，请查看建议标签与补充项。';
+                      }
+
+                      result.summary = result.summary.replace(/[?？]+/g, '。').trim();
+
+                      // 负向标签与 type/priority 互斥：Duplicate/WontFix/Invalid 单独作为标签
+                      const labels = [];
+                      if (result.negative !== 'none') {
+                        labels.push(result.negative);
+                      } else {
+                        labels.push(result.type);
+                        if (result.priority) labels.push(result.priority);
+                      }
+                      if (result.needs_info) labels.push('Needs-Info');
+
+                      result.labels = labels;
+
+                      if (!Array.isArray(result.labels) || result.labels.length < 1) {
+                        failAnalysis('normalized-result-missing-labels');
+                        return;
+                      }
+
+                      core.setOutput('analysis_result', JSON.stringify(result));
+                      core.setOutput('analyze_ok', 'true');
+                      core.setOutput('analyze_error', '');
+                      } catch (e) {
+                        failAnalysis(e?.message || e);
+                      }
+
+            - name: Auto add Needs-Info once for low-confidence body review
+              if: always() && steps.analyze.outputs.analyze_ok == 'true' && github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened')
+              uses: actions/github-script@v7
+              env:
+                  AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = issue.number;
+
+                      const raw = String(process.env.AI_RESULT || '').trim();
+                      if (!raw) return;
+
+                      let result;
+                      try {
+                        result = JSON.parse(raw);
+                      } catch {
+                        return;
+                      }
+
+                      const confidence = Number(result?.confidence ?? 0);
+                      const needsInfo = Boolean(result?.needs_info);
+                      const threshold = 0.75;
+
+                      // 仅在低置信度且 AI 判断需要补充信息时自动添加
+                      if (!needsInfo || Number.isNaN(confidence) || confidence >= threshold) return;
+
+                      // 每个 issue 仅允许自动添加一次：检查历史是否曾经被打过 Needs-Info
+                      const events = await github.paginate(github.rest.issues.listEvents, {
+                        owner,
+                        repo,
+                        issue_number,
+                        per_page: 100
+                      });
+
+                      const everLabeledNeedsInfo = events.some(e => {
+                        const ev = String(e?.event || '').toLowerCase();
+                        const ln = String(e?.label?.name || '').toLowerCase();
+                        return ev === 'labeled' && ln === 'needs-info';
+                      });
+
+                      if (everLabeledNeedsInfo) return;
+
+                      const currentLabels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+                      const hasNeedsInfoNow = currentLabels.some(l => String(l).toLowerCase() === 'needs-info');
+                      if (hasNeedsInfoNow) return;
+
+                      await github.rest.issues.addLabels({
+                        owner,
+                        repo,
+                        issue_number,
+                        labels: ['Needs-Info']
+                      });
+
+            - name: Publish AI review comment
+              if: always() && steps.analyze.outputs.analyze_ok == 'true'
+              uses: actions/github-script@v7
+              env:
+                  AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
+                  AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const commentId = Number(process.env.AI_COMMENT_ID || 0);
+                      const raw = String(process.env.AI_RESULT || '').trim();
+
+                      if (!raw) {
+                        const body = [
+                          '## ⚠️ AI 审查结果为空',
+                          '',
+                          '本次审查执行完成，但未收到可用的结构化结果（AI_RESULT 为空）。',
+                          '请添加 `AI-Rerun` 重试；如持续复现，请检查代理返回格式。'
+                        ].join('\n');
+
+                        if (commentId > 0) {
+                          await github.rest.issues.updateComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            comment_id: commentId,
+                            body
+                          });
+                        } else {
+                          await github.rest.issues.createComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: issue.number,
+                            body
+                          });
+                        }
+                        return;
+                      }
+
+                      let result;
+                      try {
+                        result = JSON.parse(raw);
+                      } catch (e) {
+                        const body = [
+                          '## ⚠️ AI 审查结果不可解析',
+                          '',
+                          '本次审查返回了非 JSON 结果，无法生成建议。',
+                          `- 解析错误：\`${String(e?.message || e).replace(/`/g, '\\`')}\``,
+                          '请添加 `AI-Rerun` 重试。'
+                        ].join('\n');
+
+                        if (commentId > 0) {
+                          await github.rest.issues.updateComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            comment_id: commentId,
+                            body
+                          });
+                        } else {
+                          await github.rest.issues.createComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: issue.number,
+                            body
+                          });
+                        }
+                        return;
+                      }
+
+                      if (!Array.isArray(result.labels) || result.labels.length < 1) {
+                        const body = [
+                          '## ⚠️ AI 审查结果不完整',
+                          '',
+                          '本次审查返回字段缺失（labels 不完整），已阻止发布无效建议。',
+                          '请添加 `AI-Rerun` 重试。'
+                        ].join('\n');
+
+                        if (commentId > 0) {
+                          await github.rest.issues.updateComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            comment_id: commentId,
+                            body
+                          });
+                        } else {
+                          await github.rest.issues.createComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: issue.number,
+                            body
+                          });
+                        }
+                        return;
+                      }
+
+                      const marker = '<!-- ai-issue-review:' + JSON.stringify(result).replace(/-->/g, '--＞') + ' -->';
+                      const lines = [];
+                      lines.push('## 🤖 AI 审查结果');
+                      lines.push('');
+                      lines.push('- **总结**: ' + (result.summary || '（无）'));
+                      if (result.duplicate_of) {
+                        lines.push('- **重复于**: #' + result.duplicate_of);
+                      }
+                      lines.push('- **建议标题**: ' + (result.better_title || issue.title));
+                      lines.push('- **建议标签**: ' + (Array.isArray(result.labels) && result.labels.length ? result.labels.map(v => '`' + v + '`').join(' ') : '（无）'));
+                      lines.push('- **是否需要补充信息**: ' + (result.needs_info ? '是' : '否'));
+                      lines.push('- **置信度**: ' + Math.round((Number(result.confidence || 0) * 100)) + '%');
+
+                      if (Array.isArray(result.need_more_info_items) && result.need_more_info_items.length > 0) {
+                        lines.push('');
+                        lines.push(result.needs_info ? '### 建议补充（尽量简短）' : '### 可选补充（如方便）');
+                        for (const item of result.need_more_info_items) {
+                          lines.push('- ' + item);
+                        }
+                      }
+
+                      lines.push('');
+                      lines.push('维护者如同意本次 AI 结果，请添加标签 `Confirm`，系统会自动执行标签落地并移除 `Confirm`。');
+                      lines.push('如需再次触发 AI 重审，可添加标签 `AI-Rerun`。');
+                      lines.push(marker);
+
+                      if (commentId > 0) {
+                        await github.rest.issues.updateComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          comment_id: commentId,
+                          body: lines.join('\n')
+                        });
+                      } else {
+                        await github.rest.issues.createComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: issue.number,
+                          body: lines.join('\n')
+                        });
+                      }
+
+            - name: Fallback comment when AI review fails
+              if: always() && steps.analyze.outputs.analyze_ok != 'true'
+              uses: actions/github-script@v7
+              env:
+                  ANALYZE_ERROR: ${{ steps.analyze.outputs.analyze_error }}
+                  AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const reason = String(process.env.ANALYZE_ERROR || 'unknown-error').slice(0, 1000);
+                      const commentId = Number(process.env.AI_COMMENT_ID || 0);
+                      const body = [
+                        '## ⚠️ AI 审查暂时失败',
+                        '',
+                        '本次自动审查未成功完成（可能是服务启动失败、网络波动、限流或上游响应异常）。',
+                        `- 诊断信息：\`${reason.replace(/`/g, '\\`')}\``,
+                        '你可以稍后编辑该 Issue 或重新打开 Issue 以触发再次审查。',
+                        '',
+                        '维护者也可直接手动打标签处理，不影响正常流程。'
+                      ].join('\n');
+
+                      if (commentId > 0) {
+                        await github.rest.issues.updateComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          comment_id: commentId,
+                          body
+                        });
+                      } else {
+                        await github.rest.issues.createComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: issue.number,
+                          body
+                        });
+                      }
+
+            - name: Remove ai-rerun label after processing
+              if: always() && github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      for (const name of ['AI-Rerun', 'ai-rerun']) {
+                        try {
+                          await github.rest.issues.removeLabel({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: context.payload.issue.number,
+                            name
+                          });
+                        } catch {
+                          // ignore absent label
+                        }
+                      }
+
+    needs-info-comment-rerun:
+        if: github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.issue.state == 'open'
+        runs-on: ubuntu-latest
+        concurrency:
+            group: issue-assistant-needs-info-comment-${{ github.repository }}-${{ github.event.issue.number }}
+            cancel-in-progress: true
+        steps:
+            - name: Re-trigger AI when issue author follows up under Needs-Info
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const comment = context.payload.comment;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = issue.number;
+
+                      const issueAuthor = String(issue.user?.login || '').toLowerCase();
+                      const commenter = String(comment.user?.login || '').toLowerCase();
+                      if (!issueAuthor || !commenter || issueAuthor !== commenter) {
+                        core.info('Skip: commenter is not the issue author.');
+                        return;
+                      }
+
+                      const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+                      const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
+                      const hasNeedsInfo = hasLabel('Needs-Info');
+
+                      if (!hasNeedsInfo) {
+                        core.info('Skip: issue does not have Needs-Info label.');
+                        return;
+                      }
+
+                      for (const name of ['Needs-Info', 'needs-info']) {
+                        try {
+                          await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                        } catch {
+                          // ignore absent label
+                        }
+                      }
+
+                      const labelsToAdd = [];
+                      if (!hasLabel('NEW')) labelsToAdd.push('NEW');
+                      if (!hasLabel('AI-Rerun')) labelsToAdd.push('AI-Rerun');
+
+                      if (labelsToAdd.length > 0) {
+                        await github.rest.issues.addLabels({
+                          owner,
+                          repo,
+                          issue_number,
+                          labels: labelsToAdd
+                        });
+                      }
+
+    confirm-apply:
+        if: github.event_name == 'issues' && github.event.action == 'labeled' && (github.event.label.name == 'Confirm' || github.event.label.name == 'confirm')
+        runs-on: ubuntu-latest
+        steps:
+            - name: Apply AI review result after confirm
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = issue.number;
+                      const confirmer = context.payload.sender?.login;
+
+                      const removeConfirmLabel = async () => {
+                        for (const name of ['Confirm', 'confirm']) {
+                          try {
+                            await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                          } catch {
+                            // ignore absent label
+                          }
+                        }
+                      };
+
+                      if (!confirmer) {
+                        await removeConfirmLabel();
+                        await github.rest.issues.createComment({ owner, repo, issue_number, body: '无法确认 `Confirm` 操作者身份，本次应用已中止，并已移除 `Confirm`。' });
+                        return;
+                      }
+
+                      let permission = 'none';
+                      try {
+                        const permissionResp = await github.rest.repos.getCollaboratorPermissionLevel({
+                          owner,
+                          repo,
+                          username: confirmer
+                        });
+                        permission = String(permissionResp.data?.permission || '').toLowerCase();
+                      } catch (e) {
+                        core.warning('Failed to check confirmer permission: ' + String(e?.message || e).slice(0, 300));
+                      }
+
+                      const allowedPermissions = new Set(['admin', 'maintain', 'write', 'triage']);
+                      if (!allowedPermissions.has(permission)) {
+                        await removeConfirmLabel();
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: `@${confirmer} 当前仓库权限为 \`${permission || 'unknown'}\`，不足以应用 AI 审查结果。本次操作已中止，并已移除 \`Confirm\`。`
+                        });
+                        return;
+                      }
+
+                      const typeGroup = ['BUG', 'Documentation', 'Enhancement', 'Question', 'bug', 'documentation', 'enhancement', 'question'];
+                      const negativeGroup = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'];
+                      const priorityGroup = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
+
+                      const comments = await github.paginate(github.rest.issues.listComments, {
+                        owner,
+                        repo,
+                        issue_number,
+                        per_page: 100
+                      });
+
+                      const markerRegex = /<!--\s*ai-issue-review:(.*?)-->/s;
+                      let aiPayload = null;
+                      let aiReviewComment = null;
+
+                      for (let i = comments.length - 1; i >= 0; i--) {
+                        const c = comments[i];
+                        if (!c.body) continue;
+                        const m = c.body.match(markerRegex);
+                        if (!m) continue;
+                        try {
+                          aiPayload = JSON.parse(m[1].trim());
+                          aiReviewComment = c;
+                          break;
+                        } catch (e) {
+                          core.warning('Failed to parse AI payload: ' + e.message);
+                        }
+                      }
+
+                      if (!aiPayload) {
+                        await removeConfirmLabel();
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: '未找到可应用的 AI 审查结果。本次操作已中止，请先等待 AI 审查评论生成后再添加 `Confirm`。'
+                        });
+                        return;
+                      }
+
+                      // 同步应用 AI 优化标题
+                      const aiTitleRaw = String(aiPayload.better_title || '').trim();
+                      const currentTitle = String(issue.title || '').trim();
+                      if (aiTitleRaw) {
+                        const normalizedAiTitle = aiTitleRaw.replace(/\s+/g, ' ').trim().slice(0, 200);
+                        if (normalizedAiTitle && normalizedAiTitle !== currentTitle) {
+                          await github.rest.issues.update({
+                            owner,
+                            repo,
+                            issue_number,
+                            title: normalizedAiTitle
+                          });
+                        }
+                      }
+
+                      // 将 AI 总结追加到 Issue Body 末尾
+                      const aiSummaryMarker = '<!-- ai-summary-section -->';
+                      const currentBody = String(issue.body || '');
+                      const summaryLines = [];
+                      summaryLines.push(aiSummaryMarker);
+                      summaryLines.push('');
+                      summaryLines.push('---');
+                      summaryLines.push('');
+                      summaryLines.push('### 🤖 AI 审查总结');
+                      summaryLines.push('');
+                      summaryLines.push('- **总结**: ' + (aiPayload.summary || '（无）'));
+                      if (aiPayload.duplicate_of) {
+                        summaryLines.push('- **重复于**: #' + aiPayload.duplicate_of);
+                      }
+
+                      const summaryBlock = summaryLines.join('\n');
+
+                      // 如果 body 中已有 AI 总结区域，替换它；否则追加
+                      let newBody;
+                      const markerIdx = currentBody.indexOf(aiSummaryMarker);
+                      if (markerIdx >= 0) {
+                        newBody = currentBody.slice(0, markerIdx).trimEnd() + '\n\n' + summaryBlock;
+                      } else {
+                        newBody = currentBody.trimEnd() + '\n\n' + summaryBlock;
+                      }
+
+                      await github.rest.issues.update({
+                        owner,
+                        repo,
+                        issue_number,
+                        body: newBody
+                      });
+
+                      const normalizeLabel = (label) => {
+                        const text = String(label || '').trim();
+                        const low = text.toLowerCase();
+                        const map = {
+                          bug: 'BUG',
+                          documentation: 'Documentation',
+                          enhancement: 'Enhancement',
+                          question: 'Question',
+                          duplicate: 'Duplicate',
+                          wontfix: 'WontFix',
+                          invalid: 'Invalid',
+                          'needs-info': 'Needs-Info'
+                        };
+                        return map[low] || text;
+                      };
+
+                      const desiredLabels = new Set((Array.isArray(aiPayload.labels) ? aiPayload.labels : []).map(normalizeLabel));
+
+                      // Question 不允许携带紧急度
+                      if (desiredLabels.has('Question')) {
+                        for (const p of priorityGroup) desiredLabels.delete(p);
+                      }
+
+                      // Remove conflicting labels first.
+                      const current = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name));
+
+                      const removeIfConflicts = async (group) => {
+                        for (const label of current) {
+                          if (group.includes(label) && !desiredLabels.has(label)) {
+                            try {
+                              await github.rest.issues.removeLabel({ owner, repo, issue_number, name: label });
+                            } catch {
+                              // ignore
+                            }
+                          }
+                        }
+                      };
+
+                      await removeIfConflicts(typeGroup);
+                      await removeIfConflicts(negativeGroup);
+                      await removeIfConflicts(priorityGroup);
+
+                      // Apply desired labels from AI.
+                      if (desiredLabels.size > 0) {
+                        await github.rest.issues.addLabels({
+                          owner,
+                          repo,
+                          issue_number,
+                          labels: Array.from(desiredLabels)
+                        });
+                      }
+
+                      // Remove control/status labels as requested.
+                      for (const name of ['Confirm', 'confirm', 'NEW', 'new', 'AI-Rerun', 'ai-rerun']) {
+                        try {
+                          await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                        } catch {
+                          // ignore absent label
+                        }
+                      }
+
+                      // Needs-Info 也需清理：若 AI 不再建议补充信息，残留 Needs-Info 会导致 close-handler 误判
+                      if (!desiredLabels.has('Needs-Info')) {
+                        for (const name of ['Needs-Info', 'needs-info']) {
+                          try {
+                            await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                          } catch {
+                            // ignore absent label
+                          }
+                        }
+                      }
+
+                      const hasNegative = ['Duplicate', 'WontFix', 'Invalid', 'duplicate', 'wontfix', 'invalid'].some(l => desiredLabels.has(l));
+
+                      const appendConfirmAudit = async (details) => {
+                        if (!aiReviewComment?.id || !aiReviewComment?.body) return;
+                        const auditMarker = '<!-- ai-confirm-audit -->';
+                        const auditLines = [];
+                        auditLines.push(auditMarker);
+                        auditLines.push('');
+                        auditLines.push('<details>');
+                        auditLines.push('<summary>维护者审计信息</summary>');
+                        auditLines.push('');
+                        auditLines.push(`- 确认人：@${confirmer}`);
+                        auditLines.push(`- 确认人权限：\`${permission}\``);
+                        auditLines.push(`- 应用时间：${new Date().toISOString()}`);
+                        auditLines.push(`- 应用标签：${Array.from(desiredLabels).map(v => `\`${v}\``).join(' ') || '（无）'}`);
+                        auditLines.push(`- 建议标题：${aiPayload.better_title || '（无）'}`);
+                        if (aiPayload.duplicate_of) auditLines.push(`- 重复目标：#${aiPayload.duplicate_of}`);
+                        for (const line of details || []) auditLines.push(`- ${line}`);
+                        auditLines.push('');
+                        auditLines.push('</details>');
+
+                        const currentBody = String(aiReviewComment.body || '');
+                        const nextBody = currentBody.includes(auditMarker)
+                          ? currentBody.slice(0, currentBody.indexOf(auditMarker)).trimEnd() + '\n\n' + auditLines.join('\n')
+                          : currentBody.trimEnd() + '\n\n' + auditLines.join('\n');
+                        await github.rest.issues.updateComment({ owner, repo, comment_id: aiReviewComment.id, body: nextBody });
+                      };
+
+                      if (hasNegative) {
+                        const negLabel = ['Duplicate', 'WontFix', 'Invalid'].find(l => desiredLabels.has(l)) || 'Negative';
+                        const closeReasonMap = {
+                          Duplicate: '该 Issue 与已有记录重复，后续请集中到重复目标中跟进。',
+                          WontFix: '该请求当前不计划处理，或不符合项目当前维护范围。',
+                          Invalid: '该 Issue 缺少可执行问题、与项目无关，或描述与实际项目范围不符。'
+                        };
+                        let closeBody = `已根据维护者添加的 \`Confirm\` 应用 AI 审查结果，结论为 \`${negLabel}\`。${closeReasonMap[negLabel] || '该 Issue 将按负向结论关闭。'}\n\n系统将自动关闭该 Issue。`;
+                        if (negLabel === 'Duplicate' && aiPayload.duplicate_of) {
+                          closeBody += `\n\n重复目标：#${aiPayload.duplicate_of}`;
+                        }
+
+                        const auditDetails = [];
+                        let closedWithNativeDuplicate = false;
+                        if (negLabel === 'Duplicate' && aiPayload.duplicate_of) {
+                          try {
+                            const target = await github.rest.issues.get({ owner, repo, issue_number: Number(aiPayload.duplicate_of) });
+                            await github.graphql(`
+                              mutation($issueId: ID!, $duplicateIssueId: ID!) {
+                                closeIssue(input: { issueId: $issueId, duplicateIssueId: $duplicateIssueId, stateReason: DUPLICATE }) {
+                                  issue { id number state stateReason duplicateOf { number title url } }
+                                }
+                              }
+                            `, {
+                              issueId: issue.node_id,
+                              duplicateIssueId: target.data.node_id
+                            });
+                            closedWithNativeDuplicate = true;
+                            auditDetails.push('关闭方式：GitHub 原生 duplicate 关系');
+                          } catch (e) {
+                            core.warning('Failed to close issue as native duplicate, falling back to not_planned: ' + String(e?.message || e).slice(0, 500));
+                            auditDetails.push('关闭方式：GitHub 原生 duplicate 失败，回退为 not_planned');
+                          }
+                        }
+
+                        if (negLabel !== 'Duplicate') {
+                          auditDetails.push('关闭方式：not_planned');
+                        }
+
+                        await appendConfirmAudit(auditDetails.length ? auditDetails : ['关闭方式：pending duplicate close']);
+
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: closeBody
+                        });
+
+                        if (!closedWithNativeDuplicate) {
+                          await github.rest.issues.update({
+                            owner,
+                            repo,
+                            issue_number,
+                            state: 'closed',
+                            state_reason: 'not_planned'
+                          });
+                        }
+                      } else {
+                        if (confirmer) {
+                          try {
+                            await github.rest.issues.addAssignees({
+                              owner,
+                              repo,
+                              issue_number,
+                              assignees: [confirmer]
+                            });
+                          } catch (e) {
+                            core.warning('Failed to add assignee ' + confirmer + ': ' + e.message);
+                          }
+                        }
+
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: '已根据维护者添加的 `Confirm` 应用 AI 审查结果。本 Issue 已进入受理流程，并已自动将确认人加入 Assignees。'
+                        });
+
+                        await appendConfirmAudit(['处理结论：已受理并分配确认人']);
+                      }
+
+    close-handler:
+        if: github.event_name == 'issues' && github.event.action == 'closed'
+        runs-on: ubuntu-latest
+        steps:
+            - name: Handle close rules by state reason and labels
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const issue = context.payload.issue;
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = issue.number;
+                      const reason = String(issue.state_reason || '').toLowerCase(); // completed | not_planned | duplicate
+
+                      const labels = (issue.labels || []).map(l => (typeof l === 'string' ? l : l.name || ''));
+                      const hasLabel = (name) => labels.some(l => String(l).toLowerCase() === String(name).toLowerCase());
+
+                      const hasQuestion = hasLabel('Question');
+                      const hasNeedsInfo = hasLabel('Needs-Info');
+                      const hasPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'].some(hasLabel);
+                      const hasAcceptedType = ['BUG', 'Enhancement', 'Documentation'].some(hasLabel);
+                      const issueAuthor = String(issue.user?.login || '').toLowerCase();
+                      const closer = String(context.payload.sender?.login || '').toLowerCase();
+                      const closedByIssueAuthor = issueAuthor && closer && issueAuthor === closer;
+
+                      if (reason === 'duplicate') {
+                        core.info('Skip: duplicate close is already handled by Confirm/native GitHub duplicate flow.');
+                        return;
+                      }
+
+                      // 0) 用户普通 Close 非 Question issue 时，统一转为 Close as not planned。
+                      // GitHub Actions 不能直接修改已关闭 issue 的 state_reason，需重开后再按 not_planned 关闭。
+                      // 仅处理 issue 作者本人关闭，维护者关闭的 completed 仍可进入 Release 更新日志。
+                      if (reason === 'completed' && closedByIssueAuthor && !hasQuestion) {
+                        await github.rest.issues.update({
+                          owner,
+                          repo,
+                          issue_number,
+                          state: 'open'
+                        });
+
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: '该 Issue 由提交者直接关闭。为避免被 Release 更新日志误识别为“已完成修复”，系统已将关闭状态转换为 `Close as not planned`。'
+                        });
+
+                        await github.rest.issues.update({
+                          owner,
+                          repo,
+                          issue_number,
+                          state: 'closed',
+                          state_reason: 'not_planned'
+                        });
+                        return;
+                      }
+
+                      // 1) 保留 Needs-Info 且 Close issue（completed）：移除 Needs-Info，不回复
+                      if (hasNeedsInfo && reason === 'completed') {
+                        for (const name of ['Needs-Info', 'needs-info']) {
+                          try {
+                            await github.rest.issues.removeLabel({ owner, repo, issue_number, name });
+                          } catch {
+                            // ignore absent label
+                          }
+                        }
+                        return;
+                      }
+
+                      // 2) 保留 Needs-Info 且 Close as not planned：保留 Needs-Info，并回复提示
+                      if (hasNeedsInfo && reason === 'not_planned') {
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: '由于该 Issue 仍缺少继续处理所需的信息，现按 `Close as not planned` 暂时关闭。若后续可以补充复现步骤、日志、截图或脱敏样例，欢迎重新打开并继续补充。'
+                        });
+                        return;
+                      }
+
+                      // 3) BUG/Enhancement/Documentation 且已受理（有紧急度标签）后关闭：回复修复完成提示
+                      if (hasAcceptedType && hasPriority && reason === 'completed') {
+                        await github.rest.issues.createComment({
+                          owner,
+                          repo,
+                          issue_number,
+                          body: '感谢反馈。该 Issue 已标记为完成，相关变更将在后续版本发布时体现。'
+                        });
+                      }

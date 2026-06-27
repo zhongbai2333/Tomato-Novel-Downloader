@@ -51,6 +51,9 @@ pub(super) fn start_download_task(
             0
         },
         comment_saved: 0,
+        audiobook_generated: 0,
+        audiobook_skipped: 0,
+        audiobook_failed: 0,
     });
     app.messages.clear();
     app.results.clear();

@@ -1,0 +1,98 @@
+name: Quality Checks
+
+on:
+  pull_request:
+    branches: ["main", "dev"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "Cargo_no_official.toml"
+      - "scripts/**"
+      - "MAINTAINING.md"
+      - ".github/workflows/quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  default-features:
+    name: Default features
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout downloader
+        uses: actions/checkout@v4
+
+      - name: Checkout Tomato-Novel-Official-API
+        uses: actions/checkout@v4
+        with:
+          repository: zhongbai2333/Tomato-Novel-Official-API
+          token: ${{ secrets.OAPI }}
+          path: Tomato-Novel-Official-API
+
+      - name: Link Official-API path dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API" || true
+          ln -s "$GITHUB_WORKSPACE/Tomato-Novel-Official-API" "$GITHUB_WORKSPACE/../Tomato-Novel-Official-API"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            Tomato-Novel-Official-API/target
+          key: ${{ runner.os }}-quality-default-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-quality-default-
+            ${{ runner.os }}-quality-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  no-official-api:
+    name: no-official-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout downloader
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-quality-no-official-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-quality-no-official-
+            ${{ runner.os }}-quality-
+
+      - name: Run tests
+        run: cargo test --no-default-features --features no-official-api
+
+      - name: Run clippy
+        run: cargo clippy --no-default-features --features no-official-api --all-targets -- -D warnings

@@ -552,31 +552,35 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
     let snap = app.download_progress.as_ref().unwrap_or(&empty);
 
     let show_comments = app.config.enable_segment_comments && snap.comment_total > 0;
-    let mut items: Vec<(&str, usize, usize, Color)> = Vec::new();
+    let mut items: Vec<(String, usize, usize, Color)> = Vec::new();
     items.push((
-        "组下载",
+        "组下载".to_string(),
         snap.group_done,
         snap.group_total.max(1),
         Color::LightCyan,
     ));
+    let save_label = match snap.save_phase {
+        SavePhase::Audiobook => format!(
+            "有声书 生成{} 跳过{} 失败{}",
+            snap.audiobook_generated, snap.audiobook_skipped, snap.audiobook_failed
+        ),
+        SavePhase::TextSave => "正文保存".to_string(),
+    };
     items.push((
-        match snap.save_phase {
-            SavePhase::Audiobook => "有声书",
-            SavePhase::TextSave => "正文保存",
-        },
+        save_label,
         snap.saved_chapters,
         snap.chapter_total.max(1),
         Color::Green,
     ));
     if show_comments {
         items.push((
-            "段评抓取",
+            "段评抓取".to_string(),
             snap.comment_fetch,
             snap.comment_total.max(1),
             Color::Yellow,
         ));
         items.push((
-            "段评保存",
+            "段评保存".to_string(),
             snap.comment_saved,
             snap.comment_total.max(1),
             Color::Magenta,
@@ -617,7 +621,7 @@ pub(super) fn draw_preview(frame: &mut ratatui::Frame, app: &mut App) {
                 let gauge = Gauge::default()
                     .gauge_style(Style::default().fg(color))
                     .ratio(ratio)
-                    .label(format!("{label} {done}/{total}"));
+                    .label(format!("{} {}/{}", label, done, total));
                 frame.render_widget(gauge, *area);
             }
         }
@@ -916,6 +920,9 @@ pub(super) fn apply_preview_ready(app: &mut App, pending: PendingDownload) {
             0
         },
         comment_saved: 0,
+        audiobook_generated: 0,
+        audiobook_skipped: 0,
+        audiobook_failed: 0,
     });
     app.status = format!("预览: 《{}》 共 {} 章，已下载 {}", title, total, downloaded);
 }

@@ -23,6 +23,7 @@ use serde_json::Value;
 use tracing::{error, info, warn};
 
 use super::book_manager::BookManager;
+use crate::base_system::book_paths;
 use crate::base_system::context::safe_fs_name;
 use crate::download::downloader::{ProgressReporter, SavePhase};
 
@@ -159,6 +160,78 @@ fn write_atomic(path: &Path, tmp_path: &Path, bytes: &[u8]) -> std::io::Result<(
     }
     fs::rename(tmp_path, path)?;
     Ok(())
+}
+
+fn is_jpeg_bytes(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
+}
+
+fn image_to_jpeg_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgb = img.to_rgb8();
+    let mut out = Vec::new();
+    {
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90);
+        encoder
+            .encode(
+                &rgb,
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .ok()?;
+    }
+    Some(out)
+}
+
+fn export_audiobook_cover(book_folder: &Path, book_name: &str, audio_dir: &Path) {
+    let Some(cover_path) = book_paths::find_existing_cover_file(book_folder, Some(book_name))
+    else {
+        warn!(target: "book_manager", "未找到书籍封面，跳过有声书 cover.jpg 导出");
+        return;
+    };
+
+    let bytes = match fs::read(&cover_path) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) => {
+            warn!(target: "book_manager", path = %cover_path.display(), "书籍封面为空，跳过有声书 cover.jpg 导出");
+            return;
+        }
+        Err(e) => {
+            warn!(target: "book_manager", path = %cover_path.display(), error = ?e, "读取书籍封面失败，跳过有声书 cover.jpg 导出");
+            return;
+        }
+    };
+
+    let jpeg = if is_jpeg_bytes(&bytes) {
+        bytes
+    } else {
+        match image_to_jpeg_bytes(&bytes) {
+            Some(jpeg) => jpeg,
+            None => {
+                warn!(target: "book_manager", path = %cover_path.display(), "书籍封面无法转为 JPEG，跳过有声书 cover.jpg 导出");
+                return;
+            }
+        }
+    };
+
+    let out_path = audio_dir.join("cover.jpg");
+    if fs::read(&out_path).is_ok_and(|existing| existing == jpeg) {
+        info!(target: "book_manager", path = %out_path.display(), "有声书封面已存在，跳过导出");
+        return;
+    }
+
+    let tmp_path = audio_dir.join("cover.jpg.partial");
+    match write_atomic(&out_path, &tmp_path, &jpeg) {
+        Ok(_) => info!(target: "book_manager", path = %out_path.display(), "有声书封面已导出"),
+        Err(e) => {
+            warn!(target: "book_manager", path = %out_path.display(), error = ?e, "写入有声书 cover.jpg 失败")
+        }
+    }
+}
+
+fn existing_audio_is_reusable(path: &Path) -> bool {
+    path.metadata().is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
 fn is_tts_sentence_boundary(ch: char) -> bool {
@@ -474,6 +547,7 @@ pub fn generate_audiobook(
         error!(target: "book_manager", error = ?e, "create audio output dir failed");
         return false;
     }
+    export_audiobook_cover(manager.book_folder(), book_name, &audio_dir);
 
     let voice = {
         let v = cfg.audiobook_voice.trim();
@@ -538,6 +612,7 @@ pub fn generate_audiobook(
     }
 
     let mut jobs = Vec::new();
+    let mut skipped_existing = 0usize;
     for (index, chapter) in (chapters.iter()).enumerate() {
         let cid = chapter.get("id").and_then(|v| {
             v.as_str()
@@ -575,6 +650,11 @@ pub fn generate_audiobook(
         let file_name = format!("{:04}-{}.{}", idx, safe_fs_name(&title, "_", 120), ext);
         let out_path = audio_dir.join(file_name);
         let tmp_path = out_path.with_extension(format!("{}.partial", ext));
+        if existing_audio_is_reusable(&out_path) {
+            skipped_existing += 1;
+            let _ = fs::remove_file(&tmp_path);
+            continue;
+        }
         jobs.push(ChapterJob {
             idx,
             title,
@@ -584,14 +664,25 @@ pub fn generate_audiobook(
         });
     }
 
-    if jobs.is_empty() {
+    let total_work = jobs.len() + skipped_existing;
+
+    if let Some(p) = progress.as_deref_mut() {
+        p.set_save_phase(SavePhase::Audiobook);
+        p.reset_save_progress(total_work);
+        p.set_audiobook_stats(0, skipped_existing, 0);
+        for _ in 0..skipped_existing {
+            p.inc_save_progress();
+        }
+    }
+
+    if total_work == 0 {
         info!(target: "book_manager", "无可用章节内容，跳过有声小说生成");
         return true;
     }
 
-    if let Some(p) = progress.as_deref_mut() {
-        p.set_save_phase(SavePhase::Audiobook);
-        p.reset_save_progress(jobs.len());
+    if jobs.is_empty() {
+        info!(target: "book_manager", "有声小说音频均已存在，跳过生成：{}", audio_dir.display());
+        return true;
     }
 
     let mut concurrency = cfg.audiobook_concurrency.max(1);
@@ -599,8 +690,9 @@ pub fn generate_audiobook(
 
     info!(
         target: "book_manager",
-        "开始生成有声小说：chapters={} -> {}，并发={}",
+        "开始生成有声小说：待生成={}，已跳过={} -> {}，并发={}",
         jobs.len(),
+        skipped_existing,
         audio_dir.display(),
         concurrency
     );
@@ -634,29 +726,38 @@ pub fn generate_audiobook(
 
     let (pb, owns_bar) = if let Some(existing) = bar {
         existing.set_prefix("有声书");
-        existing.set_length(jobs.len() as u64);
-        existing.set_position(0);
-        existing.set_message("");
+        existing.set_length(total_work as u64);
+        existing.set_position(skipped_existing as u64);
+        if skipped_existing > 0 {
+            existing.set_message(format!("已跳过 {} 章", skipped_existing));
+        } else {
+            existing.set_message("");
+        }
         (existing.clone(), false)
     } else if quiet {
         // TUI/自定义 UI 渲染场景下，避免 indicatif 进度条打乱终端布局。
         let pb = ProgressBar::hidden();
-        pb.set_length(jobs.len() as u64);
-        pb.set_position(0);
+        pb.set_length(total_work as u64);
+        pb.set_position(skipped_existing as u64);
         (pb, true)
     } else {
-        let pb = ProgressBar::new(jobs.len() as u64);
+        let pb = ProgressBar::new(total_work as u64);
         let style = ProgressStyle::with_template("{prefix} {bar:40.cyan/blue} {pos}/{len} {msg}")
             .unwrap()
             .progress_chars("=>-");
         pb.set_style(style);
         pb.set_prefix("有声书");
+        pb.set_position(skipped_existing as u64);
+        if skipped_existing > 0 {
+            pb.set_message(format!("已跳过 {} 章", skipped_existing));
+        }
         (pb, true)
     };
 
     let (tx, rx) = channel::unbounded::<ChapterJob>();
     let (done_tx, done_rx) = channel::unbounded::<()>();
     let errors = Arc::new(AtomicUsize::new(0));
+    let generated = Arc::new(AtomicUsize::new(0));
 
     let mut workers = Vec::new();
     for _ in 0..concurrency {
@@ -664,6 +765,7 @@ pub fn generate_audiobook(
         let config = config.clone();
         let pb = pb.clone();
         let errors = errors.clone();
+        let generated = generated.clone();
         let done_tx = done_tx.clone();
         let cancel = cancel.map(Arc::clone);
         workers.push(thread::spawn(move || {
@@ -772,6 +874,8 @@ pub fn generate_audiobook(
                                 "[TTS] 章节 {}《{}》写入失败：{}",
                                 job.idx, job.title, e
                             ));
+                        } else {
+                            generated.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Err(e) => {
@@ -803,7 +907,7 @@ pub fn generate_audiobook(
         if done_rx.recv().is_err() {
             break;
         }
-        if let Some(p) = progress.as_deref_mut() {
+        if let Some(p) = progress.as_mut() {
             p.inc_save_progress();
         }
     }
@@ -816,15 +920,27 @@ pub fn generate_audiobook(
         pb.finish_and_clear();
     }
     let err_cnt = errors.load(Ordering::Relaxed);
+    let generated_cnt = generated.load(Ordering::Relaxed);
+    if let Some(p) = progress.as_mut() {
+        p.set_audiobook_stats(generated_cnt, skipped_existing, err_cnt);
+    }
     if err_cnt > 0 {
         warn!(
             target: "book_manager",
-            "有声小说生成完成（部分失败 {} 章）：{}",
+            "有声小说生成完成（生成 {} 章，跳过 {} 章，失败 {} 章）：{}",
+            generated_cnt,
+            skipped_existing,
             err_cnt,
             audio_dir.display()
         );
     } else {
-        info!(target: "book_manager", "有声小说生成完成：{}", audio_dir.display());
+        info!(
+            target: "book_manager",
+            "有声小说生成完成（生成 {} 章，跳过 {} 章）：{}",
+            generated_cnt,
+            skipped_existing,
+            audio_dir.display()
+        );
     }
 
     true
@@ -832,7 +948,14 @@ pub fn generate_audiobook(
 
 #[cfg(test)]
 mod tests {
-    use super::{TTS_CHUNK_MAX_CHARS, concatenate_audio_chunks, extract_wav_parts, split_tts_text};
+    use std::fs;
+
+    use image::{ImageBuffer, Rgba};
+
+    use super::{
+        TTS_CHUNK_MAX_CHARS, concatenate_audio_chunks, existing_audio_is_reusable,
+        export_audiobook_cover, extract_wav_parts, split_tts_text,
+    };
 
     fn wav_bytes(data: &[u8]) -> Vec<u8> {
         let fmt: [u8; 16] = [
@@ -899,5 +1022,96 @@ mod tests {
 
         assert_eq!(parts.data, &[1, 2, 3, 4, 5, 6]);
         assert_eq!(bytes.windows(4).filter(|w| *w == b"RIFF").count(), 1);
+    }
+
+    fn tiny_jpeg() -> Vec<u8> {
+        let img = ImageBuffer::from_pixel(1, 1, Rgba([255, 0, 0, 255]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn export_audiobook_cover_copies_jpeg_as_cover_jpg() {
+        let temp = tempfile::tempdir().unwrap();
+        let book_dir = temp.path().join("book");
+        let audio_dir = temp.path().join("book_audio");
+        fs::create_dir_all(&book_dir).unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        let jpeg = tiny_jpeg();
+        fs::write(book_dir.join("cover.jpg"), &jpeg).unwrap();
+
+        export_audiobook_cover(&book_dir, "测试书", &audio_dir);
+
+        assert_eq!(fs::read(audio_dir.join("cover.jpg")).unwrap(), jpeg);
+    }
+
+    #[test]
+    fn export_audiobook_cover_converts_png_to_cover_jpg() {
+        let temp = tempfile::tempdir().unwrap();
+        let book_dir = temp.path().join("book");
+        let audio_dir = temp.path().join("book_audio");
+        fs::create_dir_all(&book_dir).unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+
+        let img = ImageBuffer::from_pixel(1, 1, Rgba([0, 255, 0, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        fs::write(book_dir.join("cover.png"), png).unwrap();
+
+        export_audiobook_cover(&book_dir, "测试书", &audio_dir);
+
+        let cover = fs::read(audio_dir.join("cover.jpg")).unwrap();
+        assert!(super::is_jpeg_bytes(&cover));
+    }
+
+    #[test]
+    fn export_audiobook_cover_keeps_existing_identical_cover() {
+        let temp = tempfile::tempdir().unwrap();
+        let book_dir = temp.path().join("book");
+        let audio_dir = temp.path().join("book_audio");
+        fs::create_dir_all(&book_dir).unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        let jpeg = tiny_jpeg();
+        fs::write(book_dir.join("cover.jpg"), &jpeg).unwrap();
+        fs::write(audio_dir.join("cover.jpg"), &jpeg).unwrap();
+        let before = fs::metadata(audio_dir.join("cover.jpg"))
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        export_audiobook_cover(&book_dir, "测试书", &audio_dir);
+
+        let after = fs::metadata(audio_dir.join("cover.jpg"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(fs::read(audio_dir.join("cover.jpg")).unwrap(), jpeg);
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn existing_audio_is_reusable_requires_non_empty_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing.mp3");
+        let empty = temp.path().join("empty.mp3");
+        let audio = temp.path().join("audio.mp3");
+        let dir = temp.path().join("dir.mp3");
+
+        fs::write(&empty, []).unwrap();
+        fs::write(&audio, b"audio").unwrap();
+        fs::create_dir_all(&dir).unwrap();
+
+        assert!(!existing_audio_is_reusable(&missing));
+        assert!(!existing_audio_is_reusable(&empty));
+        assert!(!existing_audio_is_reusable(&dir));
+        assert!(existing_audio_is_reusable(&audio));
     }
 }

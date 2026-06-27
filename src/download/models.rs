@@ -137,6 +137,12 @@ pub struct ProgressSnapshot {
     pub comment_fetch: usize,
     pub comment_total: usize,
     pub comment_saved: usize,
+    #[serde(default)]
+    pub audiobook_generated: usize,
+    #[serde(default)]
+    pub audiobook_skipped: usize,
+    #[serde(default)]
+    pub audiobook_failed: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
