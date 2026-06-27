@@ -1298,6 +1298,21 @@ jobs:
                       const issueAuthor = String(issue.user?.login || '').toLowerCase();
                       const closer = String(context.payload.sender?.login || '').toLowerCase();
                       const closedByIssueAuthor = issueAuthor && closer && issueAuthor === closer;
+                      let closerPermission = 'none';
+                      if (closer) {
+                        try {
+                          const permissionResp = await github.rest.repos.getCollaboratorPermissionLevel({
+                            owner,
+                            repo,
+                            username: closer
+                          });
+                          closerPermission = String(permissionResp.data?.permission || '').toLowerCase();
+                        } catch (e) {
+                          core.warning('Failed to check closer permission: ' + String(e?.message || e).slice(0, 300));
+                        }
+                      }
+                      const maintainerPermissions = new Set(['admin', 'maintain', 'write', 'triage']);
+                      const closedByMaintainer = maintainerPermissions.has(closerPermission);
 
                       if (reason === 'duplicate') {
                         core.info('Skip: duplicate close is already handled by Confirm/native GitHub duplicate flow.');
@@ -1306,8 +1321,8 @@ jobs:
 
                       // 0) 用户普通 Close 非 Question issue 时，统一转为 Close as not planned。
                       // GitHub Actions 不能直接修改已关闭 issue 的 state_reason，需重开后再按 not_planned 关闭。
-                      // 仅处理 issue 作者本人关闭，维护者关闭的 completed 仍可进入 Release 更新日志。
-                      if (reason === 'completed' && closedByIssueAuthor && !hasQuestion) {
+                      // 仅处理 issue 作者本人且非维护者/协作者关闭；维护者关闭的 completed 仍可进入 Release 更新日志。
+                      if (reason === 'completed' && closedByIssueAuthor && !closedByMaintainer && !hasQuestion) {
                         await github.rest.issues.update({
                           owner,
                           repo,
