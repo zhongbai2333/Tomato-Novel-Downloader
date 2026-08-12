@@ -1,14 +1,6 @@
-# 番茄小说下载器~~精简版~~
+# 省流:为番茄解析添加安卓版本，下面唠叨就不用看了
 
-> 小小推广位：[RustEpubReader](https://github.com/zhongbai2333/RustEpubReader) <- 自研Epub阅读器，轻量快速  声明：阅读器项目不会添加下载器功能
 
-> 小小推广位：[ShuaForge](https://github.com/zhongbai2333/ShuaForge) <- 自研刷题助手，使用AI帮助你实现高效复习，大学生一周内快速补充知识，允许从学习通等平台导入题库
-
-番茄小说下载器*不精简*版本，由于项目[fanqienovel-downloader](https://github.com/ying-ck/fanqienovel-downloader)一直不更新，于是我根据Dimily的项目Fork并重构
-
-目前完全使用`Rust`重写了整个项目，与原Fork项目几乎没有关系了（~~虽说原本的Python版本也没几行是原项目的了~~）
-
-我对其进行重构 + 优化，添加更多功能，包括：EPUB 下载支持、更好的断点续传、更好的错误管理、书本搜索、Web UI 等特性。
 
 本项目支持两种构建模式：
 
@@ -296,7 +288,7 @@ cargo build --release
 
 5. 我是纯小白，程序在哪里下载啊
 
-    直接点击此链接(<https://github.com/zhongbai2333/Tomato-Novel-Downloader/releases>)先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
+    先找到最新版本，然后在最新版本中找到”Assets”并点击来展开内容(如果已展开就不必进行此操作)。在展开的内容中找到对应程序，点击下载即可
 
 ## 注意事项（必看）
 
