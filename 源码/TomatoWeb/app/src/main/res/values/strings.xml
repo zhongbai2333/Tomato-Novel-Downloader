@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Web For Tomato</string>
-    <string name="notification_channel_id">web_server_channel</string>
-    <string name="notification_channel_name">Web 服务</string>
-    <string name="notification_title">Web For Tomato 服务运行中</string>
-    <string name="notification_text">点击查看访问地址</string>
-</resources>
