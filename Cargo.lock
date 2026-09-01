@@ -3550,7 +3550,7 @@ dependencies = [
 
 [[package]]
 name = "tomato-novel-downloader"
-version = "2.4.13"
+version = "2.4.14"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "tomato-novel-official-api"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "aes",
  "base64",
