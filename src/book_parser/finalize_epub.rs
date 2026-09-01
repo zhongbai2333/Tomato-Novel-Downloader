@@ -503,7 +503,7 @@ pub(super) fn finalize_epub(
                             chapter_id = %chapter_id,
                             ms = t_stats.elapsed().as_millis() as u64,
                             para_with_counts = seg_counts.len(),
-                            keys = %format!("{}", stats.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default()),
+                            keys = %stats.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>().join(",")).unwrap_or_default(),
                             "comment stats fetched"
                         );
                     }

@@ -33,11 +33,9 @@ pub(super) fn handle_event_about(app: &mut App, event: Event) -> Result<()> {
                         dismiss_app_update(app)?;
                     }
                 }
-                Some(4) => {
-                    if !cfg!(feature = "docker") {
-                        app.view = View::Home;
-                        app.status = "返回主菜单".to_string();
-                    }
+                Some(4) if !cfg!(feature = "docker") => {
+                    app.view = View::Home;
+                    app.status = "返回主菜单".to_string();
                 }
                 _ => {}
             },
@@ -267,12 +265,10 @@ fn handle_mouse_about(app: &mut App, me: event::MouseEvent) -> Result<()> {
                         dismiss_app_update(app)?;
                     }
                 }
-                4 => {
-                    if !cfg!(feature = "docker") {
-                        app.about_btn_state.select(Some(4));
-                        app.view = View::Home;
-                        app.status = "返回主菜单".to_string();
-                    }
+                4 if !cfg!(feature = "docker") => {
+                    app.about_btn_state.select(Some(4));
+                    app.view = View::Home;
+                    app.status = "返回主菜单".to_string();
                 }
                 _ => {}
             }

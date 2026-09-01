@@ -12,6 +12,8 @@
 use anyhow::{Result, anyhow};
 use clap::Parser;
 use std::thread;
+#[cfg(feature = "official-api")]
+use std::time::Instant;
 
 mod base_system;
 mod book_parser;
@@ -23,6 +25,8 @@ mod ui;
 
 use base_system::config::{ConfigSpec, load_or_create, load_or_create_with_base};
 use base_system::context::Config;
+#[cfg(feature = "official-api")]
+use base_system::logging::redact_log_endpoints;
 use base_system::logging::{LogOptions, LogSystem};
 use tracing::info;
 #[cfg(feature = "official-api")]
@@ -115,12 +119,27 @@ fn main() -> Result<()> {
     thread::spawn(|| {
         #[cfg(feature = "official-api")]
         {
+            let started = Instant::now();
             // 注意：这里只应“预热/确保可用”，不得在每次启动时强制更换 IID。
             // `prewarm_iid()` 现在会优先复用本地文件缓存，仅在缓存缺失或过期时才注册新的 IID。
             match prewarm_iid() {
-                Ok(_) => info!(target: "startup", "IID 预热完成"),
+                Ok(_) => info!(
+                    target: "startup",
+                    stage = "iid_prewarm",
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "IID 预热完成"
+                ),
                 Err(err) => {
-                    prewarm_state::mark_prewarm_failed(err.to_string());
+                    let safe_error = redact_log_endpoints(&err.to_string());
+                    warn!(
+                        target: "startup",
+                        stage = "iid_prewarm",
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        error = %err,
+                        error_debug = ?err,
+                        "IID 预热失败"
+                    );
+                    prewarm_state::mark_prewarm_failed(safe_error);
                     if let Some(message) = prewarm_state::prewarm_error() {
                         warn!(target: "startup", "{message}");
                     }

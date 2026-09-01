@@ -8,6 +8,7 @@ use axum::extract::{Query, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::base_system::book_paths::COVER_IMAGE_EXTENSIONS;
 use crate::ui::web::state::{AppState, LibraryScanRow, LibraryScanStore};
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +143,9 @@ fn item_from_entry(root: &Path, path: &Path, meta: &std::fs::Metadata) -> Option
     let modified_ms = meta.modified().ok().and_then(system_time_ms);
 
     if meta.is_dir() {
+        if is_internal_book_cache_dir(root, path) {
+            return None;
+        }
         return Some(LibraryScanRow {
             kind: "dir".to_string(),
             name,
@@ -178,8 +182,78 @@ fn item_from_entry(root: &Path, path: &Path, meta: &std::fs::Metadata) -> Option
     })
 }
 
+fn is_internal_book_cache_dir(root: &Path, path: &Path) -> bool {
+    if path.parent() != Some(root) {
+        return false;
+    }
+
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let book_id = name.split_once('_').map_or(name, |(id, _)| id);
+    if book_id.is_empty() || !book_id.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    path.join("status.json").is_file()
+        || path.join("downloaded_chapters.jsonl").is_file()
+        || path
+            .join(format!("chapter_status_{book_id}.json"))
+            .is_file()
+        || COVER_IMAGE_EXTENSIONS
+            .iter()
+            .any(|ext| path.join(format!("cover.{ext}")).is_file())
+        || path.join("images").is_dir()
+}
+
 fn system_time_ms(t: SystemTime) -> Option<u64> {
     t.duration_since(UNIX_EPOCH)
         .ok()
         .map(|d| d.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LibraryScanStore, scan_library_streaming};
+
+    #[test]
+    fn root_scan_hides_book_cache_but_keeps_downloadable_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let cache = root.join("7047850786264449550");
+        let audio = root.join("测试书_audio");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(&audio).unwrap();
+        std::fs::write(cache.join("status.json"), "{}\n").unwrap();
+        std::fs::write(root.join("测试书.txt"), "content").unwrap();
+        std::fs::write(audio.join("001.mp3"), "audio").unwrap();
+
+        let store = LibraryScanStore::default();
+        scan_library_streaming(root, "", &store).unwrap();
+        let root_items = store.snapshot("").unwrap().items;
+        let root_names: Vec<_> = root_items.iter().map(|item| item.name.as_str()).collect();
+
+        assert!(!root_names.contains(&"7047850786264449550"));
+        assert!(root_names.contains(&"测试书.txt"));
+        assert!(root_names.contains(&"测试书_audio"));
+
+        scan_library_streaming(root, "测试书_audio", &store).unwrap();
+        let audio_items = store.snapshot("测试书_audio").unwrap().items;
+        assert_eq!(audio_items.len(), 1);
+        assert_eq!(audio_items[0].name, "001.mp3");
+    }
+
+    #[test]
+    fn root_scan_hides_legacy_book_cache_with_status_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let cache = root.join("7047850786264449550_旧书名");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("status.json"), "{}\n").unwrap();
+
+        let store = LibraryScanStore::default();
+        scan_library_streaming(root, "", &store).unwrap();
+
+        assert!(store.snapshot("").unwrap().items.is_empty());
+    }
 }

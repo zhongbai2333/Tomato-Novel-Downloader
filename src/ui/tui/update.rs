@@ -154,21 +154,19 @@ pub(super) fn handle_mouse_update(app: &mut App, me: event::MouseEvent) -> Resul
                     }
                 }
             }
-            MouseEventKind::Moved => {
-                if pos_in(list_area, me.column, me.row) {
-                    let list = if app.show_no_update {
-                        &app.update_no_updates
-                    } else {
-                        &app.update_entries
-                    };
-                    if let Some(idx) = super::list_index_from_mouse_row(
-                        list_area,
-                        me.row,
-                        &app.update_state,
-                        list.len(),
-                    ) {
-                        app.update_state.select(Some(idx));
-                    }
+            MouseEventKind::Moved if pos_in(list_area, me.column, me.row) => {
+                let list = if app.show_no_update {
+                    &app.update_no_updates
+                } else {
+                    &app.update_entries
+                };
+                if let Some(idx) = super::list_index_from_mouse_row(
+                    list_area,
+                    me.row,
+                    &app.update_state,
+                    list.len(),
+                ) {
+                    app.update_state.select(Some(idx));
                 }
             }
             _ => {}

@@ -146,11 +146,7 @@ impl ContentParser {
         // 这里做保守去重：仅当首个非空行与章节标题一致时移除首行。
         let normalized_title = normalize_title_for_compare(title);
         if !normalized_title.is_empty() {
-            loop {
-                let Some(first_non_empty_idx) = out.iter().position(|l| !l.trim().is_empty())
-                else {
-                    break;
-                };
+            while let Some(first_non_empty_idx) = out.iter().position(|l| !l.trim().is_empty()) {
                 let first_line_norm =
                     normalize_title_for_compare(out[first_non_empty_idx].as_str());
                 if first_line_norm != normalized_title {

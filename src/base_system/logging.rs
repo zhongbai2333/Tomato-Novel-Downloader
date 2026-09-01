@@ -10,6 +10,7 @@ use crossterm::event::DisableMouseCapture;
 use crossterm::execute;
 use crossterm::terminal::{LeaveAlternateScreen, disable_raw_mode};
 use ctrlc;
+use regex::{Captures, Regex};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::{error, info};
@@ -68,6 +69,115 @@ static LOG_CHANNEL: OnceLock<(
     crossbeam_channel::Receiver<String>,
 )> = OnceLock::new();
 static LOGS_DIR: OnceLock<PathBuf> = OnceLock::new();
+static ENDPOINT_REDACTION_RE: OnceLock<Regex> = OnceLock::new();
+
+const REDACTED_ENDPOINT: &str = "[REDACTED_ENDPOINT]";
+
+/// Remove URL endpoints from text before it is persisted, shown in the TUI, or exported.
+///
+/// This covers absolute HTTP/WebSocket URLs, bare domain names emitted by HTTP client debug
+/// logs, and API/service route paths. Other diagnostic context is intentionally preserved.
+pub(crate) fn redact_log_endpoints(text: &str) -> String {
+    let re = ENDPOINT_REDACTION_RE.get_or_init(|| {
+        Regex::new(
+            r#"(?ix)
+                \b(?:https?|wss?)://[^\s<>"'`]+
+                |
+                //(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s<>"'`]*)?
+                |
+                \b(?:url|uri|endpoint|host|domain)\s*=\s*[^\s,;}\]]+
+                |
+                \(\s*"?https?"?\s*,\s*"?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s<>"'`]*)?
+                |
+                \b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){2,}[a-z]{2,63}(?::[0-9]{1,5})?(?:/[^\s<>"'`]*)?
+                |
+                \b(?:[0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}\b
+                |
+                \[[0-9a-f:]+\]:[0-9]{1,5}\b
+                |
+                /(?:api|service)/[^\s<>"'`]*
+            "#,
+        )
+        .expect("valid endpoint redaction regex")
+    });
+    re.replace_all(text, |caps: &Captures<'_>| {
+        let matched = caps.get(0).expect("redaction match");
+        let is_domain_inside_path = matched.start() > 0
+            && text.as_bytes()[matched.start() - 1] == b'/'
+            && !matched.as_str().starts_with('/');
+        if is_domain_inside_path {
+            matched.as_str().to_string()
+        } else {
+            REDACTED_ENDPOINT.to_string()
+        }
+    })
+    .into_owned()
+}
+
+struct RedactingWriter<W: io::Write> {
+    inner: W,
+    buffer: Vec<u8>,
+}
+
+impl<W: io::Write> RedactingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            buffer: Vec::new(),
+        }
+    }
+
+    fn write_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&self.buffer);
+        let redacted = redact_log_endpoints(&text);
+        self.inner.write_all(redacted.as_bytes())?;
+        self.buffer.clear();
+        Ok(())
+    }
+}
+
+impl<W: io::Write> io::Write for RedactingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.write_buffer()?;
+        self.inner.flush()
+    }
+}
+
+impl<W: io::Write> Drop for RedactingWriter<W> {
+    fn drop(&mut self) {
+        let _ = self.write_buffer();
+        let _ = self.inner.flush();
+    }
+}
+
+struct RedactingMakeWriter<M> {
+    inner: M,
+}
+
+impl<M> RedactingMakeWriter<M> {
+    fn new(inner: M) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a, M> MakeWriter<'a> for RedactingMakeWriter<M>
+where
+    M: MakeWriter<'a>,
+{
+    type Writer = RedactingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RedactingWriter::new(self.inner.make_writer())
+    }
+}
 
 pub fn current_logs_dir() -> Option<PathBuf> {
     LOGS_DIR.get().cloned()
@@ -157,14 +267,14 @@ impl LogSystem {
             .with_level(true)
             .with_thread_names(true)
             .with_ansi(options.use_color)
-            .with_writer(console_writer)
+            .with_writer(RedactingMakeWriter::new(console_writer))
             .with_filter(console_level);
 
         let broadcast_layer = if options.broadcast_to_ui {
             let (tx, _rx) = LOG_CHANNEL
                 .get_or_init(crossbeam_channel::unbounded)
                 .clone();
-            let writer = BoxMakeWriter::new(ChannelWriterMake { tx });
+            let writer = RedactingMakeWriter::new(BoxMakeWriter::new(ChannelWriterMake { tx }));
             Some(
                 fmt::layer()
                     .with_target(false)
@@ -178,18 +288,19 @@ impl LogSystem {
             None
         };
 
-        let file_level = if options.debug {
-            LevelFilter::DEBUG
-        } else {
-            LevelFilter::INFO
-        };
+        // Persist DEBUG details even when the interactive console stays at INFO. Exported logs
+        // should be useful for diagnosis without asking users to reproduce with a special flag.
+        let file_level = LevelFilter::DEBUG;
 
         let file_layer = fmt::layer()
-            .with_target(false)
+            .with_target(true)
             .with_level(true)
             .with_thread_names(true)
+            .with_thread_ids(true)
+            .with_file(true)
+            .with_line_number(true)
             .with_ansi(false)
-            .with_writer(file_writer)
+            .with_writer(RedactingMakeWriter::new(file_writer))
             .with_filter(file_level);
 
         tracing_subscriber::registry()
@@ -205,6 +316,17 @@ impl LogSystem {
                     LogError::SubscriberInit(e)
                 }
             })?;
+
+        info!(
+            target: "logging",
+            version = env!("CARGO_PKG_VERSION"),
+            os = std::env::consts::OS,
+            arch = std::env::consts::ARCH,
+            console_debug = options.debug,
+            file_level = "DEBUG",
+            endpoint_redaction = true,
+            "日志系统已初始化"
+        );
 
         let runtime = Arc::new(LogRuntime {
             logs_dir,
@@ -331,4 +453,75 @@ fn archive_log_file(latest_log: &Path, logs_dir: &Path) -> Result<Option<PathBuf
 
     info!("log archived to {}", archive_path.display());
     Ok(Some(archive_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    use super::{REDACTED_ENDPOINT, RedactingWriter, redact_log_endpoints};
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn redacts_absolute_urls_domains_and_api_paths() {
+        let input = concat!(
+            "request failed for https://api5-normal-sinfonlinec.fqnovel.com/reading/bookapi/search/tab/v?q=test; ",
+            "pool=(https, api5-normal-sinfonlinec.fqnovel.com); ",
+            "path=/api/search status=502; register=/service/2/device_register/; ",
+            "proxy=127.0.0.1:10808"
+        );
+
+        let output = redact_log_endpoints(input);
+
+        assert!(!output.contains("fqnovel.com"));
+        assert!(!output.contains("/api/search"));
+        assert!(!output.contains("device_register"));
+        assert!(!output.contains("127.0.0.1:10808"));
+        assert!(output.matches(REDACTED_ENDPOINT).count() >= 5);
+        assert!(output.contains("request failed"));
+        assert!(output.contains("status=502"));
+    }
+
+    #[test]
+    fn preserves_non_endpoint_diagnostics() {
+        let input = concat!(
+            "surface=web stage=search error_kind=network status=403 timeout_ms=15000 ",
+            "dns=failed archive=logs/latest.log source=/tmp/index.crates.io-hash/src/main.rs"
+        );
+
+        assert_eq!(redact_log_endpoints(input), input);
+    }
+
+    #[test]
+    fn writer_redacts_an_endpoint_split_across_writes() {
+        let output = SharedBuffer::default();
+        let inspect = output.clone();
+        {
+            let mut writer = RedactingWriter::new(output);
+            writer
+                .write_all(b"network error for https://api5-normal-")
+                .unwrap();
+            writer
+                .write_all(b"sinfonlinec.fqnovel.com/search status=403")
+                .unwrap();
+            writer.flush().unwrap();
+        }
+
+        let text = String::from_utf8(inspect.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(text, "network error for [REDACTED_ENDPOINT] status=403");
+    }
 }

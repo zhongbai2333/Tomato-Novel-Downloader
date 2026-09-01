@@ -123,14 +123,28 @@ async fn auth_and_log_mw(
             }
 
             if !authorized {
-                warn!(target: "web_security", ip = %ip, method = %method, path = %path, status = 401, "unauthorized");
+                warn!(
+                    target: "web_security",
+                    ip = %ip,
+                    method = %method,
+                    path_len = path.len(),
+                    status = 401,
+                    "unauthorized"
+                );
                 return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
             }
         }
     }
 
     let resp = next.run(req).await;
-    info!(target: "web_access", ip = %ip, method = %method, path = %path, status = %resp.status().as_u16(), "ok");
+    info!(
+        target: "web_access",
+        ip = %ip,
+        method = %method,
+        path_len = path.len(),
+        status = %resp.status().as_u16(),
+        "ok"
+    );
     resp
 }
 

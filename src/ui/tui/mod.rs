@@ -32,7 +32,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 #[cfg(feature = "official-api")]
 use serde_json::Value;
 #[cfg(feature = "official-api")]
-use tomato_novel_official_api::SearchClient;
+use tomato_novel_official_api::{SearchClient, SearchError};
 use tracing::{info, warn};
 
 mod about;
@@ -52,7 +52,7 @@ use update::show_update_menu;
 use crate::base_system::context::Config;
 #[cfg(feature = "official-api")]
 use crate::base_system::json_extract;
-use crate::base_system::logging::take_broadcast_rx;
+use crate::base_system::logging::{redact_log_endpoints, take_broadcast_rx};
 use crate::download::downloader::{BookMeta, ChapterRange, DownloadPlan, ProgressSnapshot};
 use crate::prewarm_state;
 
@@ -849,8 +849,28 @@ fn render_format_modal(frame: &mut ratatui::Frame, app: &mut App) {
 
 #[cfg(feature = "official-api")]
 fn search_books(query: &str) -> Result<Vec<SearchItem>> {
-    let client = SearchClient::new().context("init SearchClient")?;
-    let resp = client.search_books(query).context("search_books")?;
+    let started = Instant::now();
+    let client = SearchClient::new()
+        .inspect_err(|err| {
+            log_search_error(
+                "client_init",
+                query,
+                started.elapsed().as_millis() as u64,
+                err,
+            );
+        })
+        .context("init SearchClient")?;
+    let resp = client
+        .search_books(query)
+        .inspect_err(|err| {
+            log_search_error(
+                "upstream_request",
+                query,
+                started.elapsed().as_millis() as u64,
+                err,
+            );
+        })
+        .context("search_books")?;
     let mut results = Vec::new();
     for book in resp.books {
         let title = book.title.unwrap_or_default();
@@ -869,7 +889,34 @@ fn search_books(query: &str) -> Result<Vec<SearchItem>> {
             detail,
         });
     }
+    info!(
+        target: "search",
+        surface = "tui",
+        query,
+        result_count = results.len(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "搜索请求完成"
+    );
     Ok(results)
+}
+
+#[cfg(feature = "official-api")]
+fn log_search_error(stage: &str, query: &str, elapsed_ms: u64, err: &SearchError) {
+    let error_kind = match err {
+        SearchError::Iid(_) => "iid",
+        SearchError::Http(_) => "network",
+    };
+    warn!(
+        target: "search",
+        surface = "tui",
+        stage,
+        error_kind,
+        query,
+        elapsed_ms,
+        error = %err,
+        error_debug = ?err,
+        "搜索请求失败"
+    );
 }
 
 #[cfg(not(feature = "official-api"))]
@@ -1448,7 +1495,7 @@ fn sync_prewarm_state(app: &mut App) {
         app.status =
             "IID 注册失败：请检查 log.snssdk.com 是否被公司/校园网或 AdGuard 等拦截".to_string();
         app.push_message("IID 注册失败：请放行 log.snssdk.com 或关闭反广告/代理/DNS 拦截后重试");
-        app.push_log(err);
+        app.push_log(redact_log_endpoints(&err));
     }
 }
 
@@ -1468,7 +1515,7 @@ pub(super) fn maybe_show_iid_failure(app: &mut App, err: impl AsRef<str>) {
     app.status =
         "IID 注册失败：请检查 log.snssdk.com 是否被公司/校园网或 AdGuard 等拦截".to_string();
     app.push_message("IID 注册失败：请放行 log.snssdk.com 或关闭反广告/代理/DNS 拦截后重试");
-    app.push_log(message);
+    app.push_log(redact_log_endpoints(&message));
 }
 
 fn tick_prewarm_spinner(app: &mut App) {
@@ -1559,10 +1606,19 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     }
                 }
                 Err(err) => {
+                    let error_chain = redact_log_endpoints(&format!("{err:#}"));
+                    let root_cause = redact_log_endpoints(&err.root_cause().to_string());
                     app.status = format!("搜索失败: {err}");
                     app.push_message(format!("搜索失败: {err}"));
                     maybe_show_iid_failure(app, err.to_string());
-                    warn!(target: "ui", "搜索失败: {err}");
+                    warn!(
+                        target: "search",
+                        surface = "tui",
+                        error = %err,
+                        error_chain,
+                        root_cause,
+                        "搜索任务失败"
+                    );
                 }
             },
             WorkerMsg::PreviewReady(res) => match *res {

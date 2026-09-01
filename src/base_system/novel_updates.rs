@@ -1,5 +1,6 @@
 //! 复用的“更新小说扫描”逻辑（供 TUI / Web / noui 共用）。
 
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -173,7 +174,7 @@ where
         save_update_cache(save_dir, &cache);
     }
 
-    updates.sort_by(|a, b| b.new_count.cmp(&a.new_count));
+    updates.sort_by_key(|item| Reverse(item.new_count));
 
     Ok(NovelUpdateScanResult {
         updates,
@@ -463,15 +464,14 @@ fn counts_from_status(value: &Value) -> Option<(usize, usize, usize)> {
                     ok += 1;
                 }
             }
-            Value::Object(obj) => {
+            Value::Object(obj)
                 if obj
                     .get("content")
                     .or_else(|| obj.get("text"))
                     .and_then(|v| v.as_str())
-                    .is_some()
-                {
-                    ok += 1;
-                }
+                    .is_some() =>
+            {
+                ok += 1;
             }
             _ => {}
         }

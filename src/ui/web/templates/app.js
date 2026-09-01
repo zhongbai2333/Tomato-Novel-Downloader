@@ -875,6 +875,8 @@ async function doSearch(q) {
 
 let currentPreviewBookId = null;
 let currentPreviewData = null;
+let previewRequestSerial = 0;
+let previewAbortController = null;
 
 function showPreviewModal(show) {
   const modal = document.getElementById('previewModal');
@@ -882,9 +884,15 @@ function showPreviewModal(show) {
   modal.classList.toggle('hidden', !show);
   document.body.style.overflow = show ? 'hidden' : '';
   if (!show) {
+    const bookIdToCleanup = currentPreviewBookId;
+    previewRequestSerial += 1;
+    if (previewAbortController) {
+      previewAbortController.abort();
+      previewAbortController = null;
+    }
     // 关闭预览时，清理服务端因预览产生的封面缓存文件夹
-    if (currentPreviewBookId) {
-      fetchWithCreds(`/api/preview/${encodeURIComponent(currentPreviewBookId)}/cleanup`, {
+    if (bookIdToCleanup) {
+      fetchWithCreds(`/api/preview/${encodeURIComponent(bookIdToCleanup)}/cleanup`, {
         method: 'POST',
       }).catch(() => {}); // fire-and-forget
     }
@@ -894,6 +902,10 @@ function showPreviewModal(show) {
 }
 
 async function openPreview(bookId) {
+  if (previewAbortController) previewAbortController.abort();
+  const requestSerial = ++previewRequestSerial;
+  const abortController = new AbortController();
+  previewAbortController = abortController;
   currentPreviewBookId = bookId;
   currentPreviewData = null;
   showPreviewModal(true);
@@ -903,13 +915,19 @@ async function openPreview(bookId) {
   const rangeInput = document.getElementById('previewRangeInput');
   const rangeHint = document.getElementById('previewRangeHint');
 
-  if (loading) loading.classList.remove('hidden');
+  if (loading) {
+    loading.textContent = '加载中...';
+    loading.classList.remove('hidden');
+  }
   if (data) data.classList.add('hidden');
   if (rangeInput) rangeInput.value = '';
   if (rangeHint) { rangeHint.textContent = ''; rangeHint.classList.remove('error'); }
 
   try {
-    const preview = await j(`/api/preview/${encodeURIComponent(bookId)}`);
+    const preview = await j(`/api/preview/${encodeURIComponent(bookId)}`, {
+      signal: abortController.signal,
+    });
+    if (requestSerial !== previewRequestSerial || currentPreviewBookId !== bookId) return;
     currentPreviewData = preview;
 
     if (loading) loading.classList.add('hidden');
@@ -1019,8 +1037,15 @@ async function openPreview(bookId) {
       rangeHint.textContent = `例如: 1-10 下载第1到第10章，1-${preview.chapter_count} 下载全部`;
     }
   } catch (err) {
+    if (
+      abortController.signal.aborted ||
+      requestSerial !== previewRequestSerial ||
+      currentPreviewBookId !== bookId
+    ) return;
     if (loading) loading.textContent = `加载失败: ${err}`;
     console.error('Preview load error:', err);
+  } finally {
+    if (previewAbortController === abortController) previewAbortController = null;
   }
 }
 
