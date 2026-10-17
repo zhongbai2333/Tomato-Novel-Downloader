@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Linux_amd64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Linux_amd64-${GITHUB_REF_NAME//\//-}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Linux_musl_amd64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Linux_musl_amd64-${GITHUB_REF_NAME//\//-}"
           cp target/x86_64-unknown-linux-musl/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Linux_musl_arm64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Linux_musl_arm64-${GITHUB_REF_NAME//\//-}"
           cp target/aarch64-unknown-linux-musl/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -304,7 +304,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Linux_arm64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Linux_arm64-${GITHUB_REF_NAME//\//-}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -404,7 +404,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Android_arm64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Android_arm64-${GITHUB_REF_NAME//\//-}"
           cp target/aarch64-linux-android/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -504,7 +504,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Android_arm32-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-Android_arm32-${GITHUB_REF_NAME//\//-}"
           cp target/armv7-linux-androideabi/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -574,7 +574,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-Win64-${GITHUB_REF_NAME}.exe"
+          out="TomatoNovelDownloader-Win64-${GITHUB_REF_NAME//\//-}.exe"
           cp target/release/tomato-novel-downloader.exe "dist/${out}"
 
       - name: Upload artifact
@@ -644,7 +644,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-WinArm64-${GITHUB_REF_NAME}.exe"
+          out="TomatoNovelDownloader-WinArm64-${GITHUB_REF_NAME//\//-}.exe"
           cp target/release/tomato-novel-downloader.exe "dist/${out}"
 
       - name: Upload artifact
@@ -714,7 +714,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-macOS_arm64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-macOS_arm64-${GITHUB_REF_NAME//\//-}"
           cp target/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
@@ -786,7 +786,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="TomatoNovelDownloader-macOS_amd64-${GITHUB_REF_NAME}"
+          out="TomatoNovelDownloader-macOS_amd64-${GITHUB_REF_NAME//\//-}"
           cp target/x86_64-apple-darwin/release/tomato-novel-downloader "dist/${out}"
 
       - name: Upload artifact
