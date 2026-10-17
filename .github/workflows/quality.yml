@@ -13,6 +13,11 @@ on:
       - "MAINTAINING.md"
       - ".github/workflows/quality.yml"
   workflow_dispatch:
+    inputs:
+      live_tts:
+        description: Also synthesize a short sample with each TTS backend on Windows.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -91,8 +96,66 @@ jobs:
             ${{ runner.os }}-quality-no-official-
             ${{ runner.os }}-quality-
 
+      - name: Prepare public build manifest
+        shell: python
+        run: |
+          from pathlib import Path
+          manifest = Path("Cargo.toml")
+          text = manifest.read_text(encoding="utf-8")
+          text = text.replace('official-api = ["dep:tomato-novel-official-api"]', 'official-api = []')
+          text = "\n".join(line for line in text.splitlines() if not line.startswith("tomato-novel-official-api =")) + "\n"
+          manifest.write_text(text, encoding="utf-8")
+
       - name: Run tests
         run: cargo test --no-default-features --features no-official-api
 
       - name: Run clippy
         run: cargo clippy --no-default-features --features no-official-api --all-targets -- -D warnings
+
+  windows-tts:
+    name: Windows TTS (${{ matrix.backend }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [tts, tts-native]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-tts-${{ matrix.backend }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-tts-${{ matrix.backend }}-
+      - name: Prepare public build manifest
+        shell: python
+        run: |
+          from pathlib import Path
+          manifest = Path("Cargo.toml")
+          text = manifest.read_text(encoding="utf-8")
+          text = text.replace('official-api = ["dep:tomato-novel-official-api"]', 'official-api = []')
+          text = "\n".join(line for line in text.splitlines() if not line.startswith("tomato-novel-official-api =")) + "\n"
+          manifest.write_text(text, encoding="utf-8")
+
+      - name: Run book export and TTS regression tests
+        run: |
+          cargo test --no-default-features --features no-official-api,${{ matrix.backend }} book_parser::
+
+      - name: Synthesize a sample through the audiobook export pipeline
+        if: github.event_name == 'workflow_dispatch' && inputs.live_tts
+        env:
+          TOMATO_TTS_SMOKE_DIR: ${{ runner.temp }}/tts-${{ matrix.backend }}
+        run: cargo test --no-default-features --features no-official-api,${{ matrix.backend }} live_audiobook_generation -- --ignored --nocapture
+
+      - name: Retain live audio evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.live_tts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-tts-${{ matrix.backend }}
+          path: ${{ runner.temp }}/tts-${{ matrix.backend }}/**/*.mp3
+          if-no-files-found: warn
+          retention-days: 7

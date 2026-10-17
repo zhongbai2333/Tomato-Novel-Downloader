@@ -22,8 +22,8 @@ default = ["tts", "clipboard", "clipboard-arboard"]
 # 不依赖 Official-API 的构建：目录/书信息走 web 解析；正文强制第三方模式。
 no-official-api = []
 
-# 有声书（TTS）：默认启用；在 musl/android 等环境可关闭以避免 OpenSSL/curl 等原生依赖。
-tts = ["dep:msedge-tts"]
+# 有声书（TTS）：默认启用；在 musl/android 等环境可按需关闭。
+tts = ["dep:msedge-tts", "dep:rustls"]
 
 # 有声书（TTS - Native）：不依赖 msedge-tts（避免 native-tls/curl/openssl 等原生依赖），适合 musl/android。
 tts-native = ["dep:tungstenite"]
@@ -62,7 +62,8 @@ sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
 tempfile = "3.10"
-msedge-tts = { version = "0.3.0", optional = true }
+msedge-tts = { version = "0.4.1", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
 uuid = { version = "1", features = ["v4", "v5"] }
 textwrap = "0.16"

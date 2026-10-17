@@ -5,8 +5,8 @@
 
 use std::net::TcpStream;
 
+use super::edge_tts_drm::generate_sec_ms_gec;
 use anyhow::{Context, Result, anyhow};
-use sha2::{Digest, Sha256};
 use tungstenite::Message;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::http::header;
@@ -18,7 +18,6 @@ use tungstenite::stream::MaybeTlsStream;
 // 注：近期微软侧策略变更可能对 UA/Origin 更敏感；这里使用较新的 EdgA UA。
 const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; HD1913) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.193 Mobile Safari/537.36 EdgA/143.0.3650.125";
 const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
-const TRUSTED_CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 const WSS_URL_PREFIX: &str = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&ConnectionId=";
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -82,37 +81,10 @@ impl EdgeTtsClient {
     }
 }
 
-// try to fix china mainland 403 forbidden issue
-// solution from:
-// https://github.com/rany2/edge-tts/issues/290#issuecomment-2464956570
-fn gen_sec_ms_gec() -> String {
-    // UTC time from 1601-01-01
-    // reference: msedge-tts implementation
-    let duration = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        + std::time::Duration::from_secs(11644473600);
-
-    // 100ns ticks
-    let ticks = duration.as_nanos() / 100;
-    // align
-    let ticks = ticks - ticks % 3_000_000_000;
-
-    let mut hasher = Sha256::new();
-    hasher.update(format!("{ticks}{TRUSTED_CLIENT_TOKEN}"));
-    let hash_code = hasher.finalize();
-
-    let mut hex_str = String::with_capacity(hash_code.len() * 2);
-    for &byte in hash_code.iter() {
-        hex_str.push_str(&format!("{:02X}", byte));
-    }
-    hex_str
-}
-
 fn build_websocket_request() -> Result<tungstenite::handshake::client::Request> {
     let uuid = uuid::Uuid::new_v4().simple().to_string();
-    let sec_ms_gec = gen_sec_ms_gec();
-    let sec_ms_gec_version = "1-130.0.2849.68";
+    let sec_ms_gec = generate_sec_ms_gec();
+    let sec_ms_gec_version = "2-155.0.4283.45";
 
     let mut request = format!(
         "{}{}&Sec-MS-GEC={}&Sec-MS-GEC-Version={}",
@@ -228,4 +200,27 @@ fn xml_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_websocket_request;
+
+    #[test]
+    fn handshake_uses_matching_v2_token_and_version() {
+        let request = build_websocket_request().unwrap();
+        let query = request.uri().query().unwrap();
+        let fields: std::collections::HashMap<_, _> = query
+            .split('&')
+            .map(|part| part.split_once('=').unwrap())
+            .collect();
+        assert_eq!(fields["Sec-MS-GEC-Version"], "2-155.0.4283.45");
+        assert!(
+            regex::Regex::new(r"^[0-9A-F]{16}-[0-9A-F]{64}$")
+                .unwrap()
+                .is_match(fields["Sec-MS-GEC"])
+        );
+        assert!(request.headers().contains_key("origin"));
+        assert!(request.headers().contains_key("user-agent"));
+    }
 }

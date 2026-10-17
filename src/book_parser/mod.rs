@@ -4,6 +4,8 @@
 
 #[cfg(feature = "tts-native")]
 pub mod edge_tts;
+#[cfg(feature = "tts-native")]
+mod edge_tts_drm;
 
 #[cfg(any(feature = "tts", feature = "tts-native"))]
 pub mod audio_generator;
