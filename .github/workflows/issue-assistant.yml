@@ -999,7 +999,7 @@ jobs:
               run: |
                   mkdir -p "$RUNNER_TEMP/eai-runtime"
                   curl --fail --silent --show-error --location \
-                    https://raw.githubusercontent.com/zhongbai2333/Evidence-Aware-Issue-Investigator/7cc2eaafe5e2ded5e2418eac9a431db95e484d70/container/Dockerfile \
+                    https://raw.githubusercontent.com/zhongbai2333/Evidence-Aware-Issue-Investigator/9ebf7c42c4c1f9431c23fb40d6f6be632dcceefb/container/Dockerfile \
                     --output "$RUNNER_TEMP/eai-runtime/Dockerfile"
                   docker build --iidfile "$RUNNER_TEMP/eai-image.id" "$RUNNER_TEMP/eai-runtime"
                   echo "image=$(cat "$RUNNER_TEMP/eai-image.id")" >> "$GITHUB_OUTPUT"
@@ -1013,7 +1013,7 @@ jobs:
 
             - name: Investigate issue evidence
               id: investigate
-              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@7cc2eaafe5e2ded5e2418eac9a431db95e484d70
+              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@9ebf7c42c4c1f9431c23fb40d6f6be632dcceefb
               env:
                   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
               with:
