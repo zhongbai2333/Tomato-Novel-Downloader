@@ -1,0 +1,69 @@
+schemaVersion: 1
+
+cli:
+  install: npx
+  versions:
+    codex: 0.163.0
+
+providers:
+  deepseek:
+    kind: compatible
+    baseUrl: https://api.deepseek.com
+    protocol: responses
+    model: deepseek-v4-pro
+    auth:
+      mode: environment
+      env: DEEPSEEK_API_KEY
+
+investigation:
+  engine: codex
+  provider: deepseek
+  trigger: label
+  triggerLabel: AI-Investigate
+  mode: execute
+  timeoutMinutes: 20
+  maxTurns: 20
+  workspace: workspace-write
+  network: false
+
+triage:
+  duplicateSearch: true
+  maxDuplicateCandidates: 8
+
+evidencePolicy:
+  unreproducedMaxPriority: medium
+  requireObservedCommandForReproduced: true
+  requireReplayForVerifiedSteps: true
+  allowUnreproducedHighImpactPriority: false
+
+replay:
+  enabled: false
+  executor: container
+  probes: {}
+
+mutation:
+  mode: suggest
+  confirmLabel: Confirm
+  rerunLabel: AI-Rerun
+  assignConfirmer: false
+  applySuggestedTitle: false
+  closeNegativeDispositions: false
+  rerunOnAuthorFollowup: false
+
+labels:
+  types:
+    bug: BUG
+    enhancement: Enhancement
+    documentation: Documentation
+    question: Question
+    unknown: Question
+  priorities:
+    critical: "🟪Critical"
+    high: "🟥High"
+    medium: "🟨Medium"
+    low: "🟩Low"
+  dispositions:
+    duplicate: Duplicate
+    wontfix: WontFix
+    invalid: Invalid
+  needsInfo: Needs-Info

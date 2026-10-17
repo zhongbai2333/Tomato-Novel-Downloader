@@ -177,7 +177,7 @@ jobs:
                       const allowedPriority = ['🟪Critical', '🟥High', '🟨Medium', '🟩Low'];
 
                       const baseUrl = process.env.OPENAI_BASE_URL || 'https://api.deepseek.com';
-                      const preferredModel = process.env.OPENAI_MODEL || 'deepseek-v4-flash';
+                      const preferredModel = process.env.OPENAI_MODEL || 'deepseek-flash';
 
                       if (!process.env.OPENAI_API_KEY) {
                         failAnalysis('missing DEEPSEEK_API_KEY secret');
@@ -200,7 +200,7 @@ jobs:
 
                           if (ids.includes(preferredModel)) return preferredModel;
 
-                          const candidates = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat'];
+                          const candidates = ['deepseek-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat'];
                           for (const c of candidates) {
                             if (ids.includes(c)) return c;
                           }
@@ -667,9 +667,18 @@ jobs:
                         return;
                       }
 
+                      // 深入调查由 issue-assistant 的结构化分诊结果决定，避免让 Issue 文本直接触发高成本 Agent。
+                      const investigationPriorities = new Set(['🟪Critical', '🟥High', '🟨Medium']);
+                      const shouldInvestigate = result.negative === 'none'
+                        && result.type === 'BUG'
+                        && result.needs_info === false
+                        && result.confidence >= 0.75
+                        && investigationPriorities.has(result.priority);
+
                       core.setOutput('analysis_result', JSON.stringify(result));
                       core.setOutput('analyze_ok', 'true');
                       core.setOutput('analyze_error', '');
+                      core.setOutput('should_investigate', shouldInvestigate ? 'true' : 'false');
                       } catch (e) {
                         failAnalysis(e?.message || e);
                       }
@@ -737,6 +746,7 @@ jobs:
               env:
                   AI_RESULT: ${{ steps.analyze.outputs.analysis_result }}
                   AI_COMMENT_ID: ${{ steps.pending_comment.outputs.comment_id }}
+                  SHOULD_INVESTIGATE: ${{ steps.analyze.outputs.should_investigate }}
               with:
                   github-token: ${{ secrets.GITHUB_TOKEN }}
                   script: |
@@ -850,6 +860,9 @@ jobs:
                       lines.push('');
                       lines.push('维护者如同意本次 AI 结果，请添加标签 `Confirm`，系统会自动执行标签落地并移除 `Confirm`。');
                       lines.push('如需再次触发 AI 重审，可添加标签 `AI-Rerun`。');
+                      if (String(process.env.SHOULD_INVESTIGATE || '').toLowerCase() === 'true') {
+                        lines.push('该 Issue 已满足深入调查条件，系统将继续检查代码路径与可验证证据。');
+                      }
                       lines.push(marker);
 
                       if (commentId > 0) {
@@ -867,6 +880,46 @@ jobs:
                           body: lines.join('\n')
                         });
                       }
+
+            - name: Trigger evidence-aware investigation for qualified bugs
+              if: always() && steps.analyze.outputs.analyze_ok == 'true' && steps.analyze.outputs.should_investigate == 'true'
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ secrets.GITHUB_TOKEN }}
+                  script: |
+                      const owner = context.repo.owner;
+                      const repo = context.repo.repo;
+                      const issue_number = context.payload.issue.number;
+                      const triggerLabel = 'AI-Investigate';
+
+                      const current = await github.rest.issues.get({ owner, repo, issue_number });
+                      const hasTrigger = (current.data.labels || []).some(label => {
+                        const name = typeof label === 'string' ? label : label.name;
+                        return String(name || '').toLowerCase() === triggerLabel.toLowerCase();
+                      });
+                      if (hasTrigger) {
+                        core.info('Evidence-aware investigation is already queued.');
+                        return;
+                      }
+
+                      try {
+                        await github.rest.issues.createLabel({
+                          owner,
+                          repo,
+                          name: triggerLabel,
+                          color: '5319e7',
+                          description: 'Internal trigger for evidence-aware code investigation'
+                        });
+                      } catch (error) {
+                        if (error?.status !== 422) throw error;
+                      }
+
+                      await github.rest.issues.addLabels({
+                        owner,
+                        repo,
+                        issue_number,
+                        labels: [triggerLabel]
+                      });
 
             - name: Fallback comment when AI review fails
               if: always() && steps.analyze.outputs.analyze_ok != 'true'
