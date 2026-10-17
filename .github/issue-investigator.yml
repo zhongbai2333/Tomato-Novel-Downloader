@@ -25,6 +25,8 @@ investigation:
   timeoutMinutes: 20
   maxTurns: 20
   workspace: workspace-write
+  # Keep egress blocked by default; Codex sends exact network exceptions to the DeepSeek Reviewer.
+  approvalMode: auto-review
   network: false
 
 triage:
