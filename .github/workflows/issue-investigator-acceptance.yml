@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/eai-runtime"
           curl --fail --silent --show-error --location \
-            https://codeload.github.com/zhongbai2333/Evidence-Aware-Issue-Investigator/tar.gz/5eeecd27c18b562c30a9d14a7fb53c97be158d5b \
+            https://codeload.github.com/zhongbai2333/Evidence-Aware-Issue-Investigator/tar.gz/29f1bcb16f55a8c104cc7fb2c34f036eef498d27 \
             --output "$RUNNER_TEMP/eai-runtime.tar.gz"
           tar --extract --gzip --file "$RUNNER_TEMP/eai-runtime.tar.gz" --directory "$RUNNER_TEMP/eai-runtime" --strip-components=1
           docker build --iidfile "$RUNNER_TEMP/eai-image.id" -f "$RUNNER_TEMP/eai-runtime/container/Dockerfile" "$RUNNER_TEMP/eai-runtime"
@@ -65,18 +65,16 @@ jobs:
           process.env['INPUT_CONFIG-PATH'] = '.github/issue-investigator.yml';
           process.env['INPUT_PUBLISH-COMMENT'] = 'false';
           process.env['INPUT_CONTAINER-IMAGE'] = process.env.CONTAINER_IMAGE;
+          process.env['INPUT_REPORT-PATH'] = `${process.env.RUNNER_TEMP}/eai-acceptance-report.json`;
           await import(pathToFileURL(`${process.env.RUNNER_TEMP}/eai-runtime/dist/index.js`).href);
           NODE
 
-      - name: Save screened report
-        env:
-          REPORT: ${{ steps.investigate.outputs.report-json }}
+      - name: Validate screened report artifact
         run: |
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
-          const report = JSON.parse(process.env.REPORT);
+          const report = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/eai-acceptance-report.json`, 'utf8'));
           if (report.investigation.status !== 'completed') throw new Error('Investigation did not complete');
-          fs.writeFileSync(`${process.env.RUNNER_TEMP}/eai-acceptance-report.json`, JSON.stringify(report,null,2));
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Investigation completed without publication. Reproduction: ${report.reproduction.status}. See the screened report artifact.\n`);
           NODE
 
