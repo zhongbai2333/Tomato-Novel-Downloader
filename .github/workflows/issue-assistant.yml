@@ -988,12 +988,18 @@ jobs:
     evidence_investigation:
         needs: ai-review
         if: needs.ai-review.outputs.should_investigate == 'true'
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 30
         concurrency:
             group: evidence-aware-issue-${{ github.repository }}-${{ github.event.issue.number }}
             cancel-in-progress: false
         steps:
+            - name: Set up the Codex sandbox
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --yes bubblewrap apparmor-profiles
+                  sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+
             - name: Check out trusted default branch
               uses: actions/checkout@v5
               with:
