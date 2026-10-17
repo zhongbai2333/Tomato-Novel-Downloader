@@ -1009,7 +1009,7 @@ jobs:
 
             - name: Investigate issue evidence
               id: investigate
-              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@d3d7163606b06a51ae598b3f380f1f7e8b63af4f
+              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@359e757dcda7bf3ff206b770224c1795f097448e
               env:
                   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
               with:
