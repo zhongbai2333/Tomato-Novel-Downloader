@@ -1,7 +1,7 @@
 schemaVersion: 1
 
 cli:
-  install: npx
+  install: preinstalled
   versions:
     codex: 0.163.0
 
@@ -25,11 +25,18 @@ investigation:
   timeoutMinutes: 20
   maxTurns: 20
   workspace: workspace-write
-  # Keep direct egress blocked; DeepSeek reviews exact attachments and public GET/HEAD evidence requests.
-  approvalMode: auto-review
-  network: false
-  reviewedNetworkMaxRequests: 8
-  reviewedNetworkMaxResponseBytes: 2097152
+  # Ordinary public networking runs only inside a disposable container; credentials and publication stay outside.
+  approvalMode: never
+  network: true
+  isolation:
+    executor: container
+    cpus: 2
+    memoryMb: 4096
+    diskMb: 3072
+    pids: 256
+    modelRequests: 40
+    maxOutputTokens: 8192
+    publicNetworkMb: 512
 
 triage:
   duplicateSearch: true
