@@ -19,6 +19,8 @@ jobs:
     ai-review:
         if: github.event_name == 'issues' && (github.event.action == 'opened' || github.event.action == 'reopened' || (github.event.action == 'labeled' && (github.event.label.name == 'AI-Rerun' || github.event.label.name == 'ai-rerun')))
         runs-on: ubuntu-latest
+        outputs:
+            should_investigate: ${{ steps.analyze.outputs.should_investigate }}
         concurrency:
             group: issue-assistant-ai-review-${{ github.repository }}-${{ github.event.issue.number }}
             cancel-in-progress: false
@@ -981,6 +983,49 @@ jobs:
                         } catch {
                           // ignore absent label
                         }
+                      }
+
+    evidence_investigation:
+        needs: ai-review
+        if: needs.ai-review.outputs.should_investigate == 'true'
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        concurrency:
+            group: evidence-aware-issue-${{ github.repository }}-${{ github.event.issue.number }}
+            cancel-in-progress: false
+        steps:
+            - name: Check out trusted default branch
+              uses: actions/checkout@v5
+              with:
+                  ref: ${{ github.event.repository.default_branch }}
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Investigate issue evidence
+              id: investigate
+              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@559058a23cf720b9981da01faa5f90b11b0c4bde
+              env:
+                  DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+              with:
+                  github-token: ${{ github.token }}
+                  config-path: .github/issue-investigator.yml
+                  publish-comment: "true"
+
+            - name: Remove investigation trigger label
+              if: always()
+              uses: actions/github-script@v7
+              with:
+                  github-token: ${{ github.token }}
+                  script: |
+                      try {
+                        await github.rest.issues.removeLabel({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: context.payload.issue.number,
+                          name: 'AI-Investigate'
+                        });
+                      } catch (error) {
+                        if (error?.status !== 404) throw error;
                       }
 
     needs-info-comment-rerun:

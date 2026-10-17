@@ -18,7 +18,8 @@ providers:
 investigation:
   engine: codex
   provider: deepseek
-  trigger: label
+  # issue-assistant.yml is the controller; this Action job only starts after its gate passes.
+  trigger: always
   triggerLabel: AI-Investigate
   mode: execute
   timeoutMinutes: 20
