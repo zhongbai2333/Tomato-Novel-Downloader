@@ -34,7 +34,7 @@ investigation:
     memoryMb: 4096
     diskMb: 3072
     pids: 256
-    modelRequests: 40
+    modelRequests: 100
     maxOutputTokens: 8192
     publicNetworkMb: 512
 
