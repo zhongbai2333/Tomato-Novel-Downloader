@@ -51,43 +51,11 @@ jobs:
                         per_page: 100
                       });
 
-                      const isAiReviewComment = (comment) => {
-                        const text = String(comment?.body || '');
+                      const previous = comments.filter(comment => {
+                        if (comment.user?.type !== 'Bot' || comment.user?.login !== 'github-actions[bot]') return false;
+                        const text = String(comment.body || '');
                         return text.includes(aiReviewMarker) || text.includes(pendingMarker) || text.startsWith('## 🤖 AI 审查结果') || text.startsWith('## ⚠️ AI 审查');
-                      };
-
-                      let latestAiIndex = -1;
-                      for (let i = comments.length - 1; i >= 0; i--) {
-                        if (isAiReviewComment(comments[i])) {
-                          latestAiIndex = i;
-                          break;
-                        }
-                      }
-
-                      if (latestAiIndex >= 0) {
-                        const latestAi = comments[latestAiIndex];
-                        const hasNewerCommentBelow = comments.slice(latestAiIndex + 1).some(c => !isAiReviewComment(c));
-                        if (!hasNewerCommentBelow) {
-                          await github.rest.issues.updateComment({
-                            owner,
-                            repo,
-                            comment_id: latestAi.id,
-                            body: pendingBody
-                          });
-                          core.setOutput('comment_id', String(latestAi.id));
-                          return;
-                        }
-
-                        try {
-                          await github.rest.issues.deleteComment({
-                            owner,
-                            repo,
-                            comment_id: latestAi.id
-                          });
-                        } catch (e) {
-                          core.warning('Failed to delete old AI review comment: ' + e.message);
-                        }
-                      }
+                      });
 
                       const resp = await github.rest.issues.createComment({
                         owner,
@@ -97,6 +65,14 @@ jobs:
                       });
 
                       core.setOutput('comment_id', String(resp.data.id));
+                      // Keep the old result until the replacement comment exists.
+                      for (const comment of previous) {
+                        try {
+                          await github.rest.issues.deleteComment({ owner, repo, comment_id: comment.id });
+                        } catch (e) {
+                          if (e.status !== 404) core.warning('New AI review comment created, but an old bot comment could not be removed: ' + comment.id);
+                        }
+                      }
 
             - name: Analyze issue with DeepSeek
               id: analyze
@@ -999,7 +975,7 @@ jobs:
               run: |
                   mkdir -p "$RUNNER_TEMP/eai-runtime"
                   curl --fail --silent --show-error --location \
-                    https://raw.githubusercontent.com/zhongbai2333/Evidence-Aware-Issue-Investigator/d2e199e30ed595a0c82c6b445424ab873f59e8cf/container/Dockerfile \
+                    https://raw.githubusercontent.com/zhongbai2333/Evidence-Aware-Issue-Investigator/995335b888da28199a7eb03a54ef49c44153e810/container/Dockerfile \
                     --output "$RUNNER_TEMP/eai-runtime/Dockerfile"
                   docker build --iidfile "$RUNNER_TEMP/eai-image.id" "$RUNNER_TEMP/eai-runtime"
                   echo "image=$(cat "$RUNNER_TEMP/eai-image.id")" >> "$GITHUB_OUTPUT"
@@ -1013,7 +989,7 @@ jobs:
 
             - name: Investigate issue evidence
               id: investigate
-              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@d2e199e30ed595a0c82c6b445424ab873f59e8cf
+              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@995335b888da28199a7eb03a54ef49c44153e810
               env:
                   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
               with:
