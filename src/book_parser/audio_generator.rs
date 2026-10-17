@@ -48,6 +48,40 @@ struct AudiobookSpeechConfig {
     volume: i32,
 }
 
+enum TtsBackend {
+    #[cfg(feature = "tts")]
+    Ms(MSEdgeTTSClient<TcpStream>),
+    #[cfg(feature = "tts-native")]
+    Edge(EdgeTtsClient),
+}
+
+#[cfg(feature = "tts")]
+fn configure_tts_tls() {
+    // reqwest enables ring while msedge-tts enables aws-lc-rs. Rustls cannot
+    // auto-select when both are present; preserve an already selected provider.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+fn connect_tts_backend() -> Result<TtsBackend, String> {
+    let mut failures = Vec::new();
+    #[cfg(feature = "tts")]
+    {
+        configure_tts_tls();
+        match connect() {
+            Ok(client) => return Ok(TtsBackend::Ms(client)),
+            Err(err) => failures.push(format!("msedge-tts: {err}")),
+        }
+    }
+    #[cfg(feature = "tts-native")]
+    match EdgeTtsClient::connect() {
+        Ok(client) => return Ok(TtsBackend::Edge(client)),
+        Err(err) => failures.push(format!("native: {err:#}")),
+    }
+    Err(failures.join("; "))
+}
+
 fn parse_percent_i32(input: &str) -> i32 {
     let s = input.trim();
     if s.is_empty() {
@@ -697,31 +731,10 @@ pub fn generate_audiobook(
         concurrency
     );
 
-    // Fail-fast probe: if we cannot connect at all, skip spawning workers.
-    {
-        let mut ok = false;
-        #[cfg(feature = "tts")]
-        {
-            if connect().is_ok() {
-                ok = true;
-            }
-        }
-        #[cfg(all(not(feature = "tts"), feature = "tts-native"))]
-        {
-            if EdgeTtsClient::connect().is_ok() {
-                ok = true;
-            }
-        }
-        #[cfg(all(feature = "tts", feature = "tts-native"))]
-        {
-            if !ok && EdgeTtsClient::connect().is_ok() {
-                ok = true;
-            }
-        }
-        if !ok {
-            error!(target: "book_manager", "[TTS] 无法连接到语音服务（msedge-tts / native 均失败）");
-            return false;
-        }
+    // Fail-fast probe uses the same backend order and diagnostics as workers.
+    if let Err(err) = connect_tts_backend() {
+        error!(target: "book_manager", "[TTS] 无法连接到语音服务：{err}");
+        return false;
     }
 
     let (pb, owns_bar) = if let Some(existing) = bar {
@@ -769,41 +782,12 @@ pub fn generate_audiobook(
         let done_tx = done_tx.clone();
         let cancel = cancel.map(Arc::clone);
         workers.push(thread::spawn(move || {
-            enum Backend {
-                #[cfg(feature = "tts")]
-                Ms(MSEdgeTTSClient<TcpStream>),
-                #[cfg(feature = "tts-native")]
-                Edge(EdgeTtsClient),
-            }
-
-            let mut backend = None;
-
-            #[cfg(feature = "tts")]
-            {
-                if let Ok(c) = connect() {
-                    backend = Some(Backend::Ms(c));
-                }
-            }
-            #[cfg(all(feature = "tts-native", not(feature = "tts")))]
-            {
-                if let Ok(c) = EdgeTtsClient::connect() {
-                    backend = Some(Backend::Edge(c));
-                }
-            }
-            #[cfg(all(feature = "tts", feature = "tts-native"))]
-            {
-                if backend.is_none() {
-                    if let Ok(c) = EdgeTtsClient::connect() {
-                        backend = Some(Backend::Edge(c));
-                    }
-                }
-            }
-
-            let mut backend = match backend {
-                Some(b) => b,
-                None => {
+            let mut backend = match connect_tts_backend() {
+                Ok(backend) => backend,
+                Err(err) => {
                     errors.fetch_add(1, Ordering::Relaxed);
-                    pb.println("[TTS] connect failed");
+                    error!(target: "book_manager", "[TTS] worker 连接失败：{err}");
+                    pb.println(format!("[TTS] connect failed: {err}"));
                     // Drain jobs so progress won't hang.
                     while rx
                         .recv_timeout(std::time::Duration::from_millis(200))
@@ -853,12 +837,12 @@ pub fn generate_audiobook(
                     &audio_format,
                     |chunk| match &mut backend {
                         #[cfg(feature = "tts")]
-                        Backend::Ms(tts) => tts
+                        TtsBackend::Ms(tts) => tts
                             .synthesize(chunk, &make_ms_config(&config))
                             .map(|a| a.audio_bytes)
                             .map_err(|e| e.to_string()),
                         #[cfg(feature = "tts-native")]
-                        Backend::Edge(tts) => tts
+                        TtsBackend::Edge(tts) => tts
                             .synthesize(chunk, &make_edge_config(&config))
                             .map(|a| a.audio_bytes)
                             .map_err(|e| e.to_string()),
@@ -956,6 +940,71 @@ mod tests {
         TTS_CHUNK_MAX_CHARS, concatenate_audio_chunks, existing_audio_is_reusable,
         export_audiobook_cover, extract_wav_parts, split_tts_text,
     };
+
+    #[cfg(feature = "tts")]
+    #[test]
+    fn tls_provider_is_explicit_when_both_crypto_backends_are_enabled() {
+        super::configure_tts_tls();
+        let _ = rustls::ClientConfig::builder();
+    }
+
+    #[test]
+    #[ignore = "requires the live Edge TTS service and TOMATO_TTS_SMOKE_DIR"]
+    fn live_audiobook_generation() {
+        let root =
+            std::env::var("TOMATO_TTS_SMOKE_DIR").expect("set a disposable smoke output directory");
+        fs::create_dir_all(&root).unwrap();
+        // Always use a new directory so an existing MP3 cannot bypass synthesis.
+        let output = tempfile::Builder::new()
+            .prefix("tts-smoke-")
+            .tempdir_in(root)
+            .unwrap()
+            .keep();
+        let mut config = crate::base_system::context::Config::default();
+        config.enable_audiobook = true;
+        config.audiobook_concurrency = 1;
+        config.save_path = output.to_string_lossy().into_owned();
+        let mut manager = super::BookManager::new(config, "tts-smoke", "TTS-smoke").unwrap();
+        manager.book_id = "tts-smoke".into();
+        manager.book_name = "TTS-smoke".into();
+        manager.downloaded.insert(
+            "1".into(),
+            ("连接测试".into(), Some("这是语音服务兼容性测试。".into())),
+        );
+        assert!(super::generate_audiobook(
+            &manager,
+            &[serde_json::json!({"id":"1"})],
+            None,
+            true,
+            None,
+            None
+        ));
+        let audio_dir = output.join("TTS-smoke_audio");
+        let files: Vec<_> = fs::read_dir(&audio_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "mp3"))
+            .collect();
+        assert_eq!(files.len(), 1);
+        let audio = fs::read(&files[0]).unwrap();
+        assert!(
+            audio.len() > 1000,
+            "expected synthesized audio, got {} bytes",
+            audio.len()
+        );
+        assert!(
+            audio.starts_with(b"ID3")
+                || audio
+                    .windows(2)
+                    .any(|b| b[0] == 0xff && b[1] & 0xe0 == 0xe0)
+        );
+        println!(
+            "Synthesized {} bytes to {}",
+            audio.len(),
+            files[0].display()
+        );
+    }
 
     fn wav_bytes(data: &[u8]) -> Vec<u8> {
         let fmt: [u8; 16] = [
