@@ -994,11 +994,15 @@ jobs:
             group: evidence-aware-issue-${{ github.repository }}-${{ github.event.issue.number }}
             cancel-in-progress: false
         steps:
-            - name: Set up the Codex sandbox
+            - name: Build the isolated investigation environment
+              id: sandbox
               run: |
-                  sudo apt-get update
-                  sudo apt-get install --yes bubblewrap apparmor-profiles
-                  sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+                  mkdir -p "$RUNNER_TEMP/eai-runtime"
+                  curl --fail --silent --show-error --location \
+                    https://raw.githubusercontent.com/zhongbai2333/Evidence-Aware-Issue-Investigator/7cc2eaafe5e2ded5e2418eac9a431db95e484d70/container/Dockerfile \
+                    --output "$RUNNER_TEMP/eai-runtime/Dockerfile"
+                  docker build --iidfile "$RUNNER_TEMP/eai-image.id" "$RUNNER_TEMP/eai-runtime"
+                  echo "image=$(cat "$RUNNER_TEMP/eai-image.id")" >> "$GITHUB_OUTPUT"
 
             - name: Check out trusted default branch
               uses: actions/checkout@v5
@@ -1009,13 +1013,14 @@ jobs:
 
             - name: Investigate issue evidence
               id: investigate
-              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@0c7a32da5321359234d0c89c39259479503589b7
+              uses: zhongbai2333/Evidence-Aware-Issue-Investigator@7cc2eaafe5e2ded5e2418eac9a431db95e484d70
               env:
                   DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
               with:
                   github-token: ${{ github.token }}
                   config-path: .github/issue-investigator.yml
                   publish-comment: "true"
+                  container-image: ${{ steps.sandbox.outputs.image }}
 
             - name: Remove investigation trigger label
               if: always()

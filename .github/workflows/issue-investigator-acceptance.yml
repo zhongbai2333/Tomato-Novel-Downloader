@@ -1,0 +1,87 @@
+name: Isolated Investigator Acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing Issue to investigate without changing it or publishing a comment.
+        required: true
+        default: "428"
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  investigate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build trusted isolated executor
+        id: sandbox
+        run: |
+          mkdir -p "$RUNNER_TEMP/eai-runtime"
+          curl --fail --silent --show-error --location \
+            https://codeload.github.com/zhongbai2333/Evidence-Aware-Issue-Investigator/tar.gz/7cc2eaafe5e2ded5e2418eac9a431db95e484d70 \
+            --output "$RUNNER_TEMP/eai-runtime.tar.gz"
+          tar --extract --gzip --file "$RUNNER_TEMP/eai-runtime.tar.gz" --directory "$RUNNER_TEMP/eai-runtime" --strip-components=1
+          docker build --iidfile "$RUNNER_TEMP/eai-image.id" -f "$RUNNER_TEMP/eai-runtime/container/Dockerfile" "$RUNNER_TEMP/eai-runtime"
+          echo "image=$(cat "$RUNNER_TEMP/eai-image.id")" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare a read-only Issue snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          if (!/^[1-9][0-9]*$/.test(process.env.ISSUE_NUMBER)) throw new Error('Invalid Issue number');
+          const issue = JSON.parse(execFileSync('gh', ['api', `repos/${process.env.REPOSITORY}/issues/${process.env.ISSUE_NUMBER}`], {encoding:'utf8'}));
+          if (issue.pull_request) throw new Error('Expected an Issue, not a pull request');
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/eai-acceptance-event.json`, JSON.stringify({action:'opened',repository:{full_name:process.env.REPOSITORY},issue}));
+          NODE
+
+      - name: Investigate without publication
+        id: investigate
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          CONTAINER_IMAGE: ${{ steps.sandbox.outputs.image }}
+        run: |
+          node --input-type=module <<'NODE'
+          import {pathToFileURL} from 'node:url';
+          process.env.GITHUB_EVENT_NAME = 'issues';
+          process.env.GITHUB_EVENT_PATH = `${process.env.RUNNER_TEMP}/eai-acceptance-event.json`;
+          process.env['INPUT_GITHUB-TOKEN'] = process.env.GH_TOKEN;
+          process.env['INPUT_CONFIG-PATH'] = '.github/issue-investigator.yml';
+          process.env['INPUT_PUBLISH-COMMENT'] = 'false';
+          process.env['INPUT_CONTAINER-IMAGE'] = process.env.CONTAINER_IMAGE;
+          await import(pathToFileURL(`${process.env.RUNNER_TEMP}/eai-runtime/dist/index.js`).href);
+          NODE
+
+      - name: Save screened report
+        env:
+          REPORT: ${{ steps.investigate.outputs.report-json }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const report = JSON.parse(process.env.REPORT);
+          if (report.investigation.status !== 'completed') throw new Error('Investigation did not complete');
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/eai-acceptance-report.json`, JSON.stringify(report,null,2));
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Investigation completed without publication. Reproduction: ${report.reproduction.status}. See the screened report artifact.\n`);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isolated-investigation-report
+          path: ${{ runner.temp }}/eai-acceptance-report.json
+          retention-days: 7
