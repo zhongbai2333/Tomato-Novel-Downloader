@@ -25,9 +25,11 @@ investigation:
   timeoutMinutes: 20
   maxTurns: 20
   workspace: workspace-write
-  # Keep the investigation Agent offline; the controller asks DeepSeek to review exact public Issue attachments.
+  # Keep direct egress blocked; DeepSeek reviews exact attachments and public GET/HEAD evidence requests.
   approvalMode: auto-review
   network: false
+  reviewedNetworkMaxRequests: 8
+  reviewedNetworkMaxResponseBytes: 2097152
 
 triage:
   duplicateSearch: true
