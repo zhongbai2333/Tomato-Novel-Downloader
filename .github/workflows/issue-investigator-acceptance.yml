@@ -29,7 +29,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/eai-runtime"
           curl --fail --silent --show-error --location \
-            https://codeload.github.com/zhongbai2333/Evidence-Aware-Issue-Investigator/tar.gz/d2e199e30ed595a0c82c6b445424ab873f59e8cf \
+            https://codeload.github.com/zhongbai2333/Evidence-Aware-Issue-Investigator/tar.gz/995335b888da28199a7eb03a54ef49c44153e810 \
             --output "$RUNNER_TEMP/eai-runtime.tar.gz"
           tar --extract --gzip --file "$RUNNER_TEMP/eai-runtime.tar.gz" --directory "$RUNNER_TEMP/eai-runtime" --strip-components=1
           docker build --iidfile "$RUNNER_TEMP/eai-image.id" -f "$RUNNER_TEMP/eai-runtime/container/Dockerfile" "$RUNNER_TEMP/eai-runtime"
