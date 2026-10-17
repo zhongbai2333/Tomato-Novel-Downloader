@@ -449,6 +449,7 @@ jobs:
                         '核心目标：优先“完善用户意图”，而不是要求普通用户写专业方案。',
                         '请将用户原始描述整理为可执行意图，补齐合理上下文（在不臆造事实前提下）。',
                         '只有在“关键信息缺失会阻断处理”时才设置 needs_info=true。',
+                        '如果 BUG 已包含具体错误文本或日志附件，缺少可选的 BookID/复现步骤本身不应阻断代码侧调查；可将其列为可选补充。',
                         'need_more_info_items 必须是简短、低门槛、非技术化的补充建议（最多 2 条）。',
                         '不要要求普通用户提供架构设计、隐私策略、性能评估、复杂集成说明等专业材料。',
                         '项目背景：Tomato-Novel-Downloader 是 Rust 编写的番茄小说下载器，包含 TUI/Web UI、EPUB/TXT 输出、断点续传、搜索、配置、Docker、Termux、Edge TTS、有声小说生成、Official-API/no-official-api 双模式等功能。',
@@ -669,10 +670,14 @@ jobs:
 
                       // 深入调查由 issue-assistant 的结构化分诊结果决定，避免让 Issue 文本直接触发高成本 Agent。
                       const investigationPriorities = new Set(['🟪Critical', '🟥High', '🟨Medium']);
+                      const hasDiagnosticEvidence = /github\.com\/user-attachments\/files\//i.test(safeIssueBody)
+                        || /(?:^|\n)\s*(?:ERROR|WARN|FATAL|panic|错误|异常|日志)\b/im.test(safeIssueBody)
+                        || /```[\s\S]{20,}```/.test(safeIssueBody);
+                      const isReadyForInvestigation = (!result.needs_info && result.confidence >= 0.75)
+                        || (hasDiagnosticEvidence && result.confidence >= 0.5);
                       const shouldInvestigate = result.negative === 'none'
                         && result.type === 'BUG'
-                        && result.needs_info === false
-                        && result.confidence >= 0.75
+                        && isReadyForInvestigation
                         && investigationPriorities.has(result.priority);
 
                       core.setOutput('analysis_result', JSON.stringify(result));
