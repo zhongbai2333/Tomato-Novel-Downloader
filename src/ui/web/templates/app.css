@@ -431,6 +431,36 @@ button.sm {
   margin-bottom: 20px;
 }
 
+/* ===== Download Queue Summary ===== */
+.queue-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  align-items: center;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 0.88rem;
+}
+
+.queue-summary .queue-stat strong {
+  font-weight: 600;
+}
+
+.job-error {
+  color: var(--danger, #c0392b);
+  font-size: 0.82rem;
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;

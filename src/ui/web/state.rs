@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::base_system::context::Config;
 use crate::download::downloader::{BookNameOption, ProgressSnapshot};
+use crate::ui::web::download_queue::DownloadQueue;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConfigView {
@@ -29,6 +30,8 @@ pub(crate) struct AppState {
     pub(crate) config_path: Arc<PathBuf>,
     pub(crate) library_root: Arc<PathBuf>,
     pub(crate) jobs: Arc<JobStore>,
+    /// 本地 FIFO 下载队列（默认关闭；关闭时保持旧的单任务限制行为）。
+    pub(crate) download_queue: Arc<DownloadQueue>,
     pub(crate) self_update: Arc<SelfUpdateStore>,
     pub(crate) library_scan: Arc<LibraryScanStore>,
     pub(crate) update_scan: Arc<UpdateScanStore>,
@@ -621,7 +624,8 @@ pub(crate) enum JobState {
 
 impl JobState {
     fn is_auto_prunable(self) -> bool {
-        matches!(self, JobState::Done)
+        // Done 与 Canceled 都会被自动清理（Canceled 任务可重试，无需永久保留）。
+        matches!(self, JobState::Done | JobState::Canceled)
     }
 }
 
@@ -638,6 +642,9 @@ pub(crate) struct JobInfo {
     pub(crate) format_options: Option<Vec<BookNameOption>>,
     pub(crate) created_ms: u64,
     pub(crate) updated_ms: u64,
+    /// 等待队列中的位置（第 1 位表示下一个执行）。仅在任务处于 Queued 且队列启用时填充。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) queue_position: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -678,6 +685,7 @@ impl JobStore {
             format_options: None,
             created_ms: now,
             updated_ms: now,
+            queue_position: None,
         };
 
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -717,6 +725,58 @@ impl JobStore {
         g.values()
             .filter(|e| matches!(e.info.state, JobState::Queued | JobState::Running))
             .count()
+    }
+
+    /// 返回当前处于 Running（下载中）状态的任务数量。
+    pub(crate) fn count_running(&self) -> usize {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        g.values()
+            .filter(|e| matches!(e.info.state, JobState::Running))
+            .count()
+    }
+
+    /// 原子地将任务从 Queued 转换为 Running。
+    ///
+    /// 仅当任务存在、未被取消且仍处于 Queued 状态时成功。
+    /// 已取消 / 已删除 / 已在执行的任务都会拒绝，保证取消与 Worker 启动之间不存在竞态：
+    /// 一旦取消成功，任务永远不会再变成 Running。
+    pub(crate) fn try_mark_running(&self, id: u64) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = g.get_mut(&id) else {
+            return false;
+        };
+        if e.cancel.load(Ordering::Relaxed) || !matches!(e.info.state, JobState::Queued) {
+            return false;
+        }
+        e.info.state = JobState::Running;
+        e.info.message = None;
+        e.info.book_name_options = None;
+        e.info.format_options = None;
+        e.info.updated_ms = now_ms();
+        true
+    }
+
+    /// 检查任务是否仍存在（未被删除/清理）。
+    pub(crate) fn contains(&self, id: u64) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&id)
+    }
+
+    /// 填充等待任务的排队位置：按 FIFO（提交顺序，即 id 升序）对 Queued 任务编号。
+    /// `order` 为队列等待顺序（job id 列表）；不在其中的任务不编号。
+    pub(crate) fn apply_queue_positions(&self, items: &mut [JobInfo], order: &[u64]) {
+        let positions: HashMap<u64, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (*id, i + 1))
+            .collect();
+        for item in items.iter_mut() {
+            if matches!(item.state, JobState::Queued) {
+                item.queue_position = positions.get(&item.id).copied();
+            }
+        }
     }
 
     pub(crate) fn set_running(&self, id: u64) {
@@ -764,6 +824,33 @@ impl JobStore {
         let Some(e) = g.get_mut(&id) else {
             return false;
         };
+        e.cancel.store(true, Ordering::Relaxed);
+        e.info.state = JobState::Canceled;
+        e.info.message = Some("cancel requested".to_string());
+        if let Some(tx) = e.book_name_sender.take() {
+            let _ = tx.send(None);
+        }
+        if let Some(tx) = e.format_sender.take() {
+            let _ = tx.send(None);
+        }
+        e.info.book_name_options = None;
+        e.info.format_options = None;
+        e.info.updated_ms = now_ms();
+        true
+    }
+
+    /// 原子地取消一个活跃（Queued/Running）任务：设置取消标志并标记为 Canceled。
+    ///
+    /// 与 `request_cancel_and_remove` 不同：条目保留在列表中（展示“已取消”，可重试）。
+    /// 若任务不存在或已结束（Done/Failed/Canceled），返回 false 且不做任何修改。
+    pub(crate) fn request_cancel_active(&self, id: u64) -> bool {
+        let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = g.get_mut(&id) else {
+            return false;
+        };
+        if !matches!(e.info.state, JobState::Queued | JobState::Running) {
+            return false;
+        }
         e.cancel.store(true, Ordering::Relaxed);
         e.info.state = JobState::Canceled;
         e.info.message = Some("cancel requested".to_string());
@@ -892,4 +979,132 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod job_store_tests {
+    use super::*;
+
+    fn create_job(store: &JobStore, book_id: &str) -> JobHandle {
+        store.create(book_id.to_string())
+    }
+
+    #[test]
+    fn created_job_starts_queued() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "714303869");
+        let jobs = store.list();
+        assert_eq!(jobs.len(), 1);
+        assert!(matches!(jobs[0].state, JobState::Queued));
+        assert_eq!(jobs[0].book_id, "714303869");
+        assert_eq!(jobs[0].id, handle.id);
+    }
+
+    #[test]
+    fn queued_can_transition_to_running() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        assert!(store.try_mark_running(handle.id));
+        let jobs = store.list();
+        assert!(matches!(jobs[0].state, JobState::Running));
+        assert_eq!(store.count_running(), 1);
+    }
+
+    #[test]
+    fn running_cannot_be_marked_running_twice() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        assert!(store.try_mark_running(handle.id));
+        // 重复启动会被拒绝，避免产生多个执行者。
+        assert!(!store.try_mark_running(handle.id));
+        assert_eq!(store.count_running(), 1);
+    }
+
+    #[test]
+    fn removed_job_cannot_transition_to_running() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        assert!(store.remove(handle.id));
+        assert!(!store.contains(handle.id));
+        assert!(!store.try_mark_running(handle.id));
+    }
+
+    #[test]
+    fn canceled_job_cannot_transition_to_running() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        assert!(store.request_cancel(handle.id));
+        assert!(matches!(store.list()[0].state, JobState::Canceled));
+        assert!(!store.try_mark_running(handle.id));
+    }
+
+    #[test]
+    fn canceled_before_worker_claim_is_skipped() {
+        // 模拟：用户在 Worker 取出任务之前取消任务。
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        let _ = store.request_cancel(handle.id);
+        // Worker 原子转换失败 → 跳过任务。
+        assert!(!store.try_mark_running(handle.id));
+        assert!(matches!(store.list()[0].state, JobState::Canceled));
+    }
+
+    #[test]
+    fn queue_positions_follow_fifo_order() {
+        let store = JobStore::default();
+        let a = create_job(&store, "a");
+        let b = create_job(&store, "b");
+        let c = create_job(&store, "c");
+        // FIFO 顺序：先提交的在前面。
+        let order = [a.id, b.id, c.id];
+        let mut items = store.list();
+        store.apply_queue_positions(&mut items, &order);
+        let pos = |id: u64| {
+            items
+                .iter()
+                .find(|j| j.id == id)
+                .and_then(|j| j.queue_position)
+        };
+        assert_eq!(pos(a.id), Some(1));
+        assert_eq!(pos(b.id), Some(2));
+        assert_eq!(pos(c.id), Some(3));
+    }
+
+    #[test]
+    fn canceling_one_waiting_task_does_not_affect_others() {
+        let store = JobStore::default();
+        let a = create_job(&store, "a");
+        let b = create_job(&store, "b");
+        let c = create_job(&store, "c");
+
+        assert!(store.request_cancel(b.id));
+
+        assert!(store.contains(a.id));
+        assert!(store.contains(c.id));
+        // 其余任务不受影响：仍处于 Queued，且仍可正常启动。
+        assert!(store.try_mark_running(a.id));
+        assert!(store.try_mark_running(c.id));
+        assert!(!store.try_mark_running(b.id));
+    }
+
+    #[test]
+    fn done_tasks_are_not_counted_as_active() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        assert_eq!(store.count_active(), 1);
+        let _ = store.try_mark_running(handle.id);
+        assert_eq!(store.count_active(), 1);
+        store.set_done(handle.id);
+        assert_eq!(store.count_active(), 0);
+        assert_eq!(store.count_running(), 0);
+    }
+
+    #[test]
+    fn failed_tasks_are_not_counted_as_active() {
+        let store = JobStore::default();
+        let handle = create_job(&store, "1");
+        let _ = store.try_mark_running(handle.id);
+        store.set_failed(handle.id, "boom".to_string());
+        assert_eq!(store.count_active(), 0);
+    }
 }

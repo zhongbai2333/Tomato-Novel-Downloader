@@ -1,5 +1,6 @@
 //! Web Server UI（纯 HTML 前端）。
 
+mod download_queue;
 mod router;
 mod routes;
 mod state;
@@ -13,6 +14,7 @@ use anyhow::{Result, anyhow};
 use tracing::{info, warn};
 
 use crate::base_system::context::Config;
+use download_queue::DownloadQueue;
 use state::{AppState, AuthState, ConfigView, JobStore, LibraryScanStore};
 
 pub fn run(
@@ -131,13 +133,20 @@ async fn run_async(
     library_root: PathBuf,
     auth: Option<AuthState>,
 ) -> Result<()> {
+    // 任务存储与下载队列：队列默认关闭（TOMATO_WEB_DOWNLOAD_QUEUE）。
+    // 仅在启用时创建唯一的 Worker 线程，任何时刻最多执行一本小说。
+    let jobs = Arc::new(JobStore::default());
+    let download_queue = Arc::new(DownloadQueue::from_env(jobs.clone()));
+    download_queue.spawn_worker();
+
     let state = AppState {
         bind_addrs: Arc::new(bind_addrs.clone()),
         config_view: Arc::new(view),
         config: Arc::new(std::sync::Mutex::new(config)),
         config_path: Arc::new(config_path),
         library_root: Arc::new(library_root),
-        jobs: Arc::new(JobStore::default()),
+        jobs,
+        download_queue,
         self_update: Arc::new(state::SelfUpdateStore::default()),
         library_scan: Arc::new(LibraryScanStore::default()),
         update_scan: Arc::new(state::UpdateScanStore::default()),

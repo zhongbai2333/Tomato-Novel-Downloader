@@ -1105,7 +1105,14 @@ async function confirmPreview() {
         : `已创建下载任务：${bookId}`;
     }
   } catch (err) {
-    alert(`创建任务失败: ${err}`);
+    const msg = String(err);
+    if (msg.includes('queue_full')) {
+      alert('下载队列已满：等待任务数已达上限，请等待已有任务完成后再试。');
+    } else if (msg.startsWith('429')) {
+      alert('已有任务正在下载，请等待完成后再试（可在启动时开启 TOMATO_WEB_DOWNLOAD_QUEUE=1 启用下载队列）。');
+    } else {
+      alert(`创建任务失败: ${err}`);
+    }
   }
 }
 
@@ -1126,8 +1133,32 @@ async function startDownloadDirect(bookId) {
 
 // ── Jobs ───────────────────────────────────────────────────────────
 
+function renderQueueSummary(queue) {
+  const box = document.getElementById('queueSummary');
+  if (!box) return;
+  if (!queue || !queue.enabled) {
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  const runningCount = Number(queue.running_count || 0);
+  const queuedCount = Number(queue.queued_count || 0);
+  const capacity = Number(queue.capacity || 0);
+  const current = queue.current;
+  const next = queue.next;
+  const currentTitle = current ? `《${current.title || current.book_id}》` : '无';
+  const nextTitle = next ? `《${next.title || next.book_id}》` : '无';
+  box.innerHTML = `
+    <div class="queue-stat">当前执行：<strong>${runningCount}</strong></div>
+    <div class="queue-stat">等待队列：<strong>${queuedCount}</strong> / ${capacity}</div>
+    <div class="queue-stat">正在下载：${esc(currentTitle)}</div>
+    <div class="queue-stat">下一本：${esc(nextTitle)}</div>
+  `;
+}
+
 async function refreshJobs() {
   const data = await j('/api/jobs');
+  renderQueueSummary(data.queue);
   const tbody = document.getElementById('jobsBody');
   tbody.innerHTML = '';
   for (const it of data.items || []) {
@@ -1158,13 +1189,22 @@ async function refreshJobs() {
       stateHtml = '<span class="badge warning">待配置</span>';
     } else switch (vState) {
       case 'running': stateHtml = `<span class="badge info">${pct}%</span>`; break;
-      case 'queued':  stateHtml = '<span class="badge">排队中</span>'; break;
+      case 'queued': {
+        const posText = it.queue_position ? ` · 第 ${it.queue_position} 位` : '';
+        stateHtml = `<span class="badge">排队中${esc(posText)}</span>`;
+        break;
+      }
       case 'done':    stateHtml = '<span class="badge success">完成</span>'; break;
-      case 'failed':  stateHtml = '<span class="badge danger">失败</span>'; break;
-      case 'partial': stateHtml = '<span class="badge warning">部分失败</span>'; break;
+      case 'failed':  stateHtml = `<span class="badge danger"${it.message ? ` title="${esc(it.message)}"` : ''}>失败</span>`; break;
+      case 'partial': stateHtml = `<span class="badge warning"${it.message ? ` title="${esc(it.message)}"` : ''}>部分失败</span>`; break;
       case 'canceled':stateHtml = '<span class="badge">已取消</span>'; break;
       default:        stateHtml = esc(it.state || '');
     }
+
+    // 进度列：失败时展示失败原因，其余展示已保存章节数。
+    const progressCell = (vState === 'failed' || vState === 'partial') && it.message
+      ? `<span class="job-error" title="${esc(it.message)}">${esc(it.message)}</span>`
+      : esc(progressText);
 
     // Action button
     let btnHtml;
@@ -1190,7 +1230,7 @@ async function refreshJobs() {
       <td><span class="badge">${esc(it.id)}</span></td>
       <td>${esc(title)}</td>
       <td>${stateHtml}</td>
-      <td>${esc(progressText)}</td>
+      <td>${progressCell}</td>
       <td>${btnHtml}</td>
     `;
     tbody.appendChild(tr);
