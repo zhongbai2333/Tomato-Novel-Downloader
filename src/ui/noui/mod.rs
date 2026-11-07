@@ -74,7 +74,7 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         }
 
         let prompt = format!(
-            "旧 CLI 已禁用新建下载；请输入命令（s配置 / h下载历史 / u更新小说 / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
+            "旧 CLI 已禁用新建下载；请输入命令（s配置 / h下载历史 / u更新小说 / e转TXT / c检查更新 / U程序自更新 / q退出，默认保存到 {}）：",
             config.default_save_dir().display()
         );
         let input = read_line(&prompt)?;
@@ -111,6 +111,11 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
             continue;
         }
 
+        if text.eq_ignore_ascii_case("e") {
+            epub_to_txt_menu()?;
+            continue;
+        }
+
         if text == "U" {
             let _ = crate::base_system::self_update::check_for_updates(
                 env!("CARGO_PKG_VERSION"),
@@ -122,6 +127,46 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         println!(
             "旧 CLI 模式已禁用下载新小说。\n如需新增下载，请使用 TUI 或 Web UI；旧 CLI 仅保留“u”更新本地已有小说。\n"
         );
+    }
+
+    Ok(())
+}
+
+/// EPUB → TXT 转换（旧 CLI 入口）。
+fn epub_to_txt_menu() -> Result<()> {
+    println!("\n=== EPUB 转 TXT ===");
+    println!("支持单个 .epub 文件，或包含 epub 的目录（会递归处理）。");
+    println!("输出默认写到源文件同目录同名 .txt。");
+
+    let input = read_line("请输入路径（直接回车取消）: ")?;
+    let raw = input.trim().trim_matches('"').trim_matches('\'').trim();
+    if raw.is_empty() {
+        println!("已取消。\n");
+        return Ok(());
+    }
+
+    match crate::book_parser::epub_reader::convert_path(std::path::Path::new(raw), None) {
+        Ok(batch) => {
+            for item in &batch.converted {
+                println!(
+                    "[OK] {} -> {}（{} 章，{:.1} KB）",
+                    item.epub_path.display(),
+                    item.txt_path.display(),
+                    item.chapter_count,
+                    item.bytes as f64 / 1024.0
+                );
+            }
+            for (path, err) in &batch.failures {
+                println!("[失败] {}: {err}", path.display());
+            }
+            println!(
+                "共处理 {} 本：成功 {}，失败 {}\n",
+                batch.converted.len() + batch.failures.len(),
+                batch.converted.len(),
+                batch.failures.len()
+            );
+        }
+        Err(err) => println!("转换失败: {err:#}\n"),
     }
 
     Ok(())

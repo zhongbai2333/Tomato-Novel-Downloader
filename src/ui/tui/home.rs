@@ -497,8 +497,9 @@ pub(super) fn draw_home(frame: &mut ratatui::Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
-            Constraint::Length(8),
-            Constraint::Length(12),
+            // 菜单项较多（7 项），预留足够高度避免默认滚动
+            Constraint::Length(9),
+            Constraint::Length(11),
             Constraint::Min(6),
         ])
         .split(main);

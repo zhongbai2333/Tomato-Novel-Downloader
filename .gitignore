@@ -187,3 +187,7 @@ target/
 # Added by cargo
 
 /target
+
+# WorkBuddy workspace data (local agent memory / session state)
+# 本地记忆与工具状态，仅供本机使用，不进入版本库
+.workbuddy/

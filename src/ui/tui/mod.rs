@@ -41,6 +41,7 @@ mod config;
 mod config_model;
 mod cover;
 mod download;
+mod epub2txt;
 mod history;
 mod home;
 mod preview;
@@ -73,6 +74,7 @@ enum View {
     Home,
     Config,
     Update,
+    Epub2Txt,
     History,
     About,
     Cover,
@@ -84,6 +86,7 @@ pub(super) enum MenuAction {
     Confirm,
     Config,
     Update,
+    Epub2Txt,
     History,
     About,
     Quit,
@@ -141,6 +144,7 @@ enum WorkerMsg {
         total: usize,
     },
     UpdateScanned(Result<(Vec<UpdateEntry>, Vec<UpdateEntry>)>),
+    Epub2TxtDone(Result<crate::book_parser::epub_reader::BatchResult>),
     AppUpdateChecked(Result<crate::base_system::app_update::UpdateCheckReport>),
 }
 
@@ -270,6 +274,11 @@ pub(super) struct App {
     history_entries: Vec<crate::base_system::download_history::DownloadHistoryRecord>,
     history_state: ListState,
     last_history_layout: Option<[Rect; 3]>,
+
+    // epub -> txt
+    epub2txt_input: String,
+    epub2txt_log: Vec<String>,
+    epub2txt_running: bool,
 
     // worker
     worker_tx: Sender<WorkerMsg>,
@@ -433,6 +442,12 @@ impl App {
             spinner_text: String::new(),
             spinner_idx: 0,
             spinner_last: Instant::now(),
+            epub2txt_input: String::new(),
+            epub2txt_log: vec![
+                "输入 .epub 文件路径，或包含 epub 的目录（目录会递归转换）。".to_string(),
+                "输出默认写到源文件同目录同名 .txt。".to_string(),
+            ],
+            epub2txt_running: false,
             pending_download: None,
             log_rx: take_broadcast_rx(),
             iid_prewarm_active: prewarm_state::is_prewarm_in_progress(),
@@ -604,6 +619,7 @@ fn draw_ui(frame: &mut ratatui::Frame, app: &mut App) {
         View::Home => home::draw_home(frame, app),
         View::Config => config::draw_config(frame, app),
         View::Update => update::draw_update(frame, app),
+        View::Epub2Txt => epub2txt::draw_epub2txt(frame, app),
         View::History => history::draw_history(frame, app),
         View::About => about::draw_about(frame, app),
         View::Cover => cover::draw_cover(frame, app),
@@ -647,6 +663,7 @@ fn handle_event(app: &mut App) -> Result<bool> {
         View::Home => home::handle_event_home(app, evt)?,
         View::Config => config::handle_event_config(app, evt)?,
         View::Update => update::handle_event_update(app, evt)?,
+        View::Epub2Txt => epub2txt::handle_event_epub2txt(app, evt)?,
         View::History => history::handle_event_history(app, evt)?,
         View::About => about::handle_event_about(app, evt)?,
         View::Cover => cover::handle_event_cover(app, evt)?,
@@ -1064,6 +1081,7 @@ const MENU_ITEMS: &[(&str, MenuAction)] = &[
     ("确定", MenuAction::Confirm),
     ("配置", MenuAction::Config),
     ("更新", MenuAction::Update),
+    ("EPUB转TXT", MenuAction::Epub2Txt),
     ("历史", MenuAction::History),
     ("关于", MenuAction::About),
     ("退出", MenuAction::Quit),
@@ -1542,6 +1560,11 @@ pub(super) fn switch_view(app: &mut App, action: MenuAction) -> Result<()> {
             app.focus = Focus::Input;
         }
         MenuAction::Update => show_update_menu(app)?,
+        MenuAction::Epub2Txt => {
+            app.view = View::Epub2Txt;
+            app.focus = Focus::Input;
+            app.status = "EPUB 转 TXT：输入文件或目录路径，Enter 开始".to_string();
+        }
         MenuAction::History => show_history_menu(app)?,
         MenuAction::About => {
             app.view = View::About;
@@ -1710,6 +1733,43 @@ fn poll_worker(app: &mut App) -> Result<()> {
                     warn!(target: "ui", "扫描更新失败: {err}");
                 }
             },
+            WorkerMsg::Epub2TxtDone(res) => {
+                app.epub2txt_running = false;
+                match res {
+                    Ok(batch) => {
+                        for item in &batch.converted {
+                            app.epub2txt_log.push(format!(
+                                "[OK] {} -> {}（{} 章，{:.1} KB）",
+                                item.epub_path.display(),
+                                item.txt_path.display(),
+                                item.chapter_count,
+                                item.bytes as f64 / 1024.0
+                            ));
+                        }
+                        for (path, err) in &batch.failures {
+                            app.epub2txt_log
+                                .push(format!("[失败] {}: {err}", path.display()));
+                        }
+                        if app.epub2txt_log.len() > 200 {
+                            let overflow = app.epub2txt_log.len() - 200;
+                            app.epub2txt_log.drain(0..overflow);
+                        }
+                        let msg = format!(
+                            "转换完成：成功 {} 本，失败 {} 本",
+                            batch.converted.len(),
+                            batch.failures.len()
+                        );
+                        app.status = msg.clone();
+                        app.push_message(msg);
+                    }
+                    Err(err) => {
+                        let msg = format!("转换失败: {err:#}");
+                        app.epub2txt_log.push(format!("[失败] {msg}"));
+                        app.status = msg.clone();
+                        app.push_message(msg);
+                    }
+                }
+            }
             WorkerMsg::DownloadDone { book_id, result } => {
                 download::apply_download_done(app, book_id, result);
             }

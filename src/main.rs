@@ -86,6 +86,14 @@ struct Cli {
     #[arg(long)]
     update: Option<String>,
 
+    /// 将本地 EPUB 转换为 TXT（可传 .epub 文件，或包含 epub 的目录；目录会递归处理）
+    #[arg(long, value_name = "PATH")]
+    epub2txt: Option<String>,
+
+    /// EPUB 转 TXT 的输出路径（单文件时为目标 txt 路径；目录批量时为输出目录）
+    #[arg(long, value_name = "PATH")]
+    epub2txt_out: Option<String>,
+
     /// 非交互模式下失败章节重试一次
     #[arg(long, default_value_t = false)]
     retry_failed: bool,
@@ -101,6 +109,11 @@ fn main() -> Result<()> {
 
     let data_dir = cli.data_dir.as_ref().map(std::path::Path::new);
     let _log = init_logging(cli.debug, data_dir)?;
+
+    // 本地 EPUB → TXT 转换：纯本地操作，不参与联网预热/自更新流程。
+    if let Some(input) = cli.epub2txt.as_deref() {
+        return run_epub2txt_conversion(input, cli.epub2txt_out.as_deref());
+    }
 
     if cli.self_update {
         let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
@@ -211,6 +224,43 @@ fn main() -> Result<()> {
             }
         }
     }
+}
+
+/// 执行 EPUB → TXT 转换（`--epub2txt`）。
+fn run_epub2txt_conversion(input: &str, out: Option<&str>) -> Result<()> {
+    let input_path = std::path::Path::new(input);
+    let out_path = out.map(std::path::Path::new);
+
+    let result = book_parser::epub_reader::convert_path(input_path, out_path)?;
+
+    for item in &result.converted {
+        println!(
+            "已转换: {} -> {}（{} 章，{:.1} KB）",
+            item.epub_path.display(),
+            item.txt_path.display(),
+            item.chapter_count,
+            item.bytes as f64 / 1024.0
+        );
+    }
+    for (path, err) in &result.failures {
+        eprintln!("转换失败: {}: {err}", path.display());
+    }
+
+    println!(
+        "共处理 {} 本（成功 {}，失败 {}），累计 {} 章。",
+        result.converted.len() + result.failures.len(),
+        result.converted.len(),
+        result.failures.len(),
+        result.total_chapters()
+    );
+
+    if result.converted.is_empty() {
+        return Err(anyhow!("没有成功转换任何 EPUB"));
+    }
+    if !result.failures.is_empty() {
+        return Err(anyhow!("存在转换失败的文件，请查看上方日志"));
+    }
+    Ok(())
 }
 
 fn load_config_from_data_dir(data_dir: Option<&std::path::Path>) -> Result<Config> {

@@ -33,6 +33,8 @@ pub mod audio_generator {
 }
 pub mod book_manager;
 pub mod epub_generator;
+/// EPUB → TXT 转换（本地文件，无网络请求）
+pub mod epub_reader;
 pub(crate) mod finalize_epub;
 pub(crate) mod finalize_pdf;
 pub(crate) mod finalize_utils;

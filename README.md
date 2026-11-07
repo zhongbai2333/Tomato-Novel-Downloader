@@ -226,6 +226,38 @@ cargo build --release
 
 ---
 
+## EPUB 转 TXT
+
+把本地已有的 EPUB 转成纯文本，适合从本程序产出的 epub 重新提取 TXT，或处理第三方来源的 epub。该功能完全在本地完成，不发起任何网络请求。
+
+三种入口：
+
+- 命令行（非交互，适合脚本/批量）：
+
+    ```sh
+    # 单文件：默认输出到同目录同名 .txt
+    TomatoNovelDownloader --epub2txt "D:\books\某本书.epub"
+
+    # 指定输出文件
+    TomatoNovelDownloader --epub2txt "D:\books\某本书.epub" --epub2txt-out "D:\out\某本书.txt"
+
+    # 整个目录：递归处理其中所有 .epub，输出到指定目录
+    TomatoNovelDownloader --epub2txt "D:\books" --epub2txt-out "D:\txt"
+    ```
+
+- TUI：首页菜单选择「EPUB转TXT」，输入路径后回车。
+- 老版 CLI：输入命令 `e`。
+
+行为说明：
+
+- 章节顺序按 EPUB 的 `spine` 输出；章节标题优先取 NCX / EPUB3 目录（nav），其次取页面 `<title>` / `<h1>`。
+- 输出格式与下载生成的 txt 一致（书名/作者/book_id/简介 + 分隔线 + 章节正文）。
+- 封面页与空白页会自动跳过，缺失的章节文件写入占位文本。
+- 目录模式为尽力而为：单本失败不影响其它文件，最后汇总成功/失败数量。
+- 目前按 UTF-8 解析 EPUB 内容，非 UTF-8 编码的 epub 可能出现乱码。
+
+---
+
 ## 常见问题
 
 1. 之前就已经有了一个下载器，为什么还要再做一个？
