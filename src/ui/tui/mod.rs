@@ -1745,6 +1745,12 @@ fn poll_worker(app: &mut App) -> Result<()> {
                                 item.chapter_count,
                                 item.bytes as f64 / 1024.0
                             ));
+                            if item.skipped_chapters > 0 {
+                                app.epub2txt_log.push(format!(
+                                    "     跳过 {} 页（封面/空白/缺失）",
+                                    item.skipped_chapters
+                                ));
+                            }
                         }
                         for (path, err) in &batch.failures {
                             app.epub2txt_log

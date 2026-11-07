@@ -241,6 +241,12 @@ fn run_epub2txt_conversion(input: &str, out: Option<&str>) -> Result<()> {
             item.chapter_count,
             item.bytes as f64 / 1024.0
         );
+        if item.skipped_chapters > 0 {
+            println!(
+                "    跳过 {} 页（封面/空白/缺失文件）",
+                item.skipped_chapters
+            );
+        }
     }
     for (path, err) in &result.failures {
         eprintln!("转换失败: {}: {err}", path.display());
