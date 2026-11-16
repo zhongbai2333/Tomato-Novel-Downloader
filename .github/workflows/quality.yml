@@ -66,6 +66,13 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test Web UI base paths
+        run: node --test scripts/web-base-path.test.cjs
+
       - name: Run tests
         run: cargo test
 

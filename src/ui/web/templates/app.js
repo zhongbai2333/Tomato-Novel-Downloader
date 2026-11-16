@@ -3,9 +3,14 @@
 let loginPromise = null;
 let isDockerBuild = false;
 let lastIidWarningMessage = null;
+const WEB_BASE_PATH = document.documentElement.dataset.basePath || '';
+
+function webUrl(path) {
+  return `${WEB_BASE_PATH}${path}`;
+}
 
 function fetchWithCreds(url, opts) {
-  return fetch(url, { credentials: 'same-origin', ...(opts || {}) });
+  return fetch(webUrl(url), { credentials: 'same-origin', ...(opts || {}) });
 }
 
 // ── Theme ──────────────────────────────────────────────────────────
@@ -809,8 +814,8 @@ async function refreshLibrary(start = true) {
     const rel = it.rel_path || '';
     const name = it.name || rel;
     const encodedRel = encodePathSegments(rel);
-    const hrefFile = `/download/${encodedRel}`;
-    const hrefZip = `/download-zip/${encodedRel}`;
+    const hrefFile = webUrl(`/download/${encodedRel}`);
+    const hrefZip = webUrl(`/download-zip/${encodedRel}`);
     const sizeText = kind === 'dir'
       ? (it.file_count == null ? '文件夹' : `${fmtBytes(it.size)} (${Number(it.file_count || 0)} 文件)`)
       : fmtBytes(it.size);

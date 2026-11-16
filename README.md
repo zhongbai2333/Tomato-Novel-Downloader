@@ -91,6 +91,33 @@
     TOMATO_WEB_ADDR=0.0.0.0:18423,[::]:18423
     ```
 
+- 子路径部署（例如与其他应用共用一个反向代理端口）：
+
+    默认部署在根路径 `/`。设置 `TOMATO_WEB_BASE_PATH` 后，页面、静态资源、API（含登录）、封面和下载链接会统一使用该前缀，登录 Cookie 的作用路径也随之调整。例如在 Linux/macOS shell 中启动：
+
+    ```sh
+    TOMATO_WEB_BASE_PATH=/tomato ./TomatoNovelDownloader --server
+    ```
+
+    请将 `./TomatoNovelDownloader` 替换为实际的程序路径。访问 `http://127.0.0.1:18423/tomato/`；访问 `/tomato` 会自动跳转到 `/tomato/`，并保留查询字符串。
+
+    不设置、设为空或设为 `/` 时保持原有行为。支持 `/apps/tomato` 这样的多层路径；配置值 `/tomato/` 与 `/tomato` 等效。路径必须以 `/` 开头，各段只允许英文字母、数字及 `-_.~`，且不能恰好是 `.` 或 `..`，也不能出现连续 `/` 构成的空段。配置无效时程序会报错并停止启动。
+
+    Docker 部署时在 `docker run` 命令中添加 `-e TOMATO_WEB_BASE_PATH=/tomato`，glibc 和 musl 镜像均适用。监听地址由 `TOMATO_WEB_ADDR` 单独设置。
+
+    反向代理必须保留 `/tomato/` 前缀。下面的 Nginx 示例中，`proxy_pass` 不带 URI，因此地址末尾不要加 `/`；请将示例路径和端口替换为实际配置：
+
+    ```nginx
+    location = /tomato {
+        return 308 /tomato/$is_args$args;
+    }
+    location /tomato/ {
+        proxy_pass http://127.0.0.1:18423;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    ```
+
 - 密码锁模式（防止陌生人使用）：
 
     ```sh
@@ -165,7 +192,7 @@ docker run -d \
     zhongbai233/tomato-novel-downloader-webui:latest-musl --server --data-dir /data
 ```
 
-可通过 `TOMATO_WEB_ADDR`、`TOMATO_WEB_PASSWORD` 与 `--data-dir` 控制监听地址、密码与数据目录（见上文 Web UI 说明）。
+可通过环境变量 `TOMATO_WEB_ADDR`、`TOMATO_WEB_BASE_PATH`、`TOMATO_WEB_PASSWORD` 控制监听地址、访问路径与密码，并通过命令行参数 `--data-dir` 指定数据目录（见上文 Web UI 说明）。
 
 ---
 

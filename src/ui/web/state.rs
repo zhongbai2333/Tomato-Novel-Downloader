@@ -10,6 +10,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::base_path::WebBasePath;
 use crate::base_system::context::Config;
 use crate::download::downloader::{BookNameOption, ProgressSnapshot};
 
@@ -24,6 +25,7 @@ pub(crate) struct ConfigView {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) bind_addrs: Arc<Vec<SocketAddr>>,
+    pub(crate) base_path: WebBasePath,
     pub(crate) config_view: Arc<ConfigView>,
     pub(crate) config: Arc<Mutex<Config>>, // allow runtime updates via Web UI
     pub(crate) config_path: Arc<PathBuf>,
