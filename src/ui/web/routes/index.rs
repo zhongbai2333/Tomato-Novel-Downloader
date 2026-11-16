@@ -1,12 +1,15 @@
+use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 
+use crate::ui::web::state::AppState;
 use crate::ui::web::templates;
 
-pub(crate) async fn index() -> impl IntoResponse {
+pub(crate) async fn index(State(state): State<AppState>) -> impl IntoResponse {
     let html = templates::INDEX_HTML_RAW
         .replace("{{FREE_NOTICE}}", templates::FREE_NOTICE_HTML)
-        .replace("{{FREE_NOTICE_MOBILE}}", templates::FREE_NOTICE_MOBILE_HTML);
+        .replace("{{FREE_NOTICE_MOBILE}}", templates::FREE_NOTICE_MOBILE_HTML)
+        .replace("{{WEB_BASE_PATH}}", state.base_path.as_str());
     let mut resp = Html(html).into_response();
     resp.headers_mut().insert(
         header::CACHE_CONTROL,

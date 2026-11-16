@@ -887,10 +887,7 @@ fn is_default_volume_name(name: &str) -> bool {
     // "Volume 1" / "Vol 1" / "Vol.1" 等英文默认名
     let lower_ascii = lower.replace(['.', '_'], " ");
     let lower_ascii = lower_ascii.trim();
-    if lower_ascii == "volume 1" || lower_ascii == "vol 1" || lower_ascii == "vol1" {
-        return true;
-    }
-    false
+    lower_ascii == "volume 1" || lower_ascii == "vol 1" || lower_ascii == "vol1"
 }
 
 /// #201: 从 `directory_raw` 递归提取"卷标题 -> 章节 id 列表"。

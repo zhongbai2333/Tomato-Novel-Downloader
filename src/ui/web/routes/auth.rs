@@ -67,22 +67,23 @@ pub(crate) async fn api_login(
 
     // 使用服务端签名的会话 token，避免在 Cookie 中存储明文密码。
     let token = auth.issue_session_token();
+    let cookie_path = state.base_path.url("/");
     let secure_attr = if auth.cookie_secure() { "; Secure" } else { "" };
     let cookie = format!(
-        "tomato_session={}; Path=/; HttpOnly; SameSite=Lax{}; Max-Age={}",
+        "tomato_session={}; Path={cookie_path}; HttpOnly; SameSite=Lax{}; Max-Age={}",
         token,
         secure_attr,
         auth.session_ttl_secs()
     );
     // 兼容旧前端/旧代理配置：同值下发 auth_token，避免出现“Cookie 已下发但后端不识别”。
     let compat_cookie = format!(
-        "auth_token={}; Path=/; HttpOnly; SameSite=Lax{}; Max-Age={}",
+        "auth_token={}; Path={cookie_path}; HttpOnly; SameSite=Lax{}; Max-Age={}",
         token,
         secure_attr,
         auth.session_ttl_secs()
     );
     let clear_legacy_cookie = format!(
-        "tomato_pw=; Path=/; HttpOnly; SameSite=Lax{}; Max-Age=0",
+        "tomato_pw=; Path={cookie_path}; HttpOnly; SameSite=Lax{}; Max-Age=0",
         secure_attr
     );
 

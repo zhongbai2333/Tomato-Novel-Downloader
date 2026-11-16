@@ -206,8 +206,12 @@ pub(crate) async fn api_preview(
     .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "封面缓存任务执行失败"))?;
 
     let local_cover_url = cover_key
-        .map(|k| format!("/api/preview-cover/{k}"))
-        .or_else(|| Some(format!("/api/preview-cover-by-book/{book_id}")));
+        .map(|k| state.base_path.url(&format!("/api/preview-cover/{k}")))
+        .unwrap_or_else(|| {
+            state
+                .base_path
+                .url(&format!("/api/preview-cover-by-book/{book_id}"))
+        });
 
     Ok(Json(json!({
         "book_id": book_id,

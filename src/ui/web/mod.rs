@@ -1,5 +1,6 @@
 //! Web Server UI（纯 HTML 前端）。
 
+mod base_path;
 mod router;
 mod routes;
 mod state;
@@ -13,6 +14,7 @@ use anyhow::{Result, anyhow};
 use tracing::{info, warn};
 
 use crate::base_system::context::Config;
+use base_path::WebBasePath;
 use state::{AppState, AuthState, ConfigView, JobStore, LibraryScanStore};
 
 pub fn run(
@@ -23,6 +25,7 @@ pub fn run(
 ) -> Result<()> {
     let bind_raw = std::env::var("TOMATO_WEB_ADDR").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     let bind_addrs: Vec<SocketAddr> = parse_bind_addrs(&bind_raw)?;
+    let base_path = WebBasePath::parse(&std::env::var("TOMATO_WEB_BASE_PATH").unwrap_or_default())?;
 
     let view = ConfigView {
         old_cli: config.old_cli,
@@ -55,6 +58,7 @@ pub fn run(
         config_path,
         library_root,
         auth,
+        base_path,
     ))
 }
 
@@ -130,9 +134,11 @@ async fn run_async(
     config_path: PathBuf,
     library_root: PathBuf,
     auth: Option<AuthState>,
+    base_path: WebBasePath,
 ) -> Result<()> {
     let state = AppState {
         bind_addrs: Arc::new(bind_addrs.clone()),
+        base_path,
         config_view: Arc::new(view),
         config: Arc::new(std::sync::Mutex::new(config)),
         config_path: Arc::new(config_path),
@@ -182,12 +188,13 @@ async fn run_async(
             }
         };
 
-        info!(target: "web", "Web UI listening on http://{bind}/ (set TOMATO_WEB_ADDR to override)");
+        let root = state.base_path.url("/");
+        info!(target: "web", "Web UI listening on http://{bind}{root} (set TOMATO_WEB_ADDR / TOMATO_WEB_BASE_PATH to override)");
         if locked {
             info!(target: "web", "Web UI lock mode enabled (password required)");
-            println!("Web UI listening on http://{bind}/ (LOCKED)");
+            println!("Web UI listening on http://{bind}{root} (LOCKED)");
         } else {
-            println!("Web UI listening on http://{bind}/");
+            println!("Web UI listening on http://{bind}{root}");
         }
 
         let app = router::build_router(state.clone());
