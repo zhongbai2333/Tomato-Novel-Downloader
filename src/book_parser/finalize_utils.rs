@@ -539,10 +539,7 @@ fn is_default_volume_name(name: &str) -> bool {
 
     let lower_ascii = lower.replace(['.', '_'], " ");
     let lower_ascii = lower_ascii.trim();
-    if lower_ascii == "volume 1" || lower_ascii == "vol 1" || lower_ascii == "vol1" {
-        return true;
-    }
-    false
+    lower_ascii == "volume 1" || lower_ascii == "vol 1" || lower_ascii == "vol1"
 }
 
 fn extract_volume_to_chapter_ids(
