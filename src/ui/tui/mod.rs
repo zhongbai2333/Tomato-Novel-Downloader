@@ -256,7 +256,7 @@ pub(super) struct App {
 
     // app self update (download & replace binary)
     self_update_requested: bool,
-    self_update_auto_yes: bool,
+    self_update_message: Option<String>,
 
     // cover state
     cover_lines: Vec<String>,
@@ -419,7 +419,7 @@ impl App {
             last_about_buttons: None,
             app_update_report: None,
             self_update_requested: false,
-            self_update_auto_yes: false,
+            self_update_message: None,
             cover_lines: Vec::new(),
             cover_title: String::new(),
             _previous_view_cover: View::Home,
@@ -520,7 +520,6 @@ impl App {
 pub enum TuiExit {
     Quit,
     SwitchToOldCli,
-    SelfUpdate { auto_yes: bool },
 }
 
 pub fn run(config: Config) -> Result<TuiExit> {
@@ -577,17 +576,48 @@ fn run_loop(
         if !handle_event(&mut app)? {
             break;
         }
+
+        if std::mem::take(&mut app.self_update_requested) {
+            run_self_update(terminal, &mut app)?;
+        }
     }
 
     if app.switch_to_old_cli_requested {
         Ok(TuiExit::SwitchToOldCli)
-    } else if app.self_update_requested {
-        Ok(TuiExit::SelfUpdate {
-            auto_yes: app.self_update_auto_yes,
-        })
     } else {
         Ok(TuiExit::Quit)
     }
+}
+
+fn run_self_update(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
+    // Keep App and its workers alive while the updater uses the normal terminal.
+    disable_raw_mode().context("disable raw mode for self update")?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )
+    .context("leave TUI for self update")?;
+    terminal.show_cursor().context("show self update cursor")?;
+
+    println!("正在执行自更新，请稍候…");
+    let result =
+        crate::base_system::self_update::check_for_updates(env!("CARGO_PKG_VERSION"), true);
+    about::apply_self_update_result(app, result);
+
+    enable_raw_mode().context("restore raw mode after self update")?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableMouseCapture
+    )
+    .context("restore TUI after self update")?;
+    // The terminal was used outside ratatui; invalidate its previous frame.
+    terminal.clear().context("clear TUI after self update")?;
+    Ok(())
 }
 
 pub(super) fn start_app_update_check(app: &mut App) {

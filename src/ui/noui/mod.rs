@@ -94,7 +94,8 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
             history::show_history_menu()?;
             continue;
         }
-        if text.eq_ignore_ascii_case("u") {
+        // Uppercase U is reserved for program self-update below.
+        if text == "u" {
             if let Some(book_id) = update::update_menu(config)? {
                 println!("已选择更新 book_id={}\n", book_id);
                 // 直接进入该书下载流程
@@ -112,10 +113,23 @@ Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite \n\
         }
 
         if text == "U" {
-            let _ = crate::base_system::self_update::check_for_updates(
+            use crate::base_system::self_update::SelfUpdateOutcome;
+
+            match crate::base_system::self_update::check_for_updates(
                 env!("CARGO_PKG_VERSION"),
                 false,
-            );
+            ) {
+                Ok(SelfUpdateOutcome::UpToDate) => println!("已是最新版本，无需更新\n"),
+                Ok(SelfUpdateOutcome::Skipped) => println!("已跳过自更新\n"),
+                Ok(SelfUpdateOutcome::UpdateLaunched) => println!("更新已启动，程序即将重启\n"),
+                Err(err) => {
+                    let message = crate::base_system::logging::redact_log_endpoints(&format!(
+                        "自更新失败: {err:#}"
+                    ));
+                    tracing::warn!(target: "self_update", "{message}");
+                    println!("{message}\n可稍后重试或继续使用。\n");
+                }
+            }
             continue;
         }
 

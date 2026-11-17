@@ -102,6 +102,10 @@ pub(super) fn draw_about(frame: &mut ratatui::Frame, app: &mut App) {
     app.last_about_buttons = Some(button_area);
 
     let mut text = String::new();
+    if let Some(message) = &app.self_update_message {
+        text.push_str(message);
+        text.push_str("\n\n");
+    }
     text.push_str("项目地址: https://github.com/zhongbai2333/Tomato-Novel-Downloader\n");
     text.push_str("Fork From: https://github.com/Dlmily/Tomato-Novel-Downloader-Lite\n");
     text.push_str("作者: zhongbai2333\n");
@@ -181,13 +185,30 @@ fn dismiss_app_update(app: &mut App) -> Result<()> {
 }
 
 fn request_self_update(app: &mut App) -> Result<()> {
-    app.status = "即将执行自更新（退出 TUI 后开始）…".to_string();
+    app.status = "即将执行自更新，请稍候…".to_string();
     app.self_update_requested = true;
-    // TUI 内已有明确的“执行自更新”按钮，点击即视为确认。
-    // 因此不再在 self_update 内二次询问。
-    app.self_update_auto_yes = true;
-    app.should_quit = true;
     Ok(())
+}
+
+pub(super) fn apply_self_update_result(
+    app: &mut App,
+    result: Result<crate::base_system::self_update::SelfUpdateOutcome>,
+) {
+    use crate::base_system::self_update::SelfUpdateOutcome;
+
+    let message = match result {
+        Ok(SelfUpdateOutcome::UpToDate) => "已是最新版本，无需更新".to_string(),
+        Ok(SelfUpdateOutcome::Skipped) => "已跳过自更新，可继续使用".to_string(),
+        Ok(SelfUpdateOutcome::UpdateLaunched) => "更新已启动，程序即将重启".to_string(),
+        Err(err) => {
+            let detail = redact_log_endpoints(&format!("{err:#}"));
+            warn!(target: "self_update", "自更新失败: {detail}");
+            format!("自更新失败，可稍后重试或继续使用。\n原因: {detail}")
+        }
+    };
+    app.status = message.lines().next().unwrap_or_default().to_string();
+    app.push_message(message.clone());
+    app.self_update_message = Some(message);
 }
 
 fn preview_notes(body: &str, max_lines: usize, max_chars: usize) -> String {
@@ -305,4 +326,87 @@ fn open_github_repo(app: &mut App) -> Result<()> {
     let mut out = std::io::stdout();
     let _ = crossterm_execute!(&mut out, EnableMouseCapture);
     Ok(())
+}
+
+#[cfg(test)]
+mod self_update_tests {
+    use super::*;
+    use crate::base_system::self_update::SelfUpdateOutcome;
+    use ratatui::backend::TestBackend;
+
+    fn app() -> App {
+        let (tx, rx) = mpsc::channel();
+        let mut app = App::new(Config::default(), tx, rx);
+        app.view = View::About;
+        app
+    }
+
+    #[test]
+    #[cfg(not(feature = "docker"))]
+    fn update_button_requests_update_without_quitting() {
+        let mut app = app();
+        app.about_btn_state.select(Some(2));
+        handle_event_about(
+            &mut app,
+            Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )),
+        )
+        .unwrap();
+
+        assert!(app.self_update_requested);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn failed_update_preserves_session_and_renders_underlying_error() {
+        let mut app = app();
+        app.input = "unfinished search".to_string();
+        app.push_log("existing log");
+        let err = anyhow::anyhow!("HTTP 403 Forbidden for https://api.github.com/repos/example")
+            .context("latest release status");
+
+        apply_self_update_result(&mut app, Err(err));
+
+        assert!(!app.should_quit);
+        assert_eq!(app.view, View::About);
+        assert_eq!(app.input, "unfinished search");
+        assert_eq!(app.logs, ["existing log"]);
+        let message = app.self_update_message.as_deref().unwrap();
+        assert!(message.contains("latest release status: HTTP 403 Forbidden"));
+        assert!(!message.contains("api.github.com"));
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|frame| draw_about(frame, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            // Ignore padding cells, including the second cell of wide characters.
+            .filter(|cell| cell.symbol() != " ")
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains("自更新失败"));
+        assert!(screen.contains("HTTP403Forbidden"));
+    }
+
+    #[test]
+    fn no_update_and_skipped_update_return_visible_results() {
+        let mut app = app();
+        for (outcome, expected) in [
+            (SelfUpdateOutcome::UpToDate, "已是最新版本"),
+            (SelfUpdateOutcome::Skipped, "已跳过自更新"),
+        ] {
+            apply_self_update_result(&mut app, Ok(outcome));
+            assert!(!app.should_quit);
+            assert!(
+                app.self_update_message
+                    .as_deref()
+                    .unwrap()
+                    .contains(expected)
+            );
+        }
+    }
 }

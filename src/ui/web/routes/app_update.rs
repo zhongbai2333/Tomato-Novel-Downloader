@@ -106,7 +106,11 @@ pub(crate) async fn api_self_update(
                 store.finish_done("restart", "更新已完成，服务正在重启");
             }
             Err(e) => {
-                store.finish_failed("failed", format!("自更新失败: {e}"));
+                let message = crate::base_system::logging::redact_log_endpoints(&format!(
+                    "自更新失败: {e:#}"
+                ));
+                tracing::warn!(target: "self_update", "{message}");
+                store.finish_failed("failed", message);
             }
         }
     });

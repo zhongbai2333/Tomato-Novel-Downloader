@@ -25,7 +25,6 @@ mod ui;
 
 use base_system::config::{ConfigSpec, load_or_create, load_or_create_with_base};
 use base_system::context::Config;
-#[cfg(feature = "official-api")]
 use base_system::logging::redact_log_endpoints;
 use base_system::logging::{LogOptions, LogSystem};
 use tracing::info;
@@ -103,7 +102,19 @@ fn main() -> Result<()> {
     let _log = init_logging(cli.debug, data_dir)?;
 
     if cli.self_update {
-        let _ = base_system::self_update::check_for_updates(VERSION, cli.self_update_yes);
+        use base_system::self_update::SelfUpdateOutcome;
+
+        println!("正在检查程序更新…");
+        match base_system::self_update::check_for_updates(VERSION, cli.self_update_yes) {
+            Ok(SelfUpdateOutcome::UpToDate) => println!("已是最新版本，无需更新"),
+            Ok(SelfUpdateOutcome::Skipped) => println!("已跳过自更新"),
+            Ok(SelfUpdateOutcome::UpdateLaunched) => println!("更新已启动，程序即将重启"),
+            Err(err) => {
+                let message = redact_log_endpoints(&format!("自更新失败: {err:#}"));
+                tracing::warn!(target: "self_update", "{message}");
+                return Err(anyhow!(message));
+            }
+        }
         return Ok(());
     }
 
@@ -204,10 +215,6 @@ fn main() -> Result<()> {
                 // 模拟“重启”：重新从磁盘加载配置，然后进入 noui
                 config = load_config_from_data_dir(data_dir)?;
                 config.old_cli = true;
-            }
-            ui::tui::TuiExit::SelfUpdate { auto_yes } => {
-                let _ = base_system::self_update::check_for_updates(VERSION, auto_yes);
-                return Ok(());
             }
         }
     }
