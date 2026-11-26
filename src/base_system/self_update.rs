@@ -98,13 +98,11 @@ fn check_hotfix_and_apply_impl(current_version: &str) -> Result<SelfUpdateOutcom
         return Ok(SelfUpdateOutcome::UpToDate);
     }
 
-    if let Some(expected) = matched.sha256.as_deref() {
-        let self_hash = compute_file_sha256(&current_executable_path()?)?;
-        if !eq_hash(&self_hash, expected) {
-            info!(target: "self_update", "检测到热补丁（SHA256 不同），开始更新…");
-            start_update(&matched)?;
-            return Ok(SelfUpdateOutcome::UpdateLaunched);
-        }
+    let self_hash = compute_file_sha256(&current_executable_path()?)?;
+    if !eq_hash(&self_hash, &matched.sha256) {
+        info!(target: "self_update", "检测到热补丁（SHA256 不同），开始更新…");
+        start_update(&matched)?;
+        return Ok(SelfUpdateOutcome::UpdateLaunched);
     }
 
     Ok(SelfUpdateOutcome::UpToDate)
@@ -132,7 +130,7 @@ struct MatchedReleaseAsset {
     tag_name: String,
     download_url: String,
     size: u64,
-    sha256: Option<String>,
+    sha256: String,
 }
 
 pub fn check_for_updates(current_version: &str, auto_yes: bool) -> Result<SelfUpdateOutcome> {
@@ -184,16 +182,31 @@ fn check_for_updates_impl(current_version: &str, auto_yes: bool) -> Result<SelfU
 
     info!(target: "self_update", "本地版本与最新相同，检查热补丁…");
 
-    if let Some(expected) = matched.sha256.as_deref() {
-        let self_hash = compute_file_sha256(&current_executable_path()?)?;
-        if !eq_hash(&self_hash, expected) {
-            info!(target: "self_update", "检测到热补丁（SHA256 不同），开始更新…");
-            start_update(&matched)?;
-            return Ok(SelfUpdateOutcome::UpdateLaunched);
-        }
+    let self_hash = compute_file_sha256(&current_executable_path()?)?;
+    if !eq_hash(&self_hash, &matched.sha256) {
+        info!(target: "self_update", "检测到热补丁（SHA256 不同），开始更新…");
+        start_update(&matched)?;
+        return Ok(SelfUpdateOutcome::UpdateLaunched);
     }
 
     Ok(SelfUpdateOutcome::UpToDate)
+}
+
+pub(crate) fn same_tag_hotfix_available(version: &str) -> Result<bool> {
+    if cfg!(feature = "docker") || is_cargo_run_like() {
+        return Ok(false);
+    }
+    let matched = get_latest_release_asset()?;
+    if matched.tag_name != format!("v{version}") {
+        return Ok(false);
+    }
+    let running = compute_file_sha256(&current_executable_path()?)?;
+    Ok(!eq_hash(&running, &matched.sha256))
+}
+
+fn parse_release_digest(digest: &str) -> Option<&str> {
+    let sha = digest.strip_prefix("sha256:")?;
+    (sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(sha)
 }
 
 fn eq_hash(a: &str, b: &str) -> bool {
@@ -304,9 +317,9 @@ fn get_latest_release_asset() -> Result<MatchedReleaseAsset> {
             let sha256 = asset
                 .digest
                 .as_deref()
-                .and_then(|d| d.split(':').next_back())
-                .map(|s| s.trim().to_string())
-                .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()));
+                .and_then(parse_release_digest)
+                .context("GitHub Release 缺少有效的 SHA-256，已停止更新")?
+                .to_owned();
 
             return Ok(MatchedReleaseAsset {
                 release_name,
@@ -482,6 +495,7 @@ fn staged_path_next_to_target(target_exe: &Path) -> Result<PathBuf> {
 }
 
 fn download_and_verify(tmp_dir: &Path, matched: &MatchedReleaseAsset) -> Result<PathBuf> {
+    let expected = &matched.sha256;
     let client = build_http_client()?;
     let url = &matched.download_url;
 
@@ -545,9 +559,7 @@ fn download_and_verify(tmp_dir: &Path, matched: &MatchedReleaseAsset) -> Result<
     }
 
     let actual = hex::encode(hasher.finalize());
-    if let Some(expected) = matched.sha256.as_deref()
-        && !eq_hash(&actual, expected)
-    {
+    if !eq_hash(&actual, expected) {
         let _ = fs::remove_file(&out_path);
         return Err(anyhow!(
             "SHA256 校验失败：下载文件 {} 的哈希 {} 与期望 {} 不符",
@@ -675,4 +687,18 @@ fn windows_apply_and_restart(tmp_file: &Path) -> Result<()> {
 
     info!(target: "self_update", "请稍等，更新完成后将自动重启程序。");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_release_digest;
+
+    #[test]
+    fn updater_accepts_only_github_sha256_format() {
+        let hex = "a".repeat(64);
+        let valid = format!("sha256:{hex}");
+        assert_eq!(parse_release_digest(&valid), Some(hex.as_str()));
+        assert_eq!(parse_release_digest(&hex), None);
+        assert_eq!(parse_release_digest("sha256:"), None);
+    }
 }

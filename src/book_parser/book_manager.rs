@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::{debug, info};
 
-use crate::base_system::{book_paths, context::Config};
+use crate::base_system::context::Config;
 
 pub type DownloadedMap = HashMap<String, (String, Option<String>)>;
 
@@ -56,14 +56,7 @@ struct ResumeJournalRecord {
 
 impl BookManager {
     pub fn new(mut config: Config, book_id: &str, book_name: &str) -> std::io::Result<Self> {
-        let target = match config.status_folder_path(book_name, book_id, None) {
-            Ok(p) => p,
-            Err(_) => {
-                let fallback = book_paths::book_folder_path(&config, book_id, Some(book_name));
-                fs::create_dir_all(&fallback)?;
-                fallback
-            }
-        };
+        let target = config.status_folder_path(book_name, book_id, None)?;
 
         config.mark_status_folder_claimed(&target);
         let status_folder_preexisting = !config.status_folder_was_created_this_session(&target);
@@ -414,15 +407,11 @@ impl BookManager {
         if self.has_download_activity {
             return Ok(());
         }
-        fs::remove_dir_all(&self.status_folder)
+        self.config.remove_owned_status_folder(&self.status_folder)
     }
 
     pub fn delete_status_folder(&mut self) -> std::io::Result<()> {
-        if self.status_folder.exists() {
-            fs::remove_dir_all(&self.status_folder)?;
-            self.config.mark_status_folder_removed(&self.status_folder);
-        }
-        Ok(())
+        self.config.remove_owned_status_folder(&self.status_folder)
     }
 
     fn downloaded_as_json(&self) -> serde_json::Map<String, Value> {

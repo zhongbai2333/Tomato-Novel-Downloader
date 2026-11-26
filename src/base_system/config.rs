@@ -1,13 +1,17 @@
 //! 配置文件读写与带注释生成。
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_yaml::Value;
 use thiserror::Error;
+
+#[cfg(windows)]
+#[path = "config_permissions_windows.rs"]
+mod windows_permissions;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -60,7 +64,7 @@ pub fn load_or_create_with_base<T: ConfigSpec>(
         return Ok(default_config);
     }
 
-    let raw = fs::read_to_string(&path).map_err(|source| ConfigError::Io {
+    let raw = read_private_config(&path).map_err(|source| ConfigError::Io {
         path: path.clone(),
         source,
     })?;
@@ -87,10 +91,78 @@ pub fn load_or_create_with_base<T: ConfigSpec>(
 pub fn write_with_comments<T: ConfigSpec>(config: &T, path: &Path) -> Result<(), ConfigError> {
     ensure_parent(path)?;
     let yaml = generate_yaml_with_comments(config)?;
-    fs::write(path, yaml).map_err(|source| ConfigError::Io {
+    let dir = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let write = || -> io::Result<()> {
+        #[cfg(windows)]
+        let mut tmp = tempfile::Builder::new().make_in(dir, windows_permissions::create)?;
+        #[cfg(not(windows))]
+        let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+        #[cfg(windows)]
+        windows_permissions::restrict(tmp.as_file())?;
+        #[cfg(not(windows))]
+        restrict_config_permissions(tmp.as_file())?;
+        tmp.write_all(yaml.as_bytes())?;
+        tmp.as_file().sync_all()?;
+        tmp.persist(path).map_err(|err| err.error)?;
+        Ok(())
+    };
+    write().map_err(|source| ConfigError::Io {
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn read_private_config(path: &Path) -> io::Result<String> {
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "configuration path must be a regular file",
+        ));
+    }
+    #[cfg(windows)]
+    let mut file = windows_permissions::open(path)?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        options.open(path)?
+    };
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "configuration path must be a regular file",
+        ));
+    }
+    #[cfg(windows)]
+    windows_permissions::restrict(&file)?;
+    #[cfg(not(windows))]
+    restrict_config_permissions(&file)?;
+    let mut raw = String::new();
+    file.read_to_string(&mut raw)?;
+    Ok(raw)
+}
+
+#[cfg(not(windows))]
+fn restrict_config_permissions(file: &fs::File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = file.metadata()?.permissions();
+        if permissions.mode() & 0o777 != 0o600 {
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file;
+    Ok(())
 }
 
 pub fn generate_yaml_with_comments<T: ConfigSpec>(config: &T) -> Result<String, ConfigError> {

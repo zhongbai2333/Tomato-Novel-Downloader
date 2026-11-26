@@ -104,14 +104,7 @@ jobs:
             ${{ runner.os }}-quality-
 
       - name: Prepare public build manifest
-        shell: python
-        run: |
-          from pathlib import Path
-          manifest = Path("Cargo.toml")
-          text = manifest.read_text(encoding="utf-8")
-          text = text.replace('official-api = ["dep:tomato-novel-official-api"]', 'official-api = []')
-          text = "\n".join(line for line in text.splitlines() if not line.startswith("tomato-novel-official-api =")) + "\n"
-          manifest.write_text(text, encoding="utf-8")
+        run: python3 scripts/prepare-public-build.py
 
       - name: Run tests
         run: cargo test --no-default-features --features no-official-api

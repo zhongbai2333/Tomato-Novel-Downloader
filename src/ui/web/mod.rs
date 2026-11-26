@@ -1,6 +1,7 @@
 //! Web Server UI（纯 HTML 前端）。
 
 mod base_path;
+mod request_policy;
 mod router;
 mod routes;
 mod state;
@@ -136,8 +137,14 @@ async fn run_async(
     auth: Option<AuthState>,
     base_path: WebBasePath,
 ) -> Result<()> {
+    let request_policy = request_policy::RequestPolicy::new(
+        &bind_addrs,
+        &std::env::var("TOMATO_WEB_ALLOWED_HOSTS").unwrap_or_default(),
+        &std::env::var("TOMATO_WEB_TRUSTED_PROXIES").unwrap_or_default(),
+    )?;
     let state = AppState {
         bind_addrs: Arc::new(bind_addrs.clone()),
+        request_policy: Arc::new(request_policy),
         base_path,
         config_view: Arc::new(view),
         config: Arc::new(std::sync::Mutex::new(config)),

@@ -7,7 +7,7 @@ on:
       - build_trigger
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   fetch_and_clean:
@@ -863,26 +863,20 @@ jobs:
       - build-macos
       - build-macos-amd64
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout A Repository
-        uses: actions/checkout@v4
-
       - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-artifacts
 
-      - name: 删除旧资产
-        uses: andreaswilli/delete-release-assets-action@main
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ needs.fetch_and_clean.outputs.tag }}
-          deleteOnlyFromDrafts: false
-
-      - name: 上传所有构建产物 (softprops/action-gh-release@v2)
-        uses: softprops/action-gh-release@v2
+      - name: 上传所有构建产物 (softprops/action-gh-release)
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.fetch_and_clean.outputs.tag }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
           files: |
             release-artifacts/linux-build/TomatoNovelDownloader-Linux_amd64-*
             release-artifacts/linux-musl-build/TomatoNovelDownloader-Linux_musl_amd64-*

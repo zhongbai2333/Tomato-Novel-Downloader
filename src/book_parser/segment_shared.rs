@@ -34,15 +34,28 @@ pub(crate) struct SegmentCommentsChapterCache {
 
 // ── 共享工具函数 ─────────────────────────────────────────────────
 
+pub(crate) fn chapter_cache_path(dir: &Path, id: &str) -> std::io::Result<std::path::PathBuf> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid chapter ID",
+        ));
+    }
+    Ok(dir.join(format!("{id}.json")))
+}
+
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}part",
-        path.extension().and_then(|s| s.to_str()).unwrap_or("")
-    ));
-    std::fs::write(&tmp, bytes)?;
-    // best-effort replace
-    let _ = std::fs::remove_file(path);
-    std::fs::rename(tmp, path)?;
+    use std::io::{self, Write};
+
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.persist(path).map_err(|err| err.error)?;
     Ok(())
 }
 

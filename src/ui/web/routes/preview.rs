@@ -5,12 +5,9 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
 use serde_json::{Value, json};
 use std::path::{Path as FsPath, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::base_system::book_id::resolve_book_id;
-use crate::base_system::book_paths::book_folder_path;
-use crate::base_system::context::safe_fs_name;
-use crate::base_system::file_cleaner::is_empty_dir;
 use crate::book_parser::image_utils::ensure_cached_image;
 use crate::download::downloader as dl;
 use crate::network_parser::network::{FanqieWebConfig, FanqieWebNetwork};
@@ -384,65 +381,7 @@ pub(crate) async fn api_preview_cleanup(
 fn cleanup_preview_cover_dir(
     cfg: &crate::base_system::context::Config,
     book_id: &str,
-    book_name: &str,
+    _book_name: &str,
 ) {
-    let dir = book_folder_path(cfg, book_id, Some(book_name));
-    if !dir.exists() {
-        return;
-    }
-    // 存在 status.json 说明已有真正的下载，不应删除
-    if dir.join("status.json").exists() {
-        return;
-    }
-
-    let Ok(read_dir) = std::fs::read_dir(&dir) else {
-        return;
-    };
-
-    let safe_name = safe_fs_name(book_name, "_", 120);
-    let mut entries: Vec<PathBuf> = Vec::new();
-    for ent in read_dir.flatten() {
-        entries.push(ent.path());
-    }
-    if entries.is_empty() {
-        let _ = std::fs::remove_dir_all(&dir);
-        info!(path = %dir.display(), "cleanup: 删除空的预览文件夹");
-        return;
-    }
-
-    let is_cover_like = |p: &FsPath| -> bool {
-        if p.is_dir() {
-            return false;
-        }
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
-            return false;
-        };
-        let Some(ext) = p.extension().and_then(|s| s.to_str()) else {
-            return false;
-        };
-        let ext_lower = ext.to_ascii_lowercase();
-        let is_img = matches!(
-            ext_lower.as_str(),
-            "jpg" | "jpeg" | "png" | "webp" | "gif" | "heic" | "heif"
-        );
-        if !is_img {
-            return false;
-        }
-        stem == safe_name || stem.eq_ignore_ascii_case("cover")
-    };
-
-    // 如果存在非封面文件，中止清理
-    if entries.iter().any(|p| !is_cover_like(p)) {
-        debug!(path = %dir.display(), "cleanup: 文件夹包含非封面文件，跳过");
-        return;
-    }
-
-    for p in &entries {
-        let _ = std::fs::remove_file(p);
-    }
-
-    if is_empty_dir(&dir).unwrap_or(false) {
-        let _ = std::fs::remove_dir_all(&dir);
-        info!(path = %dir.display(), "cleanup: 已清理预览产生的封面文件夹");
-    }
+    let _ = cfg.cleanup_preview_cache(book_id);
 }

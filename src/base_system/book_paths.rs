@@ -11,14 +11,12 @@ pub const COVER_IMAGE_EXTENSIONS: [&str; 4] = ["jpg", "jpeg", "png", "webp"];
 ///
 /// 书名可能来自搜索结果、详情页、用户下载后选择，也可能被平台改名；如果把书名放进缓存路径，
 /// 同一本书会因为名字变化产生多个缓存目录。最终导出的小说文件仍然使用书名命名，缓存层只认 ID。
-pub fn book_folder_name(book_id: &str, _book_name: Option<&str>) -> String {
+pub(crate) fn book_folder_name(book_id: &str) -> String {
     safe_fs_name(book_id, "_", 120)
 }
 
-pub fn book_folder_path(config: &Config, book_id: &str, book_name: Option<&str>) -> PathBuf {
-    config
-        .default_save_dir()
-        .join(book_folder_name(book_id, book_name))
+pub fn book_folder_path(config: &Config, book_id: &str) -> std::io::Result<PathBuf> {
+    Config::status_cache_location(&config.default_save_dir(), book_id)
 }
 
 #[allow(dead_code)]
@@ -43,8 +41,14 @@ pub fn cover_file_candidates(folder: &Path, book_name: Option<&str>) -> Vec<Path
         for ext in &COVER_IMAGE_EXTENSIONS {
             candidates.push(folder.join(format!("{safe_name}.{ext}")));
         }
-        for ext in &COVER_IMAGE_EXTENSIONS {
-            candidates.push(folder.join(format!("{name}.{ext}")));
+        if !name.contains(['/', '\\', ':'])
+            && std::path::Path::new(name)
+                .file_name()
+                .is_some_and(|file| file == name)
+        {
+            for ext in &COVER_IMAGE_EXTENSIONS {
+                candidates.push(folder.join(format!("{name}.{ext}")));
+            }
         }
     }
 
@@ -54,7 +58,7 @@ pub fn cover_file_candidates(folder: &Path, book_name: Option<&str>) -> Vec<Path
 pub fn find_existing_cover_file(folder: &Path, book_name: Option<&str>) -> Option<PathBuf> {
     cover_file_candidates(folder, book_name)
         .into_iter()
-        .find(|p| p.exists())
+        .find(|p| std::fs::symlink_metadata(p).is_ok_and(|meta| meta.is_file()))
 }
 
 /// 将旧版“书名作为封面文件名”的封面迁移为稳定的 `cover.*`。
@@ -65,7 +69,7 @@ pub fn migrate_legacy_cover_file(folder: &Path, book_name: Option<&str>) -> Opti
 
     for ext in &COVER_IMAGE_EXTENSIONS {
         let canonical = canonical_cover_path(folder, ext);
-        if canonical.exists() {
+        if std::fs::symlink_metadata(&canonical).is_ok_and(|meta| meta.is_file()) {
             return Some(canonical);
         }
     }
@@ -85,8 +89,7 @@ mod tests {
 
     #[test]
     fn cache_folder_name_is_stable_across_book_name_changes() {
-        assert_eq!(book_folder_name("123", Some("旧书名")), "123");
-        assert_eq!(book_folder_name("123", Some("新书名")), "123");
+        assert_eq!(book_folder_name("123"), "123");
         assert_ne!(
             legacy_book_folder_name("123", Some("旧书名")),
             legacy_book_folder_name("123", Some("新书名"))

@@ -1,20 +1,19 @@
 use std::fs;
-use std::net::SocketAddr;
 
-use axum::Json;
-use axum::extract::{ConnectInfo, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::SET_COOKIE;
 use axum::response::{AppendHeaders, IntoResponse};
+use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use serde_yaml;
-use tracing::{error, info, warn};
+use tracing::info;
 
 use crate::base_system::config::{generate_yaml_with_comments, write_with_comments};
 use crate::base_system::context::Config;
+use crate::ui::web::request_policy::ClientAddress;
 use crate::ui::web::state::AppState;
-use crate::ui::web::state::LoginLimitDecision;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct LoginReq {
@@ -23,47 +22,18 @@ pub(crate) struct LoginReq {
 
 pub(crate) async fn api_login(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(client): Extension<ClientAddress>,
     Json(req): Json<LoginReq>,
 ) -> Result<axum::response::Response, StatusCode> {
     // If lock mode not enabled, treat as always OK.
     let Some(auth) = &state.auth else {
-        info!(target: "web_auth", ip = %addr, ok = true, "login (unlocked)");
+        info!(target: "web_auth", ip = ?client.ip, ok = true, "login (unlocked)");
         return Ok(Json(json!({"ok": true, "locked": false})).into_response());
     };
 
-    match auth.check_login_allowed(addr.ip()) {
-        LoginLimitDecision::Allowed => {}
-        LoginLimitDecision::RateLimited { retry_after_secs } => {
-            warn!(target: "web_security", ip = %addr.ip(), retry_after_secs, "login rate limited");
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        }
-        LoginLimitDecision::Locked { retry_after_secs } => {
-            error!(target: "web_security", ip = %addr.ip(), retry_after_secs, "login rejected while IP is locked");
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        }
-    }
-
-    let provided = req.password.trim();
-    if provided.is_empty() {
-        if let Some(lock_secs) = auth.record_login_failure(addr.ip()) {
-            error!(target: "web_security", ip = %addr.ip(), lock_secs, "IP locked after repeated empty login attempts");
-        }
-        warn!(target: "web_auth", ip = %addr, ok = false, "login failed (empty)");
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    if !verify_password(auth, provided) {
-        if let Some(lock_secs) = auth.record_login_failure(addr.ip()) {
-            error!(target: "web_security", ip = %addr.ip(), lock_secs, "IP locked after repeated login failures");
-        }
-        warn!(target: "web_auth", ip = %addr, ok = false, "login failed");
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    auth.record_login_success(addr.ip());
-
-    info!(target: "web_auth", ip = %addr, ok = true, "login ok");
+    let ip = client.ip.ok_or(StatusCode::FORBIDDEN)?;
+    auth.authenticate_password(ip, req.password.trim())?;
+    info!(target: "web_auth", %ip, ok = true, "login ok");
 
     // 使用服务端签名的会话 token，避免在 Cookie 中存储明文密码。
     let token = auth.issue_session_token();
@@ -348,12 +318,4 @@ fn validate_config(cfg: &Config) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn verify_password(auth: &crate::ui::web::state::AuthState, provided: &str) -> bool {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(provided.as_bytes());
-    let out = h.finalize();
-    out.as_slice() == auth.password_sha256
 }

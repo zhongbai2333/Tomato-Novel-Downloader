@@ -25,6 +25,7 @@ pub(crate) struct ConfigView {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) bind_addrs: Arc<Vec<SocketAddr>>,
+    pub(crate) request_policy: Arc<super::request_policy::RequestPolicy>,
     pub(crate) base_path: WebBasePath,
     pub(crate) config_view: Arc<ConfigView>,
     pub(crate) config: Arc<Mutex<Config>>, // allow runtime updates via Web UI
@@ -171,11 +172,31 @@ pub(crate) struct LibraryScanStore {
 impl LibraryScanStore {
     pub(crate) fn try_start(&self, path: String) -> bool {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if !g.running.insert(path.clone()) {
-            return false;
-        }
+        const MAX_SCANS: usize = 2;
+        const MAX_SNAPSHOTS: usize = 16;
+        const MIN_REFRESH_MS: u64 = 1_000;
 
         let now = now_ms();
+        if g.running.len() >= MAX_SCANS
+            || g.running.contains(&path)
+            || g.infos
+                .get(&path)
+                .is_some_and(|info| now.saturating_sub(info.updated_ms) < MIN_REFRESH_MS)
+        {
+            return false;
+        }
+        if !g.infos.contains_key(&path)
+            && g.infos.len() >= MAX_SNAPSHOTS
+            && let Some(oldest) = g
+                .infos
+                .iter()
+                .filter(|(_, info)| !info.running)
+                .min_by_key(|(_, info)| info.updated_ms)
+                .map(|(key, _)| key.clone())
+        {
+            g.infos.remove(&oldest);
+        }
+        g.running.insert(path.clone());
         g.infos.insert(
             path.clone(),
             LibraryScanInfo {
@@ -378,7 +399,7 @@ impl UpdateScanStore {
 
 #[derive(Clone)]
 pub(crate) struct AuthState {
-    pub(crate) password_sha256: [u8; 32],
+    password_sha256: [u8; 32],
     pub(crate) session_secret: [u8; 32],
     cookie_secure: bool,
     login_attempts: Arc<Mutex<HashMap<IpAddr, LoginAttemptState>>>,
@@ -428,6 +449,33 @@ impl AuthState {
             cookie_secure,
             login_attempts: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn authenticate_password(
+        &self,
+        ip: IpAddr,
+        password: &str,
+    ) -> Result<(), axum::http::StatusCode> {
+        use axum::http::StatusCode;
+
+        match self.check_login_allowed(ip) {
+            LoginLimitDecision::Allowed => {}
+            LoginLimitDecision::RateLimited { retry_after_secs }
+            | LoginLimitDecision::Locked { retry_after_secs } => {
+                tracing::warn!(target: "web_security", %ip, retry_after_secs, "login throttled");
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+        }
+
+        if !constant_time_eq(&Sha256::digest(password.as_bytes()), &self.password_sha256) {
+            if let Some(lock_secs) = self.record_login_failure(ip) {
+                tracing::warn!(target: "web_security", %ip, lock_secs, "login temporarily locked");
+            }
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+
+        self.record_login_success(ip);
+        Ok(())
     }
 
     pub(crate) fn check_login_allowed(&self, ip: IpAddr) -> LoginLimitDecision {
@@ -831,6 +879,15 @@ impl JobStore {
         let Some(e) = g.get_mut(&id) else {
             return false;
         };
+        if let Some(value) = choice.as_ref()
+            && !e
+                .info
+                .book_name_options
+                .as_ref()
+                .is_some_and(|options| options.iter().any(|option| &option.value == value))
+        {
+            return false;
+        }
         if let Some(tx) = e.book_name_sender.take() {
             let _ = tx.send(choice);
             e.info.book_name_options = None;

@@ -1,6 +1,6 @@
-use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::{Extension, Json};
 use serde_json::{Value, json};
 
 use std::sync::mpsc;
@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::base_system::app_update;
 use crate::base_system::self_update::SelfUpdateOutcome;
+use crate::ui::web::request_policy::ClientAddress;
 use crate::ui::web::state::{AppState, SelfUpdateState};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -34,16 +35,18 @@ pub(crate) async fn api_app_update() -> Result<Json<Value>, StatusCode> {
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let current_tag = format!("v{VERSION}");
-    let has_update = latest.tag_name != current_tag;
-
-    // WebUI 的自动检查：如果版本号相同但检测到热更新（SHA 不同），则强制更新。
-    // 为确保客户端能收到本次响应，先返回，再在后台线程触发检查/更新。
-    if !has_update {
-        thread::spawn(|| {
-            thread::sleep(Duration::from_millis(600));
-            let _ = crate::base_system::self_update::check_hotfix_and_apply(VERSION);
-        });
-    }
+    let has_hotfix = if latest.tag_name == current_tag {
+        tokio::task::spawn_blocking(|| {
+            crate::base_system::self_update::same_tag_hotfix_available(VERSION)
+        })
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(false)
+    } else {
+        false
+    };
+    let has_update = latest.tag_name != current_tag || has_hotfix;
 
     Ok(Json(json!({
         "current": VERSION,
@@ -54,15 +57,25 @@ pub(crate) async fn api_app_update() -> Result<Json<Value>, StatusCode> {
         "latest_url": latest.html_url,
         "published_at": latest.published_at,
         "has_update": has_update,
+        "has_hotfix": has_hotfix,
         "docker_build": false,
     })))
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct StartUpdate {}
+
 pub(crate) async fn api_self_update(
     State(state): State<AppState>,
+    Extension(client): Extension<ClientAddress>,
+    Json(_request): Json<StartUpdate>,
 ) -> Result<Json<Value>, StatusCode> {
     if cfg!(feature = "docker") {
         return Err(StatusCode::BAD_REQUEST);
+    }
+
+    if state.auth.is_none() && !client.direct_loopback {
+        return Err(StatusCode::FORBIDDEN);
     }
 
     if !state.self_update.try_start() {

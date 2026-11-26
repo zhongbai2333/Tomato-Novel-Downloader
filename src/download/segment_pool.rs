@@ -38,6 +38,9 @@ enum SegmentEvent {
 }
 
 pub(crate) fn count_segment_comment_cache_files(seg_dir: &Path) -> usize {
+    if !std::fs::symlink_metadata(seg_dir).is_ok_and(|meta| meta.is_dir()) {
+        return 0;
+    }
     let Ok(rd) = std::fs::read_dir(seg_dir) else {
         return 0;
     };
@@ -173,7 +176,12 @@ impl SegmentCommentPool {
 
         let item_versions = Arc::new(item_versions);
         let seg_dir = status_dir.join("segment_comments");
-        let _ = std::fs::create_dir_all(&seg_dir);
+        if std::fs::create_dir_all(&seg_dir).is_err()
+            || !std::fs::symlink_metadata(&seg_dir).is_ok_and(|meta| meta.is_dir())
+        {
+            tracing::warn!("段评缓存目录不可用");
+            return None;
+        }
 
         let mut handles = Vec::with_capacity(workers);
         for _ in 0..workers {
@@ -228,7 +236,16 @@ impl SegmentCommentPool {
                         Err(channel::RecvTimeoutError::Disconnected) => return,
                     };
 
-                    let out_path = seg_dir.join(format!("{}.json", chapter_id));
+                    let out_path = match crate::book_parser::segment_shared::chapter_cache_path(
+                        &seg_dir,
+                        &chapter_id,
+                    ) {
+                        Ok(path) => path,
+                        Err(err) => {
+                            tracing::warn!(error = %err, "无法保存段评缓存");
+                            continue;
+                        }
+                    };
                     if out_path.exists() {
                         let _ = tx_evt.send(SegmentEvent::Saved);
                         continue;

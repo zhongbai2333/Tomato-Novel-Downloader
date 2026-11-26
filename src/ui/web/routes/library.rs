@@ -1,10 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -23,17 +24,24 @@ pub(crate) struct LibraryQuery {
 pub(crate) async fn api_library(
     State(state): State<AppState>,
     Query(q): Query<LibraryQuery>,
-) -> Json<Value> {
+) -> Result<Json<Value>, StatusCode> {
     let base = state.library_root.clone();
-    let rel = normalize_rel(q.path.unwrap_or_default());
+    let scan_root = base.clone();
+    let input = q.path.unwrap_or_default();
+    let rel = tokio::task::spawn_blocking(move || normalize_rel(&scan_root, &input))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
     let should_start = q.start.unwrap_or(true) || state.library_scan.snapshot(&rel).is_none();
 
-    if should_start {
-        spawn_library_scan(
+    if should_start
+        && !spawn_library_scan(
             base.as_ref().clone(),
             rel.clone(),
             state.library_scan.clone(),
-        );
+        )
+        && state.library_scan.snapshot(&rel).is_none()
+    {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
     let snapshot = state
@@ -47,7 +55,7 @@ pub(crate) async fn api_library(
         items.retain(|i| i.name.to_lowercase().contains(&kw_lower));
     }
 
-    Json(json!({
+    Ok(Json(json!({
         "root": base.to_string_lossy(),
         "path": snapshot.path,
         "items": items,
@@ -56,24 +64,55 @@ pub(crate) async fn api_library(
         "error": snapshot.error,
         "started_ms": snapshot.started_ms,
         "updated_ms": snapshot.updated_ms,
-    }))
+    })))
 }
 
-pub(crate) fn spawn_library_scan(root: PathBuf, rel: String, store: Arc<LibraryScanStore>) {
-    let rel = normalize_rel(rel);
+pub(crate) fn spawn_library_scan(root: PathBuf, rel: String, store: Arc<LibraryScanStore>) -> bool {
     if !store.try_start(rel.clone()) {
-        return;
+        return false;
     }
-
-    thread::spawn(move || {
+    let error_key = rel.clone();
+    let error_store = store.clone();
+    if let Err(err) = thread::Builder::new().spawn(move || {
         if let Err(err) = scan_library_streaming(&root, &rel, &store) {
             store.finish_failed(&rel, err.to_string());
         }
-    });
+    }) {
+        error_store.finish_failed(&error_key, err.to_string());
+    }
+    true
 }
 
-fn normalize_rel(rel: String) -> String {
-    rel.replace('\\', "/").trim_matches('/').to_string()
+fn normalize_rel(root: &Path, value: &str) -> Result<String, StatusCode> {
+    let value = value.replace('\\', "/");
+    let rel = Path::new(value.trim_matches('/'));
+    if rel
+        .components()
+        .any(|component| !matches!(component, Component::CurDir | Component::Normal(_)))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let base = match std::fs::canonicalize(root) {
+        Ok(path) => path,
+        Err(err)
+            if err.kind() == std::io::ErrorKind::NotFound
+                && rel.components().all(|part| part == Component::CurDir) =>
+        {
+            return Ok(String::new());
+        }
+        Err(_) => return Err(StatusCode::NOT_FOUND),
+    };
+    let target = std::fs::canonicalize(base.join(rel)).map_err(|_| StatusCode::NOT_FOUND)?;
+    if !target.is_dir() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let bounded = target
+        .strip_prefix(base)
+        .map_err(|_| StatusCode::FORBIDDEN)?;
+    bounded
+        .to_str()
+        .map(|text| text.replace('\\', "/"))
+        .ok_or(StatusCode::BAD_REQUEST)
 }
 
 fn empty_snapshot(path: String) -> crate::ui::web::state::LibraryScanInfo {
@@ -109,7 +148,12 @@ fn scan_library_streaming(root: &Path, rel: &str, store: &LibraryScanStore) -> s
 
     let mut items = Vec::new();
     let mut scanned = 0usize;
-    for entry in std::fs::read_dir(&target)? {
+    const MAX_SCAN_ENTRIES: usize = 50_000;
+    const MAX_SNAPSHOT_ROWS: usize = 5_000;
+    for (index, entry) in std::fs::read_dir(&target)?.enumerate() {
+        if index == MAX_SCAN_ENTRIES || items.len() == MAX_SNAPSHOT_ROWS {
+            return Err(std::io::Error::other("library scan entry limit reached"));
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(_) => continue,

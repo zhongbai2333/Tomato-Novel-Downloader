@@ -99,9 +99,9 @@ pub fn prepare_download_plan(
     }
 
     // 封面下载：仅使用 web 页面抓取的封面（稳定），不再依赖 API 提供的 cover_url。
+    if let Ok(cover_dir) = book_paths::book_folder_path(config, book_id)
+        && Config::ensure_status_cache_directory(&cover_dir).is_ok()
     {
-        let cover_dir =
-            book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
         download_web_cover(config, book_id, &completed_meta, &cover_dir);
     }
 
@@ -227,9 +227,9 @@ fn prepare_download_plan_web(
     }
 
     // 封面下载：使用 web 页面抓取的封面
+    if let Ok(cover_dir) = book_paths::book_folder_path(config, book_id)
+        && Config::ensure_status_cache_directory(&cover_dir).is_ok()
     {
-        let cover_dir =
-            book_paths::book_folder_path(config, book_id, completed_meta.book_name.as_deref());
         download_web_cover(config, book_id, &completed_meta, &cover_dir);
     }
 

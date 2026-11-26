@@ -105,7 +105,11 @@
 
     Docker 部署时在 `docker run` 命令中添加 `-e TOMATO_WEB_BASE_PATH=/tomato`，glibc 和 musl 镜像均适用。监听地址由 `TOMATO_WEB_ADDR` 单独设置。
 
-    反向代理必须保留 `/tomato/` 前缀。下面的 Nginx 示例中，`proxy_pass` 不带 URI，因此地址末尾不要加 `/`；请将示例路径和端口替换为实际配置：
+    Web UI 默认允许通过 `localhost` 和监听地址访问。监听所有网卡时，也可以直接用服务器 IP 访问。通过域名访问时，在 `TOMATO_WEB_ALLOWED_HOSTS` 中填入该域名，不带端口。
+
+    使用反向代理时，把代理连接 Web UI 所用的源 IP 填入 `TOMATO_WEB_TRUSTED_PROXIES`。这两个环境变量均支持以逗号分隔的多个值。例如代理和 Web UI 在同一台机器，代理以 `127.0.0.1` 为源 IP 时，可以分别设置 `TOMATO_WEB_ALLOWED_HOSTS=download.example.com` 和 `TOMATO_WEB_TRUSTED_PROXIES=127.0.0.1`。
+
+    反向代理应保留 `/tomato/` 前缀，并按下例设置请求头。只将能正确设置这些请求头的代理加入信任列表。Nginx 的 `proxy_pass` 不带 URI，地址末尾不要加 `/`。
 
     ```nginx
     location = /tomato {
@@ -113,7 +117,8 @@
     }
     location /tomato/ {
         proxy_pass http://127.0.0.1:18423;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
     ```
@@ -192,7 +197,7 @@ docker run -d \
     zhongbai233/tomato-novel-downloader-webui:latest-musl --server --data-dir /data
 ```
 
-可通过环境变量 `TOMATO_WEB_ADDR`、`TOMATO_WEB_BASE_PATH`、`TOMATO_WEB_PASSWORD` 控制监听地址、访问路径与密码，并通过命令行参数 `--data-dir` 指定数据目录（见上文 Web UI 说明）。
+容器支持上述 Web UI 环境变量。配置监听地址、路径前缀、密码或反向代理时，可在 `docker run` 中使用 `-e` 传入相应变量。命令行参数 `--data-dir` 用于指定数据目录。
 
 ---
 
@@ -273,19 +278,7 @@ cargo build --release
     - 安装命令：`pkg install termux-api`
     - 验证：`termux-clipboard-get` 可正常输出内容
 
-    为了防止有些零基础的小白下载到了此程序，我们为您准备了一些教程：
-
-    下载termux(链接:(<https://github.com/termux/termux-app/releases>) 并安装，然后运行部署脚本：
-
-    ```sh
-    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
-    ```
-
-    国内用户可使用：
-
-    ```sh
-    bash <(curl -sL https://dl.zhongbai233.com/installer.sh)
-    ```
+    安装 [Termux](https://github.com/termux/termux-app/releases) 后，先运行 `pkg install git python curl`，再参照下一条的步骤从 GitHub 获取并运行安装脚本。
 
     安装完成后，推荐用 Web UI 启动（示例）：
 
@@ -302,17 +295,16 @@ cargo build --release
 
     `Windows` 双击运行`TomatoNovelDownloader-Win64-[当前版本号].exe`
 
-    `Linux` 和 `MacOS` 使用终端运行，可以使用一键部署脚本：
+    Linux 和 macOS 可以使用安装脚本。它需要 Python 3，以及 `curl` 或 GNU `wget`。下面用 Git 从 GitHub 获取脚本。先核对检出的提交和脚本内容。
 
     ```sh
-    bash <(curl -sL https://raw.githubusercontent.com/zhongbai2333/Tomato-Novel-Downloader/main/installer.sh)
+    git clone --depth 1 https://github.com/zhongbai2333/Tomato-Novel-Downloader.git
+    cd Tomato-Novel-Downloader
+    git log -1 --oneline
+    less installer.sh
     ```
 
-    国内用户可使用：
-
-    ```sh
-    bash <(curl -sL https://dl.zhongbai233.com/installer.sh)
-    ```
+    核对后运行 `bash installer.sh`。安装器以 GitHub Release API 提供的 SHA-256 摘要验证安装文件，选择项目加速源时也使用同一个摘要。
 
 4. 小说id是什么？在哪里获取？
 

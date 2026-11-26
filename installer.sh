@@ -101,20 +101,35 @@ if [ ! -d "$INSTALL_DIR" ]; then
     esac
 fi
 
-echo ""
-log_info "正在从 GitHub API 获取最新版本信息..."
-GITHUB_API_URL="https://api.github.com/repos/zhongbai2333/Tomato-Novel-Downloader/releases/latest"
-if command_exists curl; then
-    TAG_NAME=$(curl -s "${GITHUB_API_URL}" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-elif command_exists wget; then
-    TAG_NAME=$(wget -qO- "${GITHUB_API_URL}" | grep -m1 '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-else
-    log_error "系统中未检测到 curl 或 wget，请先安装其中之一。"
+INSTALL_DIR="$(cd -- "$INSTALL_DIR" && pwd -P)"
+if ! command_exists python3; then
+    log_error "需要 Python 3 验证 GitHub 发布信息和安装文件。"
     exit 1
 fi
 
-if [ -z "${TAG_NAME}" ]; then
-    log_error "无法从 GitHub API 获取 tag_name，请检查网络或仓库是否存在。"
+fetch_file() {
+    if command_exists curl; then
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$2" "$1"
+    elif command_exists wget; then
+        wget --https-only -q -O "$2" "$1"
+    else
+        log_error "需要 curl 或支持 HTTPS 限制的 wget。"
+        return 127
+    fi
+}
+
+echo ""
+log_info "正在从 GitHub API 获取最新版本信息..."
+GITHUB_API_URL="https://api.github.com/repos/zhongbai2333/Tomato-Novel-Downloader/releases/latest"
+if ! RELEASE_JSON="$(fetch_file "$GITHUB_API_URL" /dev/stdout)" ||
+   ! TAG_NAME="$(printf '%s' "$RELEASE_JSON" | python3 -c '
+import json, re, sys
+tag = json.load(sys.stdin).get("tag_name", "")
+if not re.fullmatch(r"v[0-9][0-9A-Za-z.+-]*", tag):
+    sys.exit(1)
+print(tag)
+')"; then
+    log_error "无法取得有效的 GitHub 发布版本。"
     exit 1
 fi
 
@@ -210,46 +225,52 @@ log_info "准备下载：${BINARY_NAME}"
 echo "下载链接：${DOWNLOAD_URL}"
 echo "安装目标目录：${INSTALL_DIR}"
 
-TARGET_BINARY_PATH="${INSTALL_DIR}/${BINARY_NAME}"
-if [ -f "$TARGET_BINARY_PATH" ]; then
-    log_warn "目标目录已有同名文件，将会覆盖：${TARGET_BINARY_PATH}"
-    rm -f "$TARGET_BINARY_PATH"
+if ! EXPECTED_SHA="$(printf '%s' "$RELEASE_JSON" | python3 -c '
+import json, re, sys
+assets = [asset for asset in json.load(sys.stdin).get("assets", []) if asset["name"] == sys.argv[1]]
+if len(assets) != 1:
+    sys.exit(1)
+digest = assets[0].get("digest")
+if not digest or not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
+    sys.exit(1)
+print(digest[7:].lower())
+' "$BINARY_NAME")"; then
+    log_error "GitHub 发布缺少该文件的有效 SHA-256，已停止安装。"
+    exit 1
 fi
 
-download_file() {
-    if command_exists wget; then
-        wget -4 -q --show-progress -O "${TARGET_BINARY_PATH}" "${DOWNLOAD_URL}"
-    elif command_exists curl; then
-        curl -4 -L -o "${TARGET_BINARY_PATH}" "${DOWNLOAD_URL}"
-    else
-        log_error "未检测到 wget 或 curl，请先安装其中之一。"
-        return 127
-    fi
-}
+CANONICAL_NAME="${BINARY_NAME%-v*}"
+TARGET_BINARY_PATH="${INSTALL_DIR}/${CANONICAL_NAME}"
+TMP_BINARY="$(mktemp "${INSTALL_DIR}/.tomato-install.XXXXXXXX")"
+trap 'rm -f -- "$TMP_BINARY"' EXIT
 
 log_info "开始下载..."
-download_file || {
-    log_error "下载失败，请检查网络、代理或 URL。"
-    exit 1
-}
-
-if [ ! -f "$TARGET_BINARY_PATH" ] || [ ! -s "$TARGET_BINARY_PATH" ]; then
-    log_error "下载的文件不存在或为空。"
+if ! fetch_file "$DOWNLOAD_URL" "$TMP_BINARY" || [ ! -s "$TMP_BINARY" ]; then
+    log_error "下载失败或文件为空，现有安装已保留。"
     exit 1
 fi
+if ! python3 - "$TMP_BINARY" "$EXPECTED_SHA" <<'PY_VERIFY'
+import hashlib
+import hmac
+import sys
 
-chmod +x "$TARGET_BINARY_PATH"
-log_info "下载完成并赋予可执行权限：${TARGET_BINARY_PATH}"
-
-# 重命名为规范名（不含版本号），与程序自更新后的命名保持一致
-CANONICAL_NAME="${BINARY_NAME%-v*}"
-if [ "$CANONICAL_NAME" != "$BINARY_NAME" ]; then
-    CANONICAL_PATH="${INSTALL_DIR}/${CANONICAL_NAME}"
-    mv "${TARGET_BINARY_PATH}" "${CANONICAL_PATH}"
-    chmod +x "${CANONICAL_PATH}"
-    TARGET_BINARY_PATH="${CANONICAL_PATH}"
-    log_info "已重命名为规范名：${CANONICAL_NAME}"
+digest = hashlib.sha256()
+with open(sys.argv[1], "rb") as file:
+    for chunk in iter(lambda: file.read(65536), b""):
+        digest.update(chunk)
+sys.exit(0 if hmac.compare_digest(digest.hexdigest(), sys.argv[2]) else 1)
+PY_VERIFY
+then
+    log_error "安装文件的 SHA-256 校验失败，现有安装已保留。"
+    exit 1
 fi
+if [ -d "$TARGET_BINARY_PATH" ]; then
+    log_error "安装目标是目录，已停止安装。"
+    exit 1
+fi
+chmod 755 "$TMP_BINARY"
+mv -f -- "$TMP_BINARY" "$TARGET_BINARY_PATH"
+log_info "校验通过，已安装：${TARGET_BINARY_PATH}"
 
 if $IS_TERMUX; then
     echo ""

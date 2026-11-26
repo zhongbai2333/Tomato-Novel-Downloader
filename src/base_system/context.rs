@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{ConfigSpec, FieldMeta};
 
+const STATUS_OWNERSHIP_MARKER: &str = ".tomato-status-cache";
+const STATUS_MARKER_CONTENTS: &[u8] = b"tomato-novel-downloader status cache v1\n";
+
 pub const OUTPUT_FORMAT_TXT: &str = "txt";
 pub const OUTPUT_FORMAT_EPUB: &str = "epub";
 pub const OUTPUT_FORMAT_PDF: &str = "pdf";
@@ -541,9 +544,8 @@ impl Config {
             return Ok(None);
         }
 
-        let canonical_path = Self::canonical_status_folder_path(&save_dir, book_id);
-        if canonical_path.is_dir() && Self::status_folder_has_book_record(&canonical_path, book_id)
-        {
+        let canonical_path = Self::status_cache_location(&save_dir, book_id)?;
+        if Self::status_folder_has_book_record(&canonical_path, book_id) {
             return Ok(Some(canonical_path));
         }
 
@@ -560,19 +562,17 @@ impl Config {
         let save_dir = save_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_save_dir());
-        let canonical_path = Self::canonical_status_folder_path(&save_dir, book_id);
+        let canonical_path = Self::status_cache_location(&save_dir, book_id)?;
         let legacy_folders = if save_dir.exists() {
             Self::legacy_status_folders_by_book_id(&save_dir, book_id)?
         } else {
             Vec::new()
         };
 
-        if canonical_path.exists() {
-            if canonical_path.is_dir() {
-                for legacy in legacy_folders {
-                    if legacy != canonical_path {
-                        let _ = merge_dir_contents(&legacy, &canonical_path);
-                    }
+        if directory_without_links(&canonical_path) {
+            for legacy in legacy_folders {
+                if legacy != canonical_path {
+                    let _ = merge_dir_contents(&legacy, &canonical_path);
                 }
             }
             return Ok(canonical_path);
@@ -594,9 +594,107 @@ impl Config {
         }
     }
 
-    fn canonical_status_folder_path(save_dir: &Path, book_id: &str) -> PathBuf {
-        let safe_book_id = safe_fs_name(book_id, "_", 120);
-        save_dir.join(safe_book_id)
+    pub(crate) fn status_cache_location(save_dir: &Path, book_id: &str) -> io::Result<PathBuf> {
+        let id = super::book_paths::book_folder_name(book_id);
+        let canonical = save_dir.join(&id);
+        match fs::symlink_metadata(&canonical) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(canonical),
+            Err(err) => return Err(err),
+            Ok(meta)
+                if meta.is_dir()
+                    && (Self::status_folder_has_book_record(&canonical, book_id)
+                        || is_owned_status_folder(&canonical)
+                        || is_preview_cover_folder(&canonical)) =>
+            {
+                return Ok(canonical);
+            }
+            Ok(_) => {}
+        }
+
+        for index in 0..100 {
+            let candidate = save_dir.join(format!("{id}_tomato-cache-{index}"));
+            match fs::symlink_metadata(&candidate) {
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(candidate),
+                Err(err) => return Err(err),
+                Ok(meta) if meta.is_dir() && is_owned_status_folder(&candidate) => {
+                    return Ok(candidate);
+                }
+                Ok(_) => {}
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "no available book cache directory",
+        ))
+    }
+
+    pub(crate) fn ensure_status_cache_directory(path: &Path) -> io::Result<bool> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        match fs::create_dir(path) {
+            Ok(()) => {
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path.join(STATUS_OWNERSHIP_MARKER))?
+                    .write_all(STATUS_MARKER_CONTENTS)?;
+                Ok(true)
+            }
+            Err(err)
+                if err.kind() == io::ErrorKind::AlreadyExists && directory_without_links(path) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(crate) fn cleanup_preview_cache(&self, book_id: &str) -> io::Result<()> {
+        let path = Self::status_cache_location(&self.default_save_dir(), book_id)?;
+        if !is_owned_status_folder(&path) {
+            return Ok(());
+        }
+
+        let mut covers = Vec::new();
+        for entry in fs::read_dir(&path)? {
+            let entry = entry?;
+            if entry.file_name() == STATUS_OWNERSHIP_MARKER {
+                continue;
+            }
+            if !entry.file_type()?.is_file() || !is_cover_image_file(&entry.path()) {
+                return Ok(());
+            }
+            covers.push(entry.path());
+        }
+        for cover in covers {
+            fs::remove_file(cover)?;
+        }
+
+        // A download may have started since the directory was inspected.
+        let marker = path.join(STATUS_OWNERSHIP_MARKER);
+        fs::remove_file(&marker)?;
+        if let Err(err) = fs::remove_dir(&path) {
+            if directory_without_links(&path) {
+                let _ = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&marker)
+                    .and_then(|mut file| file.write_all(STATUS_MARKER_CONTENTS));
+            }
+            if err.kind() != io::ErrorKind::DirectoryNotEmpty {
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn remove_owned_status_folder(&mut self, path: &Path) -> io::Result<()> {
+        if is_owned_status_folder(path) && has_only_cache_data(path) {
+            fs::remove_dir_all(path)?;
+            self.mark_status_folder_removed(path);
+        }
+        Ok(())
     }
 
     fn legacy_status_folders_by_book_id(
@@ -614,7 +712,7 @@ impl Config {
         for entry in fs::read_dir(save_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if !path.is_dir() {
+            if !entry.file_type()?.is_dir() {
                 continue;
             }
 
@@ -636,8 +734,11 @@ impl Config {
     }
 
     fn status_folder_has_book_record(path: &Path, book_id: &str) -> bool {
+        if !directory_without_links(path) {
+            return false;
+        }
         let status = path.join("status.json");
-        if status.exists() {
+        if regular_file_without_links(&status) {
             if let Ok(raw) = fs::read_to_string(&status)
                 && let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw)
                 && let Some(id) = value.get("book_id").and_then(|v| v.as_str())
@@ -647,9 +748,9 @@ impl Config {
             return true;
         }
 
-        path.join(format!("chapter_status_{}.json", book_id))
-            .exists()
-            || path.join("downloaded_chapters.jsonl").exists()
+        let safe_id = safe_fs_name(book_id, "_", 120);
+        regular_file_without_links(&path.join(format!("chapter_status_{safe_id}.json")))
+            || regular_file_without_links(&path.join("downloaded_chapters.jsonl"))
     }
 
     /// 根据用户配置的首选字段选择书名
@@ -729,21 +830,19 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|| self.default_save_dir());
         let path = self.migrate_status_folder_to_stable(book_id, Some(&save_dir))?;
-        let existed_before = path.exists() && Self::status_folder_has_book_record(&path, book_id);
-        if !path.exists() {
-            fs::create_dir_all(&path)?;
-        }
+        let created = Self::ensure_status_cache_directory(&path)?;
 
         if let Some(prev) = &self.folder_path
             && self.last_status_was_new
             && !self.last_status_claimed
             && prev != &path
         {
-            let _ = fs::remove_dir_all(prev);
+            let prev = prev.clone();
+            let _ = self.remove_owned_status_folder(&prev);
         }
 
         self.folder_path = Some(path.clone());
-        self.register_status_folder(&path, existed_before);
+        self.register_status_folder(&path, !created);
         Ok(path)
     }
 
@@ -772,6 +871,61 @@ impl Config {
     }
 }
 
+fn directory_without_links(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+}
+
+fn regular_file_without_links(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+}
+
+fn is_owned_status_folder(path: &Path) -> bool {
+    let marker = path.join(STATUS_OWNERSHIP_MARKER);
+    directory_without_links(path)
+        && fs::symlink_metadata(&marker)
+            .is_ok_and(|m| m.is_file() && m.len() == STATUS_MARKER_CONTENTS.len() as u64)
+        && fs::read(&marker).is_ok_and(|contents| contents == STATUS_MARKER_CONTENTS)
+}
+
+fn has_only_cache_data(path: &Path) -> bool {
+    fs::read_dir(path).is_ok_and(|mut entries| {
+        entries.all(|entry| {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            let Ok(kind) = entry.file_type() else {
+                return false;
+            };
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            match name.as_ref() {
+                "images" | "segment_comments" => kind.is_dir(),
+                STATUS_OWNERSHIP_MARKER | "status.json" | "downloaded_chapters.jsonl" => {
+                    kind.is_file()
+                }
+                _ => {
+                    kind.is_file()
+                        && (name.starts_with("chapter_status_") && name.ends_with(".json")
+                            || name.starts_with("cover.") && is_cover_image_file(&entry.path()))
+                }
+            }
+        })
+    })
+}
+
+fn is_preview_cover_folder(path: &Path) -> bool {
+    fs::read_dir(path).is_ok_and(|entries| {
+        let mut entries = entries.peekable();
+        entries.peek().is_some()
+            && entries.all(|entry| {
+                entry.is_ok_and(|item| {
+                    item.file_type().is_ok_and(|kind| kind.is_file())
+                        && is_cover_image_file(&item.path())
+                })
+            })
+    })
+}
+
 fn merge_dir_contents(src: &Path, dst: &Path) -> io::Result<()> {
     merge_dir_contents_at_depth(src, dst, true)
 }
@@ -782,7 +936,16 @@ fn merge_dir_contents_at_depth(src: &Path, dst: &Path, root_level: bool) -> io::
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
+        let item_type = entry.file_type()?;
+        if (root_level && entry.file_name() == STATUS_OWNERSHIP_MARKER)
+            || !(item_type.is_file() || item_type.is_dir())
+        {
+            continue;
+        }
         let dst_path = dst.join(entry.file_name());
+        if fs::symlink_metadata(&dst_path).is_ok_and(|meta| meta.is_symlink()) {
+            continue;
+        }
 
         if root_level && src_path.is_file() && is_cover_image_file(&src_path) {
             merge_root_cover_file(&src_path, dst)?;
@@ -794,7 +957,7 @@ fn merge_dir_contents_at_depth(src: &Path, dst: &Path, root_level: bool) -> io::
                 if src_path.is_dir() {
                     fs::create_dir_all(&dst_path)?;
                     merge_dir_contents_at_depth(&src_path, &dst_path, false)?;
-                    let _ = fs::remove_dir_all(&src_path);
+                    let _ = fs::remove_dir(&src_path);
                 } else {
                     fs::copy(&src_path, &dst_path)?;
                     fs::remove_file(&src_path)?;
@@ -808,10 +971,6 @@ fn merge_dir_contents_at_depth(src: &Path, dst: &Path, root_level: bool) -> io::
             let _ = fs::remove_dir(&src_path);
         } else if src_path.is_file() && dst_path.is_file() {
             merge_conflicting_file(&src_path, &dst_path)?;
-        } else if src_path.is_dir() {
-            let _ = fs::remove_dir_all(&src_path);
-        } else {
-            let _ = fs::remove_file(&src_path);
         }
     }
 
@@ -832,8 +991,7 @@ fn is_cover_image_file(path: &Path) -> bool {
 fn merge_root_cover_file(src: &Path, dst_folder: &Path) -> io::Result<()> {
     let ext = src.extension().and_then(OsStr::to_str).unwrap_or("jpg");
     let canonical = dst_folder.join(format!("cover.{ext}"));
-    if canonical.exists() {
-        fs::remove_file(src)?;
+    if fs::symlink_metadata(&canonical).is_ok() {
         return Ok(());
     }
 
@@ -858,11 +1016,12 @@ fn merge_conflicting_file(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    if file_name == "status.json" && status_downloaded_count(src) > status_downloaded_count(dst) {
-        fs::copy(src, dst)?;
+    if file_name == "status.json" {
+        if status_downloaded_count(src) > status_downloaded_count(dst) {
+            fs::copy(src, dst)?;
+        }
+        fs::remove_file(src)?;
     }
-
-    let _ = fs::remove_file(src);
     Ok(())
 }
 
@@ -886,6 +1045,24 @@ mod tests {
     use super::{
         Config, OUTPUT_FORMAT_ASK_AFTER_DOWNLOAD, OUTPUT_FORMAT_BULK_TXT, OUTPUT_FORMAT_TXT,
     };
+
+    #[test]
+    fn owned_cache_cleanup_preserves_existing_book_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        let existing = root.path().join("123");
+        std::fs::create_dir(&existing).unwrap();
+        let notes = existing.join("notes.txt");
+        std::fs::write(&notes, "keep these notes").unwrap();
+
+        let cache = config
+            .status_folder_path("book", "123", Some(root.path()))
+            .unwrap();
+        assert_ne!(cache, existing);
+        config.remove_owned_status_folder(&cache).unwrap();
+        assert!(!cache.exists());
+        assert_eq!(std::fs::read_to_string(notes).unwrap(), "keep these notes");
+    }
 
     #[test]
     fn status_folder_path_migrates_legacy_folder_when_only_book_name_changes() {

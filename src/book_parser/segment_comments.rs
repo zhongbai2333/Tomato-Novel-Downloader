@@ -35,10 +35,14 @@ pub(crate) fn load_segment_comments_cache(
     manager: &BookManager,
     chapter_id: &str,
 ) -> Option<SegmentCommentsChapterCache> {
-    let path = manager
-        .book_folder()
-        .join("segment_comments")
-        .join(format!("{}.json", chapter_id));
+    let dir = manager.book_folder().join("segment_comments");
+    if !std::fs::symlink_metadata(&dir).ok()?.is_dir() {
+        return None;
+    }
+    let path = super::segment_shared::chapter_cache_path(&dir, chapter_id).ok()?;
+    if !std::fs::symlink_metadata(&path).ok()?.is_file() {
+        return None;
+    }
     let bytes = std::fs::read(&path).ok()?;
     serde_json::from_slice::<SegmentCommentsChapterCache>(&bytes).ok()
 }

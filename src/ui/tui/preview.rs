@@ -16,7 +16,6 @@ use ratatui::widgets::{
 };
 use tracing::{info, warn};
 
-use crate::base_system::context::safe_fs_name;
 use crate::download::downloader::{self, BookMeta, ChapterRange, ProgressSnapshot, SavePhase};
 
 use super::download::{request_cancel_download, start_download_task};
@@ -256,14 +255,15 @@ pub(super) fn start_preview_task(app: &mut App, book_id: String, hint: BookMeta)
         // Resolve short links in the background thread to avoid blocking the UI.
         let book_id = crate::base_system::book_id::resolve_book_id(&book_id).unwrap_or(book_id);
         let result = downloader::prepare_download_plan(&cfg, &book_id, hint).map(|plan| {
-            let folder = crate::base_system::book_paths::book_folder_path(
-                &cfg,
-                &plan.book_id,
-                plan.meta.book_name.as_deref(),
-            );
-            let downloaded =
-                crate::base_system::novel_updates::read_downloaded_ok_count(&folder, &plan.book_id)
-                    .unwrap_or(0);
+            let downloaded = crate::base_system::book_paths::book_folder_path(&cfg, &plan.book_id)
+                .ok()
+                .and_then(|folder| {
+                    crate::base_system::novel_updates::read_downloaded_ok_count(
+                        &folder,
+                        &plan.book_id,
+                    )
+                })
+                .unwrap_or(0);
             PendingDownload {
                 plan,
                 downloaded_count: downloaded,
@@ -331,69 +331,7 @@ pub(super) fn cleanup_preview_cover_artifacts(app: &mut App) {
     let Some(pending) = app.pending_download.as_ref() else {
         return;
     };
-    let Some(book_name) = pending.plan.meta.book_name.as_deref() else {
-        return;
-    };
-
-    // NOTE: preview currently downloads cover into the same book folder name as status folder.
-    // Only delete when the folder contains *only* cover-like files and no status.json.
-    let dir = crate::base_system::book_paths::book_folder_path(
-        &app.config,
-        &pending.plan.book_id,
-        Some(book_name),
-    );
-    if !dir.exists() {
-        return;
-    }
-    if dir.join("status.json").exists() {
-        return;
-    }
-
-    let Ok(read_dir) = std::fs::read_dir(&dir) else {
-        return;
-    };
-
-    let safe_name = safe_fs_name(book_name, "_", 120);
-    let mut entries: Vec<std::path::PathBuf> = Vec::new();
-    for ent in read_dir.flatten() {
-        entries.push(ent.path());
-    }
-    if entries.is_empty() {
-        let _ = std::fs::remove_dir_all(&dir);
-        return;
-    }
-
-    let is_cover_like = |p: &std::path::Path| {
-        if p.is_dir() {
-            return false;
-        }
-        let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
-            return false;
-        };
-        let Some(ext) = p.extension().and_then(|s| s.to_str()) else {
-            return false;
-        };
-        let ext = ext.to_ascii_lowercase();
-        let is_img = matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif");
-        if !is_img {
-            return false;
-        }
-        stem == safe_name || stem.eq_ignore_ascii_case("cover")
-    };
-
-    // Abort if there are non-cover files.
-    if entries.iter().any(|p| !is_cover_like(p)) {
-        return;
-    }
-
-    for p in &entries {
-        let _ = std::fs::remove_file(p);
-    }
-
-    // Remove dir if empty.
-    if crate::base_system::file_cleaner::is_empty_dir(&dir).unwrap_or(false) {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    let _ = app.config.cleanup_preview_cache(&pending.plan.book_id);
 }
 
 pub(super) fn wrapped_line_count(text: &str, width: u16) -> usize {

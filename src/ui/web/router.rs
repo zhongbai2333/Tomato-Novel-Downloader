@@ -5,9 +5,9 @@ use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
 
-use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
+use super::request_policy::accepts_request_origin;
 use super::routes;
 use super::state::AppState;
 
@@ -99,17 +99,28 @@ pub(crate) fn build_router(state: AppState) -> Router {
 
 async fn auth_and_log_mw(
     axum::extract::State(state): axum::extract::State<AppState>,
-    req: Request<axum::body::Body>,
+    mut req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
-    let ip = req
+    let Some(authority) = state.request_policy.authority(req.headers(), req.uri()) else {
+        return (StatusCode::FORBIDDEN, "host is not allowed").into_response();
+    };
+    let peer = req
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|c| c.0)
-        .map(|a| a.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map(|info| info.0);
+    let client = state
+        .request_policy
+        .client_address(peer, &authority, req.headers());
+    if !accepts_request_origin(req.method(), &authority, req.headers(), client.scheme) {
+        return (StatusCode::FORBIDDEN, "request origin is not allowed").into_response();
+    }
+    req.extensions_mut().insert(client);
+    let ip = client
+        .ip
+        .map_or_else(|| "unknown".to_string(), |address| address.to_string());
 
     // If lock mode enabled, require password for any non-asset route,
     // except the login endpoint and landing page.
@@ -137,10 +148,14 @@ async fn auth_and_log_mw(
 
             // 向后兼容：允许请求头密码（便于脚本/旧客户端）。
             if !authorized && !provided_header.is_empty() {
-                let mut h = Sha256::new();
-                h.update(provided_header.as_bytes());
-                let out = h.finalize();
-                authorized = out.as_slice() == auth.password_sha256;
+                let Some(client_ip) = client.ip else {
+                    return (StatusCode::FORBIDDEN, "client address is unavailable")
+                        .into_response();
+                };
+                if let Err(status) = auth.authenticate_password(client_ip, provided_header) {
+                    return status.into_response();
+                }
+                authorized = true;
             }
 
             if !authorized {
@@ -214,6 +229,9 @@ mod tests {
         let config = Config::default();
         let state = AppState {
             bind_addrs: Arc::new(vec![addr]),
+            request_policy: Arc::new(
+                super::super::request_policy::RequestPolicy::new(&[addr], "", "").unwrap(),
+            ),
             base_path: WebBasePath::parse(base_path).unwrap(),
             config_view: Arc::new(ConfigView {
                 old_cli: config.old_cli,

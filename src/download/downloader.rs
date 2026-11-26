@@ -765,9 +765,12 @@ pub(crate) fn download_chapters_into_manager(
     if let Some(pool) = seg_pool.as_ref() {
         let seg_dir = manager.book_folder().join("segment_comments");
         for ch in chosen_chapters {
-            let out_path = seg_dir.join(format!("{}.json", ch.id));
-            if !out_path.exists() {
-                pool.submit(&ch.id);
+            match crate::book_parser::segment_shared::chapter_cache_path(&seg_dir, &ch.id) {
+                Ok(path) if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) => {
+                    pool.submit(&ch.id);
+                }
+                Ok(_) => {}
+                Err(err) => warn!(error = %err, "跳过无效章节的段评缓存"),
             }
         }
     }

@@ -1,6 +1,7 @@
 //! 书籍 ID/链接解析与规范化。
 
 use regex::Regex;
+use reqwest::Url;
 use std::sync::OnceLock;
 
 static RE_URL: OnceLock<Regex> = OnceLock::new();
@@ -44,21 +45,35 @@ fn http_client() -> &'static reqwest::blocking::Client {
     HTTP_CLIENT.get_or_init(|| {
         reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 10 || !is_allowed_url(attempt.url()) {
+                    return attempt.error("unsupported short-link redirect");
+                }
+                attempt.follow()
+            }))
             .build()
             .expect("build HTTP client for short-link resolution")
     })
 }
 
-/// Extracts the host (without port) from a URL string, lowercased.
-fn url_host(url: &str) -> Option<String> {
-    let after_scheme = url
-        .trim()
-        .strip_prefix("https://")
-        .or_else(|| url.trim().strip_prefix("http://"))?;
-    let host_and_rest = after_scheme.split('/').next()?;
-    // Strip port if present
-    let host = host_and_rest.split(':').next()?;
-    Some(host.to_lowercase())
+fn is_allowed_url(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url
+            .host_str()
+            .is_some_and(|host| ALLOWED_SHORT_LINK_HOSTS.contains(&host))
+}
+
+fn parse_short_link(input: &str) -> Option<Url> {
+    let input = input.trim();
+    let candidate = re_url().find(input).map(|m| m.as_str()).unwrap_or(input);
+    if !re_short_link().is_match(candidate) {
+        return None;
+    }
+    let url = Url::parse(candidate).ok()?;
+    is_allowed_url(&url).then_some(url)
 }
 
 pub fn parse_book_id(input: &str) -> Option<String> {
@@ -91,17 +106,7 @@ pub fn parse_book_id(input: &str) -> Option<String> {
 /// Returns `true` if `input` contains a short-redirect share link from a
 /// known allowed domain (e.g. `https://changdunovel.com/t/E_HDbOHpMJA/`).
 pub fn is_short_link(input: &str) -> bool {
-    let trimmed = input.trim();
-    let target = re_url()
-        .find(trimmed)
-        .map(|m| m.as_str())
-        .unwrap_or(trimmed);
-    if !re_short_link().is_match(target) {
-        return false;
-    }
-    url_host(target)
-        .map(|h| ALLOWED_SHORT_LINK_HOSTS.contains(&h.as_str()))
-        .unwrap_or(false)
+    parse_short_link(input).is_some()
 }
 
 /// Like [`parse_book_id`], but also handles short-redirect share links by
@@ -116,14 +121,9 @@ pub fn resolve_book_id(input: &str) -> Option<String> {
         return Some(id);
     }
 
-    let trimmed = input.trim();
-    let url = re_url().find(trimmed).map(|m| m.as_str())?;
+    let url = parse_short_link(input)?;
 
-    if !is_short_link(url) {
-        return None;
-    }
-
-    let response = match http_client().get(url).send() {
+    let response = match http_client().get(url.clone()).send() {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(url = %url, error = %e, "短链接跳转失败");

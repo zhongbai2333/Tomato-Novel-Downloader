@@ -409,7 +409,7 @@ async function refreshAppUpdate(manual) {
 
   if (shouldShow) {
     showAppUpdateBanner(true);
-    if (hint) hint.textContent = '发现新版本';
+    if (hint) hint.textContent = data.has_hotfix ? '当前版本有可应用的更新' : '发现新版本';
   } else {
     showAppUpdateBanner(false);
     if (manual) {
@@ -1577,7 +1577,7 @@ function wire() {
     const hint = document.getElementById('appUpdateHint');
     if (hint) hint.textContent = '自更新启动中…';
     try {
-      await j('/api/self_update', { method: 'POST' });
+      await j('/api/self_update', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
       if (hint) hint.textContent = '自更新任务已启动';
       await pollSelfUpdateStatus();
     } catch (err) {

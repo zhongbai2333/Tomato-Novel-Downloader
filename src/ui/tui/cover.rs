@@ -93,21 +93,20 @@ fn cover_candidates(
         push_cover_candidates(&mut paths, &status, title);
     }
 
-    let default_folder =
-        app.config
-            .default_save_dir()
-            .join(crate::base_system::book_paths::book_folder_name(
-                book_id,
-                Some(title),
-            ));
-    push_cover_candidates(&mut paths, &default_folder, title);
+    if let Ok(default_folder) =
+        crate::base_system::book_paths::book_folder_path(&app.config, book_id)
+    {
+        push_cover_candidates(&mut paths, &default_folder, title);
+    }
 
     paths
 }
 
 fn push_cover_candidates(list: &mut Vec<PathBuf>, base: &Path, title: &str) {
     for path in crate::base_system::book_paths::cover_file_candidates(base, Some(title)) {
-        if !list.contains(&path) {
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file())
+            && !list.contains(&path)
+        {
             list.push(path);
         }
     }
