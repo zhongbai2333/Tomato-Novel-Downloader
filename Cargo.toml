@@ -61,7 +61,7 @@ textwrap = "0.16"
 epub-builder = "0.7"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-tomato-novel-official-api = { path = "../Tomato-Novel-Official-API", optional = true }
+tomato-novel-official-api = { path = "../Tomato-Novel-Official-API", version = "0.2.8", optional = true }
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
